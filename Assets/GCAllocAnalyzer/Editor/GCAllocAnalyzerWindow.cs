@@ -384,12 +384,31 @@ namespace GCAllocBreakdown.Editor
         {
             m_ShowAssembly = evt.newValue;
             if (m_RawAllocations.Count == 0) return;
-            BuildGrouping(true, m_GroupsByFullCallstack);
-            BuildGrouping(false, m_GroupsByTopFrame);
-            m_ActiveGroups = m_GroupByCallsite.value ? m_GroupsByFullCallstack : m_GroupsByTopFrame;
-            BuildThreadIndex(m_ActiveGroups);
-            BuildTopOffenders();
-            ApplyFilters();
+
+            // Fast path: just swap display names on existing groups (no rebuild)
+            SwapDisplayNames(m_GroupsByFullCallstack);
+            SwapDisplayNames(m_GroupsByTopFrame);
+            PopulateTopOffendersUI();
+            m_MarkerListView.RefreshItems();
+
+            // Update selected marker summary if anything is selected
+            if (m_MarkerListView.selectedIndex >= 0 &&
+                m_MarkerListView.selectedIndex < m_FilteredGroups.Count)
+                UpdateMarkerSummary(m_FilteredGroups[m_MarkerListView.selectedIndex]);
+        }
+
+        void SwapDisplayNames(List<CallsiteGroup> groups)
+        {
+            for (int i = 0; i < groups.Count; i++)
+            {
+                var g = groups[i];
+                if (g.Allocations.Count > 0)
+                {
+                    var first = g.Allocations[0];
+                    g.DisplayName = m_ShowAssembly
+                        ? first.DisplayNameWithAssembly : first.DisplayName;
+                }
+            }
         }
 
         // ═══════════════════════════════════════════════════
@@ -1318,7 +1337,8 @@ namespace GCAllocBreakdown.Editor
                 m_SharedSB.Append(a.FormattedFrame);
                 string info = m_SharedSB.ToString();
 
-                var row = MakeSpikeRow(i + 1, info, a.DisplayName, a);
+                string spikeName = m_ShowAssembly ? a.DisplayNameWithAssembly : a.DisplayName;
+                var row = MakeSpikeRow(i + 1, info, spikeName, a);
                 m_TopSpikesContainer.Add(row);
             }
         }
