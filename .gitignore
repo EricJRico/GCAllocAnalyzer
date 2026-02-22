@@ -34,6 +34,15 @@
 # Visual Studio cache directory
 .vs/
 
+# VS Code workspace settings
+.vscode/
+
+# JetBrains Rider project settings
+.idea/
+
+# Claude Code local config
+.claude/
+
 # Gradle cache directory
 .gradle/
 
