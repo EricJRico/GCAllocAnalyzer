@@ -1464,10 +1464,38 @@ namespace GCAllocBreakdown.Editor
 
             if (group.ResolvedCallStack == null || group.ResolvedCallStack.Count == 0)
             {
-                m_CallStackContainer.Add(new Label(
-                    "No call stack available.\nEnable: Profiler toolbar → Call Stacks → GC.Alloc")
+                // Show hierarchy path as a visual breadcrumb trail
+                string hierarchy = group.Allocations.Count > 0
+                    ? group.Allocations[0].HierarchyPath : null;
+
+                if (!string.IsNullOrEmpty(hierarchy))
                 {
-                    style = { fontSize = 11, color = k_Yellow, whiteSpace = WhiteSpace.Normal }
+                    m_CallStackContainer.Add(new Label("Profiler Hierarchy")
+                    {
+                        style = { fontSize = 10, color = k_SubtleText, marginBottom = 2,
+                            unityFontStyleAndWeight = FontStyle.Bold }
+                    });
+
+                    string[] segments = hierarchy.Split(new[] { " > " }, StringSplitOptions.RemoveEmptyEntries);
+                    for (int i = 0; i < segments.Length; i++)
+                    {
+                        bool isLast = i == segments.Length - 1;
+                        m_SharedSB.Clear();
+                        m_SharedSB.Append(isLast ? "→ " : "  ");
+                        m_SharedSB.Append(segments[i]);
+
+                        m_CallStackContainer.Add(new Label(m_SharedSB.ToString())
+                        {
+                            style = { fontSize = 11, color = isLast ? k_TopFrame : k_CallerFrame,
+                                paddingTop = 1, paddingBottom = 1 }
+                        });
+                    }
+                }
+
+                m_CallStackContainer.Add(new Label("Enable Call Stacks in Profiler toolbar for full detail.")
+                {
+                    style = { fontSize = 10, color = k_SubtleText, marginTop = 4,
+                        whiteSpace = WhiteSpace.Normal, fontStyleAndWeight = FontStyle.Italic }
                 });
                 return;
             }
