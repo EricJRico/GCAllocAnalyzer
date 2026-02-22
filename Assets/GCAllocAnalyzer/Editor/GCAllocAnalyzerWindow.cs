@@ -1869,7 +1869,10 @@ namespace GCAllocBreakdown.Editor
         static string StripAssembly(string raw)
         {
             int bang = raw != null ? raw.IndexOf('!') : -1;
-            return bang >= 0 ? raw.Substring(bang + 1) : raw ?? "";
+            string result = bang >= 0 ? raw.Substring(bang + 1) : raw ?? "";
+            if (result.Length > 2 && result[0] == ':' && result[1] == ':')
+                result = result.Substring(2);
+            return result;
         }
 
         // ═══════════════════════════════════════════════════
