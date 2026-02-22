@@ -1495,7 +1495,7 @@ namespace GCAllocBreakdown.Editor
                 m_CallStackContainer.Add(new Label("Enable Call Stacks in Profiler toolbar for full detail.")
                 {
                     style = { fontSize = 10, color = k_SubtleText, marginTop = 4,
-                        whiteSpace = WhiteSpace.Normal, fontStyleAndWeight = FontStyle.Italic }
+                        whiteSpace = WhiteSpace.Normal, unityFontStyleAndWeight = FontStyle.Italic }
                 });
                 return;
             }
