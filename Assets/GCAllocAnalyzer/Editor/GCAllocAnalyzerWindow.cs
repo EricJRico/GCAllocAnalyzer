@@ -907,7 +907,7 @@ namespace GCAllocBreakdown.Editor
                                     ? NormalizeKeyPart(resolvedCopy[0]) : "";
                                 alloc.DisplayName = resolvedCopy.Count > 0
                                     ? FormatTopFrame(resolvedCopy[0])
-                                    : string.Concat(parentMethod, "  [no callstack]");
+                                    : parentMethod;
 
                                 m_RawAllocations.Add(alloc);
                             }
