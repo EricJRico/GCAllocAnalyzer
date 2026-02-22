@@ -930,10 +930,10 @@ namespace GCAllocBreakdown.Editor
                                     ? NormalizeKeyPart(resolvedCopy[0]) : "";
                                 alloc.DisplayName = resolvedCopy.Count > 0
                                     ? FormatTopFrame(resolvedCopy[0])
-                                    : parentMethod;
+                                    : StripAssembly(parentMethod);
                                 alloc.DisplayNameWithAssembly = resolvedCopy.Count > 0
                                     ? FormatTopFrameWithAssembly(resolvedCopy[0])
-                                    : parentMethod;
+                                    : StripLeadingColons(parentMethod);
 
                                 m_RawAllocations.Add(alloc);
                             }
