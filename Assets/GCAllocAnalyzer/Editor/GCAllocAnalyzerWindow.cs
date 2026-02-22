@@ -94,6 +94,7 @@ namespace GCAllocBreakdown.Editor
         [SerializeField] bool m_AnalyzedHadCallStacks;
         [SerializeField] SortCol m_SortCol = SortCol.Bytes;
         [SerializeField] bool m_SortAsc;
+        [SerializeField] bool m_ShowAssembly;
 
         // Both groupings computed once during RunAnalysis, swapped on toggle
         readonly List<CallsiteGroup> m_GroupsByFullCallstack = new(256);
@@ -331,7 +332,7 @@ namespace GCAllocBreakdown.Editor
             filterRow1.Add(threadGroup);
             m_FiltersFoldout.Add(filterRow1);
 
-            var filterRow2 = new VisualElement { style = { flexDirection = FlexDirection.Row } };
+            var filterRow2 = new VisualElement { style = { flexDirection = FlexDirection.Row, flexWrap = Wrap.Wrap } };
             m_GroupByCallsite = new Toggle("Group By Full Callsite")
             {
                 value = true,
@@ -339,6 +340,16 @@ namespace GCAllocBreakdown.Editor
             };
             m_GroupByCallsite.RegisterValueChangedCallback(OnGroupByChanged);
             filterRow2.Add(m_GroupByCallsite);
+
+            var showAsmToggle = new Toggle("Show Assembly")
+            {
+                value = m_ShowAssembly,
+                tooltip = "Show or hide the DLL/assembly prefix on method names.",
+                style = { marginLeft = 12 }
+            };
+            showAsmToggle.RegisterValueChangedCallback(OnShowAssemblyChanged);
+            filterRow2.Add(showAsmToggle);
+
             m_FiltersFoldout.Add(filterRow2);
 
             left.Add(m_FiltersFoldout);
@@ -368,6 +379,18 @@ namespace GCAllocBreakdown.Editor
         // Non-capturing filter callbacks
         void OnNameFilterChanged(ChangeEvent<string> evt) => ApplyFilters();
         void OnGroupByChanged(ChangeEvent<bool> evt) => SwapGroupingAndRefresh();
+
+        void OnShowAssemblyChanged(ChangeEvent<bool> evt)
+        {
+            m_ShowAssembly = evt.newValue;
+            if (m_RawAllocations.Count == 0) return;
+            BuildGrouping(true, m_GroupsByFullCallstack);
+            BuildGrouping(false, m_GroupsByTopFrame);
+            m_ActiveGroups = m_GroupByCallsite.value ? m_GroupsByFullCallstack : m_GroupsByTopFrame;
+            BuildThreadIndex(m_ActiveGroups);
+            BuildTopOffenders();
+            ApplyFilters();
+        }
 
         // ═══════════════════════════════════════════════════
         //  THREAD FILTER — GenericMenu (closures unavoidable in GenericMenu API,
@@ -908,6 +931,9 @@ namespace GCAllocBreakdown.Editor
                                 alloc.DisplayName = resolvedCopy.Count > 0
                                     ? FormatTopFrame(resolvedCopy[0])
                                     : parentMethod;
+                                alloc.DisplayNameWithAssembly = resolvedCopy.Count > 0
+                                    ? FormatTopFrameWithAssembly(resolvedCopy[0])
+                                    : parentMethod;
 
                                 m_RawAllocations.Add(alloc);
                             }
@@ -1002,7 +1028,7 @@ namespace GCAllocBreakdown.Editor
                     g = new CallsiteGroup
                     {
                         Key = key,
-                        DisplayName = alloc.DisplayName,
+                        DisplayName = m_ShowAssembly ? alloc.DisplayNameWithAssembly : alloc.DisplayName,
                         ResolvedCallStack = alloc.ResolvedCallStack.Count > 0 ? alloc.ResolvedCallStack : null,
                         Allocations = new List<RawAllocation>(16)
                     };
@@ -1903,6 +1929,21 @@ namespace GCAllocBreakdown.Editor
             return result;
         }
 
+        /// <summary>
+        /// Keeps the assembly prefix but strips a leading :: after the ! separator.
+        /// e.g. "mscorlib!::String.Concat" → "mscorlib!String.Concat"
+        /// </summary>
+        static string StripLeadingColons(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return raw ?? "";
+            int bang = raw.IndexOf('!');
+            if (bang < 0) return raw;
+            int afterBang = bang + 1;
+            if (afterBang + 1 < raw.Length && raw[afterBang] == ':' && raw[afterBang + 1] == ':')
+                return string.Concat(raw.Substring(0, afterBang), raw.Substring(afterBang + 2));
+            return raw;
+        }
+
         // ═══════════════════════════════════════════════════
         //  FORMATTING — used during analysis (not per-bind)
         // ═══════════════════════════════════════════════════
@@ -1931,6 +1972,20 @@ namespace GCAllocBreakdown.Editor
         static string FormatTopFrame(ResolvedFrame frame)
         {
             string name = StripAssembly(frame.RawMethodName);
+
+            if (!string.IsNullOrEmpty(frame.SourceFile))
+            {
+                string fn = Path.GetFileName(frame.SourceFile);
+                return frame.SourceLine > 0
+                    ? string.Concat(name, "  —  ", fn, ":", frame.SourceLine.ToString())
+                    : string.Concat(name, "  —  ", fn);
+            }
+            return name;
+        }
+
+        static string FormatTopFrameWithAssembly(ResolvedFrame frame)
+        {
+            string name = StripLeadingColons(frame.RawMethodName);
 
             if (!string.IsNullOrEmpty(frame.SourceFile))
             {
@@ -2092,6 +2147,7 @@ namespace GCAllocBreakdown.Editor
             public string FullCallstackKey;
             public string TopFrameKey;
             public string DisplayName;
+            public string DisplayNameWithAssembly;
 
             // Pre-computed display strings (built once during analysis)
             public string FormattedBytes;
