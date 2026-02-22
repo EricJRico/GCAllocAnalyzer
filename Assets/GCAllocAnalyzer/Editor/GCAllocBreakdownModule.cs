@@ -83,6 +83,7 @@ namespace GCAllocBreakdown.Editor
         readonly List<ulong> m_AddrBuf = new(64);
         readonly List<ResolvedFrame> m_FrameBuf = new(64);
         readonly Dictionary<string, FrameGroup> m_GroupDict = new(64);
+        readonly List<DepthEntry> m_DepthStack = new(32);
 
         public GCAllocModuleDetailsView(ProfilerWindow profilerWindow)
             : base(profilerWindow) { }
@@ -222,66 +223,88 @@ namespace GCAllocBreakdown.Editor
 
                 string threadName = raw.threadName;
 
+                m_DepthStack.Clear();
+
                 for (int i = 0; i < raw.sampleCount; i++)
                 {
-                    if (raw.GetSampleMarkerId(i) != gcAllocId) continue;
-                    long bytes = raw.GetSampleMetadataAsLong(i, 0);
-                    if (bytes <= 0) continue;
+                    int markerId = raw.GetSampleMarkerId(i);
+                    int childCount = raw.GetSampleChildrenCount(i);
+                    string sampleName = raw.GetSampleName(i);
 
-                    totalBytes += bytes;
-                    totalCount++;
+                    // Maintain depth stack
+                    while (m_DepthStack.Count > 0 &&
+                           m_DepthStack[m_DepthStack.Count - 1].Remaining <= 0)
+                        m_DepthStack.RemoveAt(m_DepthStack.Count - 1);
 
-                    m_FrameBuf.Clear();
-                    m_AddrBuf.Clear();
-                    raw.GetSampleCallstack(i, m_AddrBuf);
+                    if (m_DepthStack.Count > 0)
+                        m_DepthStack[m_DepthStack.Count - 1].Remaining--;
 
-                    if (m_AddrBuf.Count > 0)
+                    if (markerId == gcAllocId)
                     {
-                        anyCS = true;
-                        for (int a = 0; a < m_AddrBuf.Count; a++)
+                        long bytes = raw.GetSampleMetadataAsLong(i, 0);
+                        if (bytes > 0)
                         {
-                            var info = raw.ResolveMethodInfo(m_AddrBuf[a]);
-                            if (string.IsNullOrEmpty(info.methodName)) continue;
-                            m_FrameBuf.Add(new ResolvedFrame
+                            totalBytes += bytes;
+                            totalCount++;
+
+                            m_FrameBuf.Clear();
+                            m_AddrBuf.Clear();
+                            raw.GetSampleCallstack(i, m_AddrBuf);
+
+                            if (m_AddrBuf.Count > 0)
                             {
-                                RawMethodName = info.methodName.Trim(),
-                                SourceFile = (info.sourceFileName ?? "").Trim(),
-                                SourceLine = (int)info.sourceFileLine
-                            });
+                                anyCS = true;
+                                for (int a = 0; a < m_AddrBuf.Count; a++)
+                                {
+                                    var info = raw.ResolveMethodInfo(m_AddrBuf[a]);
+                                    if (string.IsNullOrEmpty(info.methodName)) continue;
+                                    m_FrameBuf.Add(new ResolvedFrame
+                                    {
+                                        RawMethodName = info.methodName.Trim(),
+                                        SourceFile = (info.sourceFileName ?? "").Trim(),
+                                        SourceLine = (int)info.sourceFileLine
+                                    });
+                                }
+                            }
+
+                            string key;
+                            string display;
+                            List<ResolvedFrame> stackCopy = null;
+
+                            if (m_FrameBuf.Count > 0)
+                            {
+                                key = BuildKey(m_FrameBuf);
+                                display = FormatTopFrame(m_FrameBuf[0]);
+                                stackCopy = new List<ResolvedFrame>(m_FrameBuf.Count);
+                                for (int fc = 0; fc < m_FrameBuf.Count; fc++)
+                                    stackCopy.Add(m_FrameBuf[fc]);
+                            }
+                            else
+                            {
+                                string parentMethod = m_DepthStack.Count > 0
+                                    ? m_DepthStack[m_DepthStack.Count - 1].Name : "<root>";
+                                key = string.Concat("nostack|", parentMethod);
+                                display = parentMethod;
+                            }
+
+                            if (!m_GroupDict.TryGetValue(key, out var g))
+                            {
+                                g = new FrameGroup
+                                {
+                                    Key = key,
+                                    DisplayName = display,
+                                    CallStack = stackCopy
+                                };
+                                m_GroupDict[key] = g;
+                                groups.Add(g);
+                            }
+                            g.TotalBytes += bytes;
+                            g.Count++;
                         }
                     }
 
-                    string key;
-                    string display;
-                    List<ResolvedFrame> stackCopy = null;
-
-                    if (m_FrameBuf.Count > 0)
-                    {
-                        key = BuildKey(m_FrameBuf);
-                        display = FormatTopFrame(m_FrameBuf[0]);
-                        stackCopy = new List<ResolvedFrame>(m_FrameBuf.Count);
-                        for (int fc = 0; fc < m_FrameBuf.Count; fc++)
-                            stackCopy.Add(m_FrameBuf[fc]);
-                    }
-                    else
-                    {
-                        key = string.Concat("nostack|", threadName);
-                        display = string.Concat("[no callstack — ", threadName, "]");
-                    }
-
-                    if (!m_GroupDict.TryGetValue(key, out var g))
-                    {
-                        g = new FrameGroup
-                        {
-                            Key = key,
-                            DisplayName = display,
-                            CallStack = stackCopy
-                        };
-                        m_GroupDict[key] = g;
-                        groups.Add(g);
-                    }
-                    g.TotalBytes += bytes;
-                    g.Count++;
+                    if (childCount > 0)
+                        m_DepthStack.Add(new DepthEntry { Name = sampleName, Remaining = childCount });
                 }
             }
 
@@ -713,6 +736,12 @@ namespace GCAllocBreakdown.Editor
             public string RawMethodName;
             public string SourceFile;
             public int SourceLine;
+        }
+
+        class DepthEntry
+        {
+            public string Name;
+            public int Remaining;
         }
 
         class FrameGroup
