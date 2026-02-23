@@ -50,6 +50,8 @@ namespace GCAllocBreakdown.Editor
         ListView m_MarkerListView;
         VisualElement m_MarkerHeaderRow;
         Label m_StatusLabel;
+        Button m_SaveBtn;
+        Button m_LoadBtn;
 
         // Right panel
         Label m_FrameCountLabel, m_FrameRangeLabel, m_TotalGcLabel;
@@ -198,6 +200,7 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append('–');
             m_SharedSB.Append(m_Snapshot.FrameEnd);
             m_StatusLabel.text = m_SharedSB.ToString();
+            m_SaveBtn?.SetEnabled(true);
         }
 
         // ═══════════════════════════════════════════════════
@@ -224,8 +227,15 @@ namespace GCAllocBreakdown.Editor
             var pullBtn = new Button(OnPullData) { text = "Pull Data", style = { marginRight = 4 } };
             bar.Add(pullBtn);
 
-            var analyzeBtn = new Button(OnAnalyze) { text = "Analyze", style = { marginRight = 12 } };
+            var analyzeBtn = new Button(OnAnalyze) { text = "Analyze", style = { marginRight = 2 } };
             bar.Add(analyzeBtn);
+
+            m_SaveBtn = new Button(OnSaveSnapshot) { text = "Save", style = { marginRight = 2 } };
+            m_SaveBtn.SetEnabled(false);
+            bar.Add(m_SaveBtn);
+
+            m_LoadBtn = new Button(OnLoadSnapshot) { text = "Load", style = { marginRight = 12 } };
+            bar.Add(m_LoadBtn);
 
             bar.Add(MakeSeparator());
 
@@ -265,6 +275,118 @@ namespace GCAllocBreakdown.Editor
         // Non-capturing callbacks for toolbar
         void OnFrameRangeChanged(ChangeEvent<int> evt) => UpdateFrameRangeInfo();
         void OnOpenProfiler() => EditorWindow.GetWindow<ProfilerWindow>();
+
+        void OnSaveSnapshot()
+        {
+            if (!m_Snapshot.HasData)
+            {
+                m_StatusLabel.text = "No data to save. Run analysis first.";
+                return;
+            }
+
+            m_SharedSB.Clear();
+            m_SharedSB.Append("GCSnapshot_");
+            m_SharedSB.Append(DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+            string defaultName = m_SharedSB.ToString();
+
+            string projectDir = Path.GetDirectoryName(Application.dataPath);
+            string path = EditorUtility.SaveFilePanel("Save GC Alloc Snapshot", projectDir, defaultName, "json");
+            if (string.IsNullOrEmpty(path)) return;
+
+            try
+            {
+                string json = JsonUtility.ToJson(m_Snapshot, true);
+                File.WriteAllText(path, json);
+
+                m_SharedSB.Clear();
+                m_SharedSB.Append("Saved snapshot to: ");
+                m_SharedSB.Append(Path.GetFileName(path));
+                m_StatusLabel.text = m_SharedSB.ToString();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError(string.Concat("Failed to save GC snapshot: ", ex.Message));
+                m_StatusLabel.text = "Failed to save snapshot. See console for details.";
+            }
+        }
+
+        void OnLoadSnapshot()
+        {
+            string projectDir = Path.GetDirectoryName(Application.dataPath);
+            string path = EditorUtility.OpenFilePanel("Load GC Alloc Snapshot", projectDir, "json");
+            if (string.IsNullOrEmpty(path)) return;
+
+            string json;
+            try
+            {
+                json = File.ReadAllText(path);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError(string.Concat("Failed to read snapshot file: ", ex.Message));
+                m_StatusLabel.text = "Failed to read file. See console for details.";
+                return;
+            }
+
+            AnalysisSnapshot loaded;
+            try
+            {
+                loaded = JsonUtility.FromJson<AnalysisSnapshot>(json);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError(string.Concat("Failed to parse snapshot JSON: ", ex.Message));
+                m_StatusLabel.text = "Invalid snapshot file. See console for details.";
+                return;
+            }
+
+            if (loaded == null || loaded.RawAllocations == null || loaded.RawAllocations.Count == 0)
+            {
+                m_StatusLabel.text = "Snapshot file contains no allocation data.";
+                return;
+            }
+
+            // Replace current snapshot and rebuild state (mirrors TryRestoreAfterReload)
+            m_Snapshot = loaded;
+            m_Snapshot.EnsureNonSerializedLists();
+
+            m_AllThreadNames.Clear();
+            m_SelectedThreads.Clear();
+            for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
+                m_AllThreadNames.Add(m_Snapshot.SortedThreadNames[i]);
+            UpdateThreadButtonLabel();
+
+            BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
+            BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
+
+            m_ActiveGroups = m_GroupByCallsite.value
+                ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
+            BuildThreadIndex(m_ActiveGroups);
+            BuildTopOffenders();
+            ApplyFilters();
+            UpdateDataSummary();
+            ShowNoDataState(m_ActiveGroups.Count == 0);
+
+            m_StartFrameField.value = m_Snapshot.FrameStart;
+            m_EndFrameField.value = m_Snapshot.FrameEnd;
+            UpdateFrameRangeInfo();
+
+            m_SaveBtn.SetEnabled(true);
+
+            if (m_FilteredGroups.Count > 0)
+                m_MarkerListView.selectedIndex = 0;
+
+            m_SharedSB.Clear();
+            m_SharedSB.Append("Loaded: ");
+            m_SharedSB.Append(m_Snapshot.TotalCount);
+            m_SharedSB.Append(" allocs across frames ");
+            m_SharedSB.Append(m_Snapshot.FrameStart);
+            m_SharedSB.Append('\u2013');
+            m_SharedSB.Append(m_Snapshot.FrameEnd);
+            m_SharedSB.Append(" from ");
+            m_SharedSB.Append(Path.GetFileName(path));
+            m_StatusLabel.text = m_SharedSB.ToString();
+        }
 
         void UpdateFrameRangeInfo()
         {
@@ -991,6 +1113,7 @@ namespace GCAllocBreakdown.Editor
             ApplyFilters();
             UpdateDataSummary();
             ShowNoDataState(m_ActiveGroups.Count == 0);
+            m_SaveBtn?.SetEnabled(m_Snapshot.HasData);
 
             // Status
             m_SharedSB.Clear();
