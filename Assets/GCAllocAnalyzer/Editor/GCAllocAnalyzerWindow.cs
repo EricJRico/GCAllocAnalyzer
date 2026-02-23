@@ -84,27 +84,19 @@ namespace GCAllocBreakdown.Editor
         //  DATA FIELDS — pre-allocated, reused via .Clear()
         // ═══════════════════════════════════════════════════
 
-        // Serialized to survive domain reload (script save)
-        [SerializeField] List<RawAllocation> m_RawAllocations = new(4096);
-        [SerializeField] List<string> m_SortedThreadNames = new(32);
-        [SerializeField] long m_AnalyzedTotalBytes;
-        [SerializeField] int m_AnalyzedTotalCount;
-        [SerializeField] int m_AnalyzedFrameStart;
-        [SerializeField] int m_AnalyzedFrameEnd;
-        [SerializeField] bool m_AnalyzedHadCallStacks;
+        // Core analysis data — serialized to survive domain reload
+        [SerializeField] AnalysisSnapshot m_Snapshot = new();
         [SerializeField] SortCol m_SortCol = SortCol.Bytes;
         [SerializeField] bool m_SortAsc;
         [SerializeField] bool m_ShowAssembly;
 
-        // Both groupings computed once during RunAnalysis, swapped on toggle
-        readonly List<CallsiteGroup> m_GroupsByFullCallstack = new(256);
-        readonly List<CallsiteGroup> m_GroupsByTopFrame = new(256);
-        List<CallsiteGroup> m_ActiveGroups;  // points to one of the above
+        // Points to m_Snapshot.GroupsByFullCallstack or GroupsByTopFrame
+        List<CallsiteGroup> m_ActiveGroups;
 
         readonly List<CallsiteGroup> m_FilteredGroups = new(256);
         List<RawAllocation> m_SelectedAllocations = new List<RawAllocation>(512);
 
-        // Thread state (rebuilt from m_SortedThreadNames after reload)
+        // Thread state (rebuilt from m_Snapshot.SortedThreadNames after reload)
         readonly HashSet<string> m_AllThreadNames = new();
         readonly HashSet<string> m_SelectedThreads = new();
 
@@ -172,20 +164,21 @@ namespace GCAllocBreakdown.Editor
         /// </summary>
         void TryRestoreAfterReload()
         {
-            if (m_RawAllocations == null || m_RawAllocations.Count == 0) return;
+            m_Snapshot.EnsureNonSerializedLists();
+            if (!m_Snapshot.HasData) return;
 
             // Rebuild thread HashSet from serialized sorted list
             m_AllThreadNames.Clear();
-            for (int i = 0; i < m_SortedThreadNames.Count; i++)
-                m_AllThreadNames.Add(m_SortedThreadNames[i]);
+            for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
+                m_AllThreadNames.Add(m_Snapshot.SortedThreadNames[i]);
             UpdateThreadButtonLabel();
 
             // Rebuild both groupings from raw data
-            BuildGrouping(true, m_GroupsByFullCallstack);
-            BuildGrouping(false, m_GroupsByTopFrame);
+            BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
+            BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
 
             m_ActiveGroups = m_GroupByCallsite.value
-                ? m_GroupsByFullCallstack : m_GroupsByTopFrame;
+                ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
             BuildThreadIndex(m_ActiveGroups);
             BuildTopOffenders();
             ApplyFilters();
@@ -193,17 +186,17 @@ namespace GCAllocBreakdown.Editor
             ShowNoDataState(m_ActiveGroups.Count == 0);
 
             // Restore frame range in UI
-            m_StartFrameField.value = m_AnalyzedFrameStart;
-            m_EndFrameField.value = m_AnalyzedFrameEnd;
+            m_StartFrameField.value = m_Snapshot.FrameStart;
+            m_EndFrameField.value = m_Snapshot.FrameEnd;
             UpdateFrameRangeInfo();
 
             m_SharedSB.Clear();
             m_SharedSB.Append("Restored: ");
-            m_SharedSB.Append(m_AnalyzedTotalCount);
+            m_SharedSB.Append(m_Snapshot.TotalCount);
             m_SharedSB.Append(" allocs across frames ");
-            m_SharedSB.Append(m_AnalyzedFrameStart);
+            m_SharedSB.Append(m_Snapshot.FrameStart);
             m_SharedSB.Append('–');
-            m_SharedSB.Append(m_AnalyzedFrameEnd);
+            m_SharedSB.Append(m_Snapshot.FrameEnd);
             m_StatusLabel.text = m_SharedSB.ToString();
         }
 
@@ -383,11 +376,11 @@ namespace GCAllocBreakdown.Editor
         void OnShowAssemblyChanged(ChangeEvent<bool> evt)
         {
             m_ShowAssembly = evt.newValue;
-            if (m_RawAllocations.Count == 0) return;
+            if (!m_Snapshot.HasData) return;
 
             // Fast path: just swap display names on existing groups (no rebuild)
-            SwapDisplayNames(m_GroupsByFullCallstack);
-            SwapDisplayNames(m_GroupsByTopFrame);
+            SwapDisplayNames(m_Snapshot.GroupsByFullCallstack);
+            SwapDisplayNames(m_Snapshot.GroupsByTopFrame);
             PopulateTopOffendersUI();
             m_MarkerListView.RefreshItems();
 
@@ -425,9 +418,9 @@ namespace GCAllocBreakdown.Editor
             menu.AddItem(new GUIContent("All Threads"), allSelected, OnThreadMenuAll);
             menu.AddSeparator("");
 
-            for (int i = 0; i < m_SortedThreadNames.Count; i++)
+            for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
             {
-                string thread = m_SortedThreadNames[i];
+                string thread = m_Snapshot.SortedThreadNames[i];
                 bool on = m_SelectedThreads.Count == 0 || m_SelectedThreads.Contains(thread);
                 menu.AddItem(new GUIContent(thread), on, OnThreadMenuToggle, thread);
             }
@@ -830,7 +823,7 @@ namespace GCAllocBreakdown.Editor
         void RunAnalysis(int startFrame, int endFrame)
         {
             m_ScriptCache.Clear();
-            m_RawAllocations.Clear();
+            m_Snapshot.RawAllocations.Clear();
             m_AllThreadNames.Clear();
             m_SelectedThreads.Clear();
             bool anyCallStacks = false;
@@ -954,7 +947,7 @@ namespace GCAllocBreakdown.Editor
                                     ? FormatTopFrameWithAssembly(resolvedCopy[0])
                                     : StripLeadingColons(parentMethod);
 
-                                m_RawAllocations.Add(alloc);
+                                m_Snapshot.RawAllocations.Add(alloc);
                             }
 
                             if (childCount > 0)
@@ -968,26 +961,26 @@ namespace GCAllocBreakdown.Editor
                 EditorUtility.ClearProgressBar();
             }
 
-            m_AnalyzedTotalBytes = totalBytes;
-            m_AnalyzedTotalCount = m_RawAllocations.Count;
-            m_AnalyzedFrameStart = startFrame;
-            m_AnalyzedFrameEnd = endFrame;
-            m_AnalyzedHadCallStacks = anyCallStacks;
+            m_Snapshot.TotalBytes = totalBytes;
+            m_Snapshot.TotalCount = m_Snapshot.RawAllocations.Count;
+            m_Snapshot.FrameStart = startFrame;
+            m_Snapshot.FrameEnd = endFrame;
+            m_Snapshot.HadCallStacks = anyCallStacks;
 
             // Build sorted thread names
-            m_SortedThreadNames.Clear();
+            m_Snapshot.SortedThreadNames.Clear();
             foreach (string t in m_AllThreadNames)
-                m_SortedThreadNames.Add(t);
-            m_SortedThreadNames.Sort(StringComparer.Ordinal);
+                m_Snapshot.SortedThreadNames.Add(t);
+            m_Snapshot.SortedThreadNames.Sort(StringComparer.Ordinal);
 
             UpdateThreadButtonLabel();
 
             // Build BOTH groupings once
-            BuildGrouping(true, m_GroupsByFullCallstack);
-            BuildGrouping(false, m_GroupsByTopFrame);
+            BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
+            BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
 
             // Set active based on current toggle
-            m_ActiveGroups = m_GroupByCallsite.value ? m_GroupsByFullCallstack : m_GroupsByTopFrame;
+            m_ActiveGroups = m_GroupByCallsite.value ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
 
             // Build thread index for active grouping
             BuildThreadIndex(m_ActiveGroups);
@@ -1010,7 +1003,7 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append(") | ");
             m_SharedSB.Append(FormatBytes(totalBytes));
             m_SharedSB.Append(", ");
-            m_SharedSB.Append(m_AnalyzedTotalCount);
+            m_SharedSB.Append(m_Snapshot.TotalCount);
             m_SharedSB.Append(" allocs, ");
             m_SharedSB.Append(m_ActiveGroups.Count);
             m_SharedSB.Append(" sites | ");
@@ -1030,11 +1023,11 @@ namespace GCAllocBreakdown.Editor
             target.Clear();
             m_GroupingDict.Clear();
 
-            long total = m_AnalyzedTotalBytes > 0 ? m_AnalyzedTotalBytes : 1;
+            long total = m_Snapshot.TotalBytes > 0 ? m_Snapshot.TotalBytes : 1;
 
-            for (int i = 0; i < m_RawAllocations.Count; i++)
+            for (int i = 0; i < m_Snapshot.RawAllocations.Count; i++)
             {
-                var alloc = m_RawAllocations[i];
+                var alloc = m_Snapshot.RawAllocations[i];
                 string key;
 
                 if (alloc.ResolvedCallStack.Count > 0)
@@ -1091,9 +1084,9 @@ namespace GCAllocBreakdown.Editor
 
         void SwapGroupingAndRefresh()
         {
-            if (m_RawAllocations.Count == 0) return;
+            if (!m_Snapshot.HasData) return;
 
-            m_ActiveGroups = m_GroupByCallsite.value ? m_GroupsByFullCallstack : m_GroupsByTopFrame;
+            m_ActiveGroups = m_GroupByCallsite.value ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
             BuildThreadIndex(m_ActiveGroups);
             ApplyFilters();
         }
@@ -1263,15 +1256,15 @@ namespace GCAllocBreakdown.Editor
 
         void UpdateDataSummary()
         {
-            int count = m_AnalyzedFrameEnd - m_AnalyzedFrameStart + 1;
-            bool hasData = count > 0 && m_AnalyzedTotalCount > 0;
+            int count = m_Snapshot.FrameEnd - m_Snapshot.FrameStart + 1;
+            bool hasData = count > 0 && m_Snapshot.TotalCount > 0;
 
             m_FrameCountLabel.text = hasData ? string.Concat("Frame Count: ", count.ToString()) : "Frame Count: —";
             m_FrameRangeLabel.text = hasData
-                ? string.Concat("Frame Range: ", m_AnalyzedFrameStart.ToString(), "–", m_AnalyzedFrameEnd.ToString())
+                ? string.Concat("Frame Range: ", m_Snapshot.FrameStart.ToString(), "–", m_Snapshot.FrameEnd.ToString())
                 : "Frame Range: —";
-            m_TotalGcLabel.text = hasData ? string.Concat("Total GC: ", FormatBytes(m_AnalyzedTotalBytes)) : "Total GC: —";
-            m_TotalAllocsLabel.text = hasData ? string.Concat("Total Allocs: ", m_AnalyzedTotalCount.ToString()) : "Total Allocs: —";
+            m_TotalGcLabel.text = hasData ? string.Concat("Total GC: ", FormatBytes(m_Snapshot.TotalBytes)) : "Total GC: —";
+            m_TotalAllocsLabel.text = hasData ? string.Concat("Total Allocs: ", m_Snapshot.TotalCount.ToString()) : "Total Allocs: —";
             m_UniqueSitesLabel.text = hasData ? string.Concat("Unique Sites: ", m_ActiveGroups.Count.ToString()) : "Unique Sites: —";
         }
 
@@ -1291,9 +1284,9 @@ namespace GCAllocBreakdown.Editor
 
             // Top 10 single largest allocations
             m_TopSingleAllocs.Clear();
-            for (int i = 0; i < m_RawAllocations.Count; i++)
+            for (int i = 0; i < m_Snapshot.RawAllocations.Count; i++)
             {
-                var a = m_RawAllocations[i];
+                var a = m_Snapshot.RawAllocations[i];
                 if (m_TopSingleAllocs.Count < 10)
                 {
                     InsertSorted(m_TopSingleAllocs, a);
@@ -2145,6 +2138,33 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
+        //  ANALYSIS SNAPSHOT — serializable data container
+        // ═══════════════════════════════════════════════════
+
+        [Serializable]
+        class AnalysisSnapshot
+        {
+            public List<RawAllocation> RawAllocations = new(4096);
+            public List<string> SortedThreadNames = new(32);
+            public long TotalBytes;
+            public int TotalCount;
+            public int FrameStart;
+            public int FrameEnd;
+            public bool HadCallStacks;
+
+            [NonSerialized] public List<CallsiteGroup> GroupsByFullCallstack = new(256);
+            [NonSerialized] public List<CallsiteGroup> GroupsByTopFrame = new(256);
+
+            public bool HasData => RawAllocations != null && RawAllocations.Count > 0;
+
+            public void EnsureNonSerializedLists()
+            {
+                GroupsByFullCallstack ??= new List<CallsiteGroup>(256);
+                GroupsByTopFrame ??= new List<CallsiteGroup>(256);
+            }
+        }
+
+        // ═══════════════════════════════════════════════════
         //  DATA STRUCTURES
         // ═══════════════════════════════════════════════════
 
@@ -2174,6 +2194,7 @@ namespace GCAllocBreakdown.Editor
             public string FormattedFrame;
         }
 
+        [Serializable]
         class CallsiteGroup
         {
             public string Key;
