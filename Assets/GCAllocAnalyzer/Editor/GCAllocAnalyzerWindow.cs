@@ -2617,6 +2617,19 @@ namespace GCAllocBreakdown.Editor
             }
         }
 
+        void NavigateToFrame(int frameIndex)
+        {
+            EnsureProfilerRef();
+            if (m_ProfilerWindow == null) return;
+            try { m_ProfilerWindow.selectedFrameIndex = frameIndex; }
+            catch (Exception e)
+            {
+                Debug.LogWarning(string.Concat(
+                    "[GC Alloc Analyzer] Frame navigation failed frame=",
+                    frameIndex.ToString(), ": ", e.Message));
+            }
+        }
+
         // ═══════════════════════════════════════════════════
         //  SCRIPT OPENING — no path filtering
         // ═══════════════════════════════════════════════════
