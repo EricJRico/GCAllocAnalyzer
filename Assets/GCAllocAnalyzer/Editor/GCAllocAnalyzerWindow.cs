@@ -805,6 +805,92 @@ namespace GCAllocBreakdown.Editor
             }
         }
 
+        void UpdateGraphOverlay(CallsiteGroup group)
+        {
+            if (m_GraphBarArea == null || m_Snapshot.PerFrameBytes == null) return;
+
+            if (group == null)
+            {
+                ClearGraphOverlay();
+                return;
+            }
+
+            int frameCount = m_Snapshot.PerFrameBytes.Length;
+
+            // Ensure overlay bucket buffer
+            if (m_GraphOverlayBuckets == null || m_GraphOverlayBuckets.Length < m_GraphBucketCount)
+                m_GraphOverlayBuckets = new long[m_GraphBucketCount];
+            else
+                Array.Clear(m_GraphOverlayBuckets, 0, m_GraphBucketCount);
+
+            // Build per-frame bytes for this group
+            // Reuse m_PerFrameBuffer (safe — not called during grouping)
+            EnsurePerFrameBuffer(frameCount);
+            for (int i = 0; i < group.Allocations.Count; i++)
+            {
+                var alloc = group.Allocations[i];
+                int idx = alloc.FrameIndex - m_Snapshot.FrameStart;
+                if (idx >= 0 && idx < frameCount)
+                    m_PerFrameBuffer[idx] += alloc.Bytes;
+            }
+
+            // Bucket the group's per-frame data (same bucketing as main graph)
+            for (int b = 0; b < m_GraphBucketCount; b++)
+            {
+                int startIdx = b * m_GraphFramesPerBucket;
+                int endIdx = Mathf.Min(startIdx + m_GraphFramesPerBucket, frameCount);
+                long bucketMax = 0;
+                for (int i = startIdx; i < endIdx; i++)
+                {
+                    if (m_PerFrameBuffer[i] > bucketMax) bucketMax = m_PerFrameBuffer[i];
+                }
+                m_GraphOverlayBuckets[b] = bucketMax;
+            }
+
+            // Update overlay elements on existing bars
+            // The bar area children are: [0] = guide line, [1..N] = bars
+            long maxValue = 0;
+            for (int b = 0; b < m_GraphBucketCount; b++)
+                if (m_GraphBuckets[b] > maxValue) maxValue = m_GraphBuckets[b];
+
+            int childOffset = 1; // skip guide line element
+            for (int b = 0; b < m_GraphBucketCount; b++)
+            {
+                int childIdx = childOffset + b;
+                if (childIdx >= m_GraphBarArea.childCount) break;
+
+                var bar = m_GraphBarArea[childIdx];
+                var overlay = bar.Q("overlay");
+                if (overlay == null) continue;
+
+                long overlayVal = m_GraphOverlayBuckets[b];
+                if (overlayVal <= 0 || maxValue <= 0)
+                {
+                    overlay.style.height = 0;
+                    continue;
+                }
+
+                float overlayHeight = (float)overlayVal / maxValue * GRAPH_HEIGHT;
+                overlay.style.height = Mathf.Max(overlayHeight, 1f);
+            }
+
+            // Update overlay label
+            m_GraphOverlayLabel.text = group.DisplayName;
+        }
+
+        void ClearGraphOverlay()
+        {
+            if (m_GraphBarArea == null) return;
+
+            int childOffset = 1; // skip guide line
+            for (int i = childOffset; i < m_GraphBarArea.childCount; i++)
+            {
+                var overlay = m_GraphBarArea[i].Q("overlay");
+                if (overlay != null) overlay.style.height = 0;
+            }
+            m_GraphOverlayLabel.text = "";
+        }
+
         // Non-capturing filter callbacks
         void OnNameFilterChanged(ChangeEvent<string> evt) => ApplyFilters();
         void OnGroupByChanged(ChangeEvent<bool> evt) => SwapGroupingAndRefresh();
@@ -1806,8 +1892,9 @@ namespace GCAllocBreakdown.Editor
         {
             CallsiteGroup group = null;
             foreach (object obj in selection) { group = obj as CallsiteGroup; break; }
-            if (group == null) { ClearMarkerSummary(); return; }
+            if (group == null) { ClearMarkerSummary(); ClearGraphOverlay(); return; }
             UpdateMarkerSummary(group);
+            UpdateGraphOverlay(group);
             if (group.Allocations.Count > 0)
                 SelectInCpuModule(group.Allocations[0]);
         }
