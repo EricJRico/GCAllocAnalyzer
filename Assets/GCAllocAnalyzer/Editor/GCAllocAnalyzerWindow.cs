@@ -2279,6 +2279,19 @@ namespace GCAllocBreakdown.Editor
                 frameLbl.tooltip = m_SharedSB.ToString();
                 frameRow.Add(frameLbl);
 
+                // Context menu — closures acceptable (not a hot path, rebuilt per selection)
+                var capturedFrameForMenu = frame;
+                frameRow.AddManipulator(new ContextualMenuManipulator(menuEvt =>
+                {
+                    menuEvt.menu.AppendAction("Copy Method Name", _ =>
+                        EditorGUIUtility.systemCopyBuffer = capturedFrameForMenu.RawMethodName);
+
+                    bool canOpenSource = CanOpenScript(capturedFrameForMenu);
+                    menuEvt.menu.AppendAction("Open Source File",
+                        _ => OpenScript(capturedFrameForMenu),
+                        canOpenSource ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+                }));
+
                 // Open script button
                 if (CanOpenScript(frame))
                 {
