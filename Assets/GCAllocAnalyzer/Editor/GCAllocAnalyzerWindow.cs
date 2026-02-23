@@ -43,9 +43,7 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_HoverBg = new(0.3f, 0.3f, 0.3f);
         static readonly Color k_GraphBg = new(0.1f, 0.1f, 0.1f);
         static readonly Color k_GraphGuideLine = new(0.2f, 0.2f, 0.2f);
-        static readonly Color k_GraphBarNormal = new(0.27f, 0.67f, 0.6f);    // teal
-        static readonly Color k_GraphBarElevated = new(1f, 0.6f, 0.15f);     // orange
-        static readonly Color k_GraphBarSpike = new(1f, 0.27f, 0.27f);       // red
+        static readonly Color k_GraphBar = new(0.27f, 0.67f, 0.6f);          // teal
         static readonly Color k_GraphOverlay = new(1f, 1f, 1f, 0.85f);       // bright white
 
         // ═══════════════════════════════════════════════════
@@ -664,7 +662,6 @@ namespace GCAllocBreakdown.Editor
 
             // Fill buckets (max of frames in each bucket)
             long maxValue = 0;
-            double sum = 0;
             for (int b = 0; b < m_GraphBucketCount; b++)
             {
                 int startIdx = b * m_GraphFramesPerBucket;
@@ -675,21 +672,8 @@ namespace GCAllocBreakdown.Editor
                     if (perFrame[i] > bucketMax) bucketMax = perFrame[i];
                 }
                 m_GraphBuckets[b] = bucketMax;
-                sum += bucketMax;
                 if (bucketMax > maxValue) maxValue = bucketMax;
             }
-
-            // Compute mean and stddev for color thresholds
-            double mean = sum / m_GraphBucketCount;
-            double varianceSum = 0;
-            for (int b = 0; b < m_GraphBucketCount; b++)
-            {
-                double diff = m_GraphBuckets[b] - mean;
-                varianceSum += diff * diff;
-            }
-            double stddev = Math.Sqrt(varianceSum / m_GraphBucketCount);
-            double threshold1 = mean + stddev;
-            double threshold2 = mean + 2 * stddev;
 
             // Update Y-axis labels
             m_GraphYMax.text = FormatBytes(maxValue);
@@ -725,12 +709,6 @@ namespace GCAllocBreakdown.Editor
                 long val = m_GraphBuckets[b];
                 float height = maxValue > 0 ? (float)val / maxValue * maxHeight : 0;
 
-                // Color based on statistical threshold
-                Color barColor;
-                if (val > threshold2) barColor = k_GraphBarSpike;
-                else if (val > threshold1) barColor = k_GraphBarElevated;
-                else barColor = k_GraphBarNormal;
-
                 // Outer bar element
                 var bar = new VisualElement
                 {
@@ -738,7 +716,7 @@ namespace GCAllocBreakdown.Editor
                     {
                         width = Mathf.Max(barWidth, 1f),
                         height = Mathf.Max(height, val > 0 ? 1f : 0f),
-                        backgroundColor = barColor,
+                        backgroundColor = k_GraphBar,
                         flexShrink = 0
                     },
                     userData = b // bucket index for click handler
