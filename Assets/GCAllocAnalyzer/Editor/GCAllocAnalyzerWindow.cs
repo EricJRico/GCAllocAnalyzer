@@ -78,6 +78,9 @@ namespace GCAllocBreakdown.Editor
         Label m_FrameCountLabel, m_FrameRangeLabel, m_TotalGcLabel;
         Label m_TotalAllocsLabel, m_UniqueSitesLabel;
         Label m_MarkerNameLabel, m_MarkerSourceLabel, m_MarkerStatsLabel;
+        VisualElement m_PerFrameStatsContainer, m_TopWorstContainer;
+        Label m_FirstFrameLabel, m_MedianMeanLabel, m_MinFrameLabel, m_MaxFrameLabel;
+        Label[] m_TopWorstLabels;
         VisualElement m_CallStackContainer;
         ScrollView m_CallStackScroll;
         ListView m_AllocListView;
@@ -1315,6 +1318,79 @@ namespace GCAllocBreakdown.Editor
                 style = { fontSize = 11, marginBottom = 4, whiteSpace = WhiteSpace.Normal }
             };
             siteFoldout.Add(m_MarkerStatsLabel);
+
+            // ── Per-Frame Statistics ──
+            m_PerFrameStatsContainer = new VisualElement
+            {
+                style = { marginBottom = 4, borderTopWidth = 1,
+                    borderTopColor = new Color(0.2f, 0.2f, 0.2f), paddingTop = 4 }
+            };
+            m_PerFrameStatsContainer.Add(new Label("Per-Frame Statistics")
+            {
+                style = { unityFontStyleAndWeight = FontStyle.Bold, fontSize = 11, marginBottom = 2 }
+            });
+
+            m_FirstFrameLabel = new Label("")
+            {
+                style = { fontSize = 11, color = k_SubtleText, marginBottom = 1 }
+            };
+            m_PerFrameStatsContainer.Add(m_FirstFrameLabel);
+
+            m_MedianMeanLabel = new Label("")
+            {
+                style = { fontSize = 11, marginBottom = 1 }
+            };
+            m_PerFrameStatsContainer.Add(m_MedianMeanLabel);
+
+            // Min frame — clickable
+            m_MinFrameLabel = new Label("")
+            {
+                style = { fontSize = 11, marginBottom = 1 }
+            };
+            m_MinFrameLabel.RegisterCallback<ClickEvent>(OnMinFrameClicked);
+            m_MinFrameLabel.RegisterCallback<MouseEnterEvent>(OnFrameLinkEnter);
+            m_MinFrameLabel.RegisterCallback<MouseLeaveEvent>(OnFrameLinkLeave);
+            m_PerFrameStatsContainer.Add(m_MinFrameLabel);
+
+            // Max frame — clickable
+            m_MaxFrameLabel = new Label("")
+            {
+                style = { fontSize = 11, marginBottom = 1 }
+            };
+            m_MaxFrameLabel.RegisterCallback<ClickEvent>(OnMaxFrameClicked);
+            m_MaxFrameLabel.RegisterCallback<MouseEnterEvent>(OnFrameLinkEnter);
+            m_MaxFrameLabel.RegisterCallback<MouseLeaveEvent>(OnFrameLinkLeave);
+            m_PerFrameStatsContainer.Add(m_MaxFrameLabel);
+
+            m_PerFrameStatsContainer.style.display = DisplayStyle.None;
+            siteFoldout.Add(m_PerFrameStatsContainer);
+
+            // ── Top Worst Frames ──
+            m_TopWorstContainer = new VisualElement
+            {
+                style = { marginBottom = 4, borderTopWidth = 1,
+                    borderTopColor = new Color(0.2f, 0.2f, 0.2f), paddingTop = 4 }
+            };
+            m_TopWorstContainer.Add(new Label("Top Worst Frames")
+            {
+                style = { unityFontStyleAndWeight = FontStyle.Bold, fontSize = 11, marginBottom = 2 }
+            });
+
+            m_TopWorstLabels = new Label[3];
+            for (int i = 0; i < 3; i++)
+            {
+                m_TopWorstLabels[i] = new Label("")
+                {
+                    style = { fontSize = 11, marginBottom = 1 }
+                };
+                m_TopWorstLabels[i].RegisterCallback<ClickEvent>(OnTopWorstClicked);
+                m_TopWorstLabels[i].RegisterCallback<MouseEnterEvent>(OnFrameLinkEnter);
+                m_TopWorstLabels[i].RegisterCallback<MouseLeaveEvent>(OnFrameLinkLeave);
+                m_TopWorstContainer.Add(m_TopWorstLabels[i]);
+            }
+
+            m_TopWorstContainer.style.display = DisplayStyle.None;
+            siteFoldout.Add(m_TopWorstContainer);
 
             // Call Stack
             siteFoldout.Add(new Label("Call Stack")
@@ -2628,6 +2704,34 @@ namespace GCAllocBreakdown.Editor
                     "[GC Alloc Analyzer] Frame navigation failed frame=",
                     frameIndex.ToString(), ": ", e.Message));
             }
+        }
+
+        static void OnFrameLinkEnter(MouseEnterEvent evt)
+        {
+            ((VisualElement)evt.target).style.color = k_LinkBlue;
+        }
+
+        static void OnFrameLinkLeave(MouseLeaveEvent evt)
+        {
+            ((VisualElement)evt.target).style.color = StyleKeyword.Null;
+        }
+
+        void OnMinFrameClicked(ClickEvent evt)
+        {
+            if (evt.target is VisualElement ve && ve.userData is int frame)
+                NavigateToFrame(frame);
+        }
+
+        void OnMaxFrameClicked(ClickEvent evt)
+        {
+            if (evt.target is VisualElement ve && ve.userData is int frame)
+                NavigateToFrame(frame);
+        }
+
+        void OnTopWorstClicked(ClickEvent evt)
+        {
+            if (evt.target is VisualElement ve && ve.userData is int frame)
+                NavigateToFrame(frame);
         }
 
         // ═══════════════════════════════════════════════════
