@@ -1870,7 +1870,7 @@ namespace GCAllocBreakdown.Editor
         //  MARKER LIST — VIRTUALIZED, no allocs in bind
         // ═══════════════════════════════════════════════════
 
-        static VisualElement MakeMarkerRow()
+        VisualElement MakeMarkerRow()
         {
             var row = new VisualElement
             {
@@ -1885,6 +1885,8 @@ namespace GCAllocBreakdown.Editor
             row.Add(new Label { name = "site", style = { flexGrow = 1, fontSize = 11,
                 overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } });
 
+            row.AddManipulator(new ContextualMenuManipulator(OnMarkerRowContextMenu));
+
             return row;
         }
 
@@ -1892,6 +1894,7 @@ namespace GCAllocBreakdown.Editor
         {
             if (index < 0 || index >= m_FilteredGroups.Count) return;
             var g = m_FilteredGroups[index];
+            el.userData = g;
 
             var bytesLbl = el.Q<Label>("bytes");
             bytesLbl.text = g.FormattedBytes;
@@ -1906,6 +1909,33 @@ namespace GCAllocBreakdown.Editor
             var siteLbl = el.Q<Label>("site");
             siteLbl.text = g.DisplayName;
             siteLbl.tooltip = g.DisplayName;
+        }
+
+        void OnMarkerRowContextMenu(ContextualMenuPopulateEvent evt)
+        {
+            var group = (evt.currentTarget as VisualElement)?.userData as CallsiteGroup;
+            if (group == null) return;
+
+            evt.menu.AppendAction("Copy Name", _ =>
+                EditorGUIUtility.systemCopyBuffer = group.DisplayName);
+
+            evt.menu.AppendAction("Add to Name Filter", _ =>
+            {
+                if (m_NameFilter != null) m_NameFilter.value = group.DisplayName;
+            });
+
+            evt.menu.AppendAction("Add to Exclude Filter", _ =>
+            {
+                if (m_ExcludeFilter != null) m_ExcludeFilter.value = group.DisplayName;
+            });
+
+            // Open Source File — disabled when no source info
+            bool canOpen = group.ResolvedCallStack != null &&
+                           group.ResolvedCallStack.Count > 0 &&
+                           CanOpenScript(group.ResolvedCallStack[0]);
+            evt.menu.AppendAction("Open Source File",
+                _ => { if (group.ResolvedCallStack?.Count > 0) OpenScript(group.ResolvedCallStack[0]); },
+                canOpen ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
         }
 
         void OnMarkerSelectionChanged(IEnumerable<object> selection)
