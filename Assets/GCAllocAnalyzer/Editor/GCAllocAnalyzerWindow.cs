@@ -62,6 +62,7 @@ namespace GCAllocBreakdown.Editor
         Label m_StatusLabel;
         Button m_SaveBtn;
         Button m_LoadBtn;
+        Label m_LoadedSnapshotLabel;
 
         // Per-frame graph
         Foldout m_GraphFoldout;
@@ -93,6 +94,9 @@ namespace GCAllocBreakdown.Editor
         enum AllocSortCol { Size, Frame }
         AllocSortCol m_AllocSortCol = AllocSortCol.Size;
         bool m_AllocSortAsc;
+
+        // Loaded snapshot — Profiler sync is invalid for loaded snapshots
+        bool m_IsLoadedSnapshot;
 
         // ═══════════════════════════════════════════════════
         //  SORT
@@ -289,6 +293,14 @@ namespace GCAllocBreakdown.Editor
 
             bar.Add(new VisualElement { style = { flexGrow = 1 } });
 
+            m_LoadedSnapshotLabel = new Label("Loaded Snapshot — Profiler sync disabled")
+            {
+                style = { fontSize = 11, color = new Color(1f, 0.8f, 0.3f),
+                    unityFontStyleAndWeight = FontStyle.Italic,
+                    display = DisplayStyle.None, marginRight = 8 }
+            };
+            bar.Add(m_LoadedSnapshotLabel);
+
             var openProfilerBtn = new Button(OnOpenProfiler)
             {
                 text = "Open Profiler",
@@ -415,6 +427,8 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append(" from ");
             m_SharedSB.Append(Path.GetFileName(path));
             m_StatusLabel.text = m_SharedSB.ToString();
+            m_IsLoadedSnapshot = true;
+            m_LoadedSnapshotLabel.style.display = DisplayStyle.Flex;
         }
 
         void UpdateFrameRangeInfo()
@@ -1352,6 +1366,8 @@ namespace GCAllocBreakdown.Editor
 
         void RunAnalysis(int startFrame, int endFrame)
         {
+            m_IsLoadedSnapshot = false;
+            m_LoadedSnapshotLabel.style.display = DisplayStyle.None;
             m_ScriptCache.Clear();
             m_Snapshot.RawAllocations.Clear();
             m_AllThreadNames.Clear();
@@ -1883,7 +1899,7 @@ namespace GCAllocBreakdown.Editor
             if (group == null) { ClearMarkerSummary(); ClearGraphOverlay(); return; }
             UpdateMarkerSummary(group);
             UpdateGraphOverlay(group);
-            if (group.Allocations.Count > 0)
+            if (!m_IsLoadedSnapshot && group.Allocations.Count > 0)
                 SelectInCpuModule(group.Allocations[0]);
         }
 
@@ -2298,7 +2314,7 @@ namespace GCAllocBreakdown.Editor
         {
             RawAllocation alloc = null;
             foreach (object obj in selection) { alloc = obj as RawAllocation; break; }
-            if (alloc != null) SelectInCpuModule(alloc);
+            if (alloc != null && !m_IsLoadedSnapshot) SelectInCpuModule(alloc);
         }
 
         // ═══════════════════════════════════════════════════
