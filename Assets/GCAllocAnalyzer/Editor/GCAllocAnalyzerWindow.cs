@@ -1750,10 +1750,24 @@ namespace GCAllocBreakdown.Editor
                     g.FormattedMin = FormatBytes(g.MinBytesPerFrame);
                     g.FormattedMax = FormatBytes(g.MaxBytesPerFrame);
                     g.FormattedMean = FormatBytes((long)g.MeanBytesPerFrame);
+                    if (g.TopWorstFrameIndices != null)
+                    {
+                        g.FormattedTopWorst = new string[g.TopWorstFrameIndices.Length];
+                        for (int tw = 0; tw < g.TopWorstFrameIndices.Length; tw++)
+                        {
+                            m_SharedSB.Clear();
+                            m_SharedSB.Append("frame ");
+                            m_SharedSB.Append(g.TopWorstFrameIndices[tw].ToString());
+                            m_SharedSB.Append(" \u2014 ");
+                            m_SharedSB.Append(FormatBytes(g.TopWorstFrameBytes[tw]));
+                            g.FormattedTopWorst[tw] = m_SharedSB.ToString();
+                        }
+                    }
                 }
                 else
                 {
                     g.FormattedMedian = g.FormattedMin = g.FormattedMax = g.FormattedMean = "—";
+                    g.FormattedTopWorst = null;
                 }
             }
         }
@@ -1832,6 +1846,39 @@ namespace GCAllocBreakdown.Editor
                     if (val < min) { min = val; minFrame = frameStart + i; }
                     if (val > max) { max = val; maxFrame = frameStart + i; }
                 }
+            }
+
+            // Top 3 worst frames — extract from buffer before we pack it for median
+            long top1 = 0, top2 = 0, top3 = 0;
+            int top1f = -1, top2f = -1, top3f = -1;
+            for (int i = 0; i < frameCount; i++)
+            {
+                long val = m_PerFrameBuffer[i];
+                if (val > top1)
+                {
+                    top3 = top2; top3f = top2f;
+                    top2 = top1; top2f = top1f;
+                    top1 = val;  top1f = frameStart + i;
+                }
+                else if (val > top2)
+                {
+                    top3 = top2; top3f = top2f;
+                    top2 = val;  top2f = frameStart + i;
+                }
+                else if (val > top3)
+                {
+                    top3 = val;  top3f = frameStart + i;
+                }
+            }
+
+            int topCount = top1f >= 0 ? (top2f >= 0 ? (top3f >= 0 ? 3 : 2) : 1) : 0;
+            if (topCount > 0)
+            {
+                group.TopWorstFrameIndices = new int[topCount];
+                group.TopWorstFrameBytes = new long[topCount];
+                if (topCount >= 1) { group.TopWorstFrameIndices[0] = top1f; group.TopWorstFrameBytes[0] = top1; }
+                if (topCount >= 2) { group.TopWorstFrameIndices[1] = top2f; group.TopWorstFrameBytes[1] = top2; }
+                if (topCount >= 3) { group.TopWorstFrameIndices[2] = top3f; group.TopWorstFrameBytes[2] = top3; }
             }
 
             if (framesWithAllocs == 0) return;
@@ -3076,6 +3123,8 @@ namespace GCAllocBreakdown.Editor
             public int MinFrame;
             public int MaxFrame;
             public int FirstFrame;
+            public int[] TopWorstFrameIndices;   // up to 3, descending by bytes
+            public long[] TopWorstFrameBytes;     // parallel array, same length
 
             // Pre-computed display strings (built once during grouping)
             public string FormattedBytes;
@@ -3086,6 +3135,7 @@ namespace GCAllocBreakdown.Editor
             public string FormattedMin;
             public string FormattedMax;
             public string FormattedMean;
+            public string[] FormattedTopWorst;    // pre-built "frame N — X KB" strings
         }
 
         [Serializable]
