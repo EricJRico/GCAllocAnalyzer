@@ -708,6 +708,7 @@ namespace GCAllocBreakdown.Editor
             // Add horizontal guide line (mid-point)
             var guideMid = new VisualElement
             {
+                name = "guideline",
                 style =
                 {
                     position = Position.Absolute,
@@ -852,30 +853,30 @@ namespace GCAllocBreakdown.Editor
             }
 
             // Update overlay elements on existing bars
-            // The bar area children are: [0] = guide line, [1..N] = bars
             long maxValue = 0;
             for (int b = 0; b < m_GraphBucketCount; b++)
                 if (m_GraphBuckets[b] > maxValue) maxValue = m_GraphBuckets[b];
 
-            int childOffset = 1; // skip guide line element
-            for (int b = 0; b < m_GraphBucketCount; b++)
+            int b2 = 0;
+            for (int i = 0; i < m_GraphBarArea.childCount && b2 < m_GraphBucketCount; i++)
             {
-                int childIdx = childOffset + b;
-                if (childIdx >= m_GraphBarArea.childCount) break;
+                var child = m_GraphBarArea[i];
+                if (child.name == "guideline") continue;
 
-                var bar = m_GraphBarArea[childIdx];
-                var overlay = bar.Q("overlay");
-                if (overlay == null) continue;
+                var overlay = child.Q("overlay");
+                if (overlay == null) { b2++; continue; }
 
-                long overlayVal = m_GraphOverlayBuckets[b];
+                long overlayVal = m_GraphOverlayBuckets[b2];
                 if (overlayVal <= 0 || maxValue <= 0)
                 {
                     overlay.style.height = 0;
+                    b2++;
                     continue;
                 }
 
                 float overlayHeight = (float)overlayVal / maxValue * GRAPH_HEIGHT;
                 overlay.style.height = Mathf.Max(overlayHeight, 1f);
+                b2++;
             }
 
             // Update overlay label
@@ -884,10 +885,11 @@ namespace GCAllocBreakdown.Editor
 
         void ClearGraphOverlay()
         {
-            int childOffset = 1; // skip guide line
-            for (int i = childOffset; i < m_GraphBarArea.childCount; i++)
+            for (int i = 0; i < m_GraphBarArea.childCount; i++)
             {
-                var overlay = m_GraphBarArea[i].Q("overlay");
+                var child = m_GraphBarArea[i];
+                if (child.name == "guideline") continue;
+                var overlay = child.Q("overlay");
                 if (overlay != null) overlay.style.height = 0;
             }
             m_GraphOverlayLabel.text = "";
@@ -1911,7 +1913,8 @@ namespace GCAllocBreakdown.Editor
             m_NoDataLabel.style.display = show ? DisplayStyle.Flex : DisplayStyle.None;
             m_MarkerSummaryRoot.style.display = show ? DisplayStyle.None : DisplayStyle.Flex;
             m_TopOffendersFoldout.style.display = show ? DisplayStyle.None : DisplayStyle.Flex;
-            m_GraphFoldout.style.display = show ? DisplayStyle.None : DisplayStyle.Flex;
+            // Graph visibility is managed by RebuildGraph(); only hide here
+            if (show) m_GraphFoldout.style.display = DisplayStyle.None;
         }
 
         void UpdateDataSummary()
