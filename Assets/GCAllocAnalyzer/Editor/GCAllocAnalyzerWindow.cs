@@ -729,7 +729,7 @@ namespace GCAllocBreakdown.Editor
                     style =
                     {
                         width = Mathf.Max(barWidth, 1f),
-                        height = Mathf.Max(height, val > 0 ? 1f : 0f),
+                        height = Mathf.Max(height, val > 0 ? 3f : 0f),
                         backgroundColor = k_GraphBar,
                         flexShrink = 0
                     },
