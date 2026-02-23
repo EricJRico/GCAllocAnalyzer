@@ -214,6 +214,7 @@ namespace GCAllocBreakdown.Editor
             ApplyFilters();
             UpdateDataSummary();
             ShowNoDataState(m_ActiveGroups.Count == 0);
+            RebuildGraph();
 
             // Restore frame range in UI
             m_StartFrameField.value = m_Snapshot.FrameStart;
@@ -395,6 +396,7 @@ namespace GCAllocBreakdown.Editor
             ApplyFilters();
             UpdateDataSummary();
             ShowNoDataState(m_ActiveGroups.Count == 0);
+            RebuildGraph();
 
             m_StartFrameField.value = m_Snapshot.FrameStart;
             m_EndFrameField.value = m_Snapshot.FrameEnd;
@@ -521,6 +523,10 @@ namespace GCAllocBreakdown.Editor
             return left;
         }
 
+        // ═══════════════════════════════════════════════════
+        //  PER-FRAME BAR GRAPH
+        // ═══════════════════════════════════════════════════
+
         VisualElement BuildPerFrameGraph()
         {
             m_GraphFoldout = MakeSectionFoldout("Per-Frame Graph");
@@ -628,8 +634,6 @@ namespace GCAllocBreakdown.Editor
 
         void RebuildGraph()
         {
-            if (m_GraphBarArea == null) return;
-
             var perFrame = m_Snapshot.PerFrameBytes;
             if (perFrame == null || perFrame.Length == 0)
             {
@@ -807,7 +811,7 @@ namespace GCAllocBreakdown.Editor
 
         void UpdateGraphOverlay(CallsiteGroup group)
         {
-            if (m_GraphBarArea == null || m_Snapshot.PerFrameBytes == null) return;
+            if (m_Snapshot.PerFrameBytes == null) return;
 
             if (group == null)
             {
@@ -880,8 +884,6 @@ namespace GCAllocBreakdown.Editor
 
         void ClearGraphOverlay()
         {
-            if (m_GraphBarArea == null) return;
-
             int childOffset = 1; // skip guide line
             for (int i = childOffset; i < m_GraphBarArea.childCount; i++)
             {
@@ -1535,6 +1537,7 @@ namespace GCAllocBreakdown.Editor
             ApplyFilters();
             UpdateDataSummary();
             ShowNoDataState(m_ActiveGroups.Count == 0);
+            RebuildGraph();
             m_SaveBtn?.SetEnabled(m_Snapshot.HasData);
 
             // Status
@@ -1908,6 +1911,7 @@ namespace GCAllocBreakdown.Editor
             m_NoDataLabel.style.display = show ? DisplayStyle.Flex : DisplayStyle.None;
             m_MarkerSummaryRoot.style.display = show ? DisplayStyle.None : DisplayStyle.Flex;
             m_TopOffendersFoldout.style.display = show ? DisplayStyle.None : DisplayStyle.Flex;
+            m_GraphFoldout.style.display = show ? DisplayStyle.None : DisplayStyle.Flex;
         }
 
         void UpdateDataSummary()
