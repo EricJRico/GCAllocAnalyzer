@@ -1,0 +1,297 @@
+# GC Alloc Analyzer — Verified Task Plan
+
+## Gap Analysis Verification
+
+I reviewed every item in the gap analysis against the actual `GCAllocAnalyzerWindow.cs` (2,209 lines). Here's what I confirmed:
+
+### Confirmed Accurate
+- **No Save/Load** — toolbar (`BuildToolbar()` L214–270) only has Pull Data, Analyze, frame range fields, and Open Profiler. No serialization to disk.
+- **No compare columns** — `CallsiteGroup` (L2177–2192) has only `TotalBytes`, `Count`, `Percentage`, and display strings. No left/right/diff fields.
+- **Single-column Data Summary** — `UpdateDataSummary()` (L1264–1276) writes flat label text. No grid layout.
+- **No per-frame graph** — no bar chart, no `perFrameBytes` array. Nothing in the data model or UI.
+- **No per-frame stats on groups** — `BuildGrouping()` (L1028–1077) only computes `TotalBytes`, `Count`, `Percentage`, `FormattedAvg`. No median/min/max/mean per frame.
+- **No exclude filter** — `ApplyFilters()` (L1105–1139) only checks `m_NameFilter` for inclusion. No exclude field in the UI or filter logic.
+- **No column presets** — `BuildMarkerHeaders()` (L502–525) is hardcoded: Bytes, Count, Avg, %, Allocation Site.
+- **No right-click context menus** — no `ContextualMenuPopulateEvent` registered anywhere in the file.
+- **No CSV export** — no `StreamWriter`, no `SaveFilePanel`, no export logic.
+- **Marker Summary is basic** — `UpdateMarkerSummary()` (L1460–1505) shows Total, Count, Avg, % of total. No FirstFrame, no Top-N-by-frame, no min/max frame links.
+- **No inline proportional bars** — `MakeMarkerRow()` (L1205–1221) and `BindMarkerRow()` (L1223–1241) are text-only Labels.
+- **No copy-to-clipboard** — no reference to `EditorGUIUtility.systemCopyBuffer`.
+- **No thread summary section** — thread info only in filter dropdown and status bar.
+
+### One Minor Clarification
+- **2.5 (Total/Self)** — the gap analysis correctly marks this as Skip. The code groups by callstack key, and all GC.Alloc samples are inherently "self" allocations. No change needed. ✓
+- **2.7 (Remove Marker)** — the gap analysis says "Low-Med complexity." Looking at the code, this would require recalculating `m_AnalyzedTotalBytes` and all `Percentage` fields on every group. More like Medium, but still feasible.
+
+### Verdict: The gap analysis is accurate. No corrections needed.
+
+---
+
+## Task Plan — 12 Tasks, One at a Time
+
+Each task below is self-contained. I've listed what files/methods change, what's new, and a definition of done.
+
+---
+
+### Task 1: Extract `AnalysisSnapshot` (Refactor)
+
+**Goal:** Pull all analysis state out of the window class into a serializable data object so it can be saved/loaded and so Compare mode can hold two snapshots.
+
+**What changes:**
+- New class `AnalysisSnapshot` containing:
+  - `List<RawAllocation> RawAllocations`
+  - `List<string> SortedThreadNames`
+  - `long TotalBytes`, `int TotalCount`, `int FrameStart`, `int FrameEnd`, `bool HadCallStacks`
+  - `List<CallsiteGroup> GroupsByFullCallstack`, `List<CallsiteGroup> GroupsByTopFrame`
+- `RunAnalysis()` returns/populates an `AnalysisSnapshot` instead of writing to `m_RawAllocations`, `m_AnalyzedTotalBytes`, etc. directly
+- `BuildGrouping()` takes and populates an `AnalysisSnapshot`
+- All downstream methods (`ApplyFilters`, `UpdateDataSummary`, `BuildTopOffenders`, etc.) read from a "current snapshot" reference
+- Domain reload (`TryRestoreAfterReload`) works with the snapshot object
+
+**What doesn't change:** UI layout, visible behavior. This is a pure refactor.
+
+**Definition of done:** Tool works identically to before. All serialized fields that survive domain reload still do. The `AnalysisSnapshot` object can be constructed and passed around independently.
+
+---
+
+### Task 2: Save / Load Snapshot to Disk
+
+**Goal:** Users can save an analysis to a `.json` file and reload it later without needing the original profiler data.
+
+**What changes:**
+- `BuildToolbar()`: Add **Save** and **Load** buttons after the Analyze button
+- Save handler: `EditorJsonUtility.ToJson(snapshot)` → `EditorUtility.SaveFilePanel` → `File.WriteAllText`
+- Load handler: `EditorUtility.OpenFilePanel` → `File.ReadAllText` → `EditorJsonUtility.FromJson` → rebuild groupings from loaded snapshot → refresh UI
+- `AnalysisSnapshot` must be `[Serializable]` with all nested types also serializable (already the case for `RawAllocation` and `ResolvedFrame`; `CallsiteGroup` needs `[Serializable]`)
+
+**What doesn't change:** Analysis logic, filter logic, UI layout.
+
+**Definition of done:** User can Analyze → Save → close window → reopen → Load → see identical data. File is human-readable JSON.
+
+---
+
+### Task 3: Per-Frame Statistics on `CallsiteGroup`
+
+**Goal:** Compute Median, Mean, Min, Max bytes-per-frame for each callsite group, enabling richer display and future graph overlays.
+
+**What changes:**
+- New fields on `CallsiteGroup`:
+  ```csharp
+  public float MeanBytesPerFrame;
+  public long MedianBytesPerFrame;
+  public long MinBytesPerFrame;
+  public long MaxBytesPerFrame;
+  public int MinFrame;   // frame index of min
+  public int MaxFrame;   // frame index of max
+  public int FirstFrame; // first frame this site allocated
+  ```
+- New method `ComputePerFrameStats(CallsiteGroup group, int frameStart, int frameEnd)`:
+  - Build a `long[]` of per-frame totals (bucket allocations by `FrameIndex`)
+  - Sort the array, extract median, min, max, mean
+  - Record which frame indices hold min/max
+- Called from `BuildGrouping()` after all allocations are assigned to groups
+- Also build and store `long[] PerFrameBytes` on the snapshot (total bytes per frame across all groups) — this feeds Task 4
+
+**What doesn't change:** UI display (stats are computed but not yet shown in new columns — that comes in Tasks 4 and 6). Existing columns continue to work.
+
+**Definition of done:** After analysis, every `CallsiteGroup` has accurate per-frame statistics. `AnalysisSnapshot` has a `PerFrameBytes` array. Values can be inspected via debugger or logged.
+
+---
+
+### Task 4: Per-Frame Allocation Bar Graph
+
+**Goal:** A horizontal bar chart at the top of the left panel showing total GC bytes per frame, with spike visualization.
+
+**What changes:**
+- New UI section between the filters foldout and the marker list header
+- A custom `VisualElement` (or a container of thin vertical bars) drawn from `PerFrameBytes[]`
+- Bar height proportional to max allocation in the range
+- Color coding: bars above a threshold (e.g., 1 KB) in yellow/red
+- Click on a bar → select that frame in the Profiler (`SelectInCpuModule` with the frame index)
+- When a `CallsiteGroup` is selected in the marker list, overlay a second color showing that group's per-frame contribution
+- Reasonable height (~80–100px), collapsible via a foldout or toggle
+
+**What doesn't change:** Right panel, toolbar, filter logic.
+
+**Definition of done:** After analysis, a bar chart appears showing per-frame GC allocation. Spikes are visually obvious. Clicking a bar jumps to that frame. Selecting a marker shows its overlay.
+
+---
+
+### Task 5: Exclude Names Filter + Context Menus + CSV Export
+
+**Goal:** Three small-but-impactful features bundled because they're each low complexity.
+
+#### 5a: Exclude Names Filter
+**What changes:**
+- New `TextField m_ExcludeFilter` in the Filters foldout (second row, next to Name filter)
+- In `ApplyFilters()`, after the name inclusion check, add exclusion check:
+  ```csharp
+  if (excludeFilter.Length > 0 &&
+      g.DisplayName.IndexOf(excludeFilter, StringComparison.OrdinalIgnoreCase) >= 0)
+      continue;
+  ```
+
+#### 5b: Right-Click Context Menus
+**What changes:**
+- Register `ContextualMenuPopulateEvent` on marker list rows in `MakeMarkerRow()`
+- Menu items: "Copy Name", "Add to Name Filter", "Add to Exclude Filter", "Open Source File"
+- Register on call stack frame rows in `BuildCallStackDisplay()`: "Open Source File", "Copy Method Name"
+- Register on individual allocation rows in `MakeAllocRow()`: "Jump to Frame in Profiler", "Copy Details"
+
+#### 5c: CSV Export
+**What changes:**
+- New **Export ▾** button in `BuildToolbar()` that opens a `GenericMenu` with options:
+  - "Marker Table CSV" — exports all filtered groups with all computed statistics
+  - "Individual Allocations CSV" — every raw allocation
+- Uses `EditorUtility.SaveFilePanel` + `StreamWriter`
+
+**Definition of done:** Exclude filter hides matching sites. Right-click on marker rows/callstack frames/alloc rows shows appropriate context menus. CSV export produces valid, openable CSV files.
+
+---
+
+### Task 6: Marker Summary Enrichment
+
+**Goal:** Make the right-panel "Selected Allocation Site" section much richer, approaching Profile Analyzer's Marker Summary.
+
+**What changes to `UpdateMarkerSummary()`:**
+- Add **First Frame** display: `"First seen: frame {FirstFrame}"` (from Task 3 data)
+- Add **Min/Max Allocation** with clickable frame links:
+  - `"Min: {MinBytesPerFrame} (frame {MinFrame})"` — click jumps to Profiler
+  - `"Max: {MaxBytesPerFrame} (frame {MaxFrame})"` — click jumps to Profiler
+- Add **Top 3 Worst Frames** section: the 3 frames with highest bytes for this site, clickable
+- Add **Per-Frame Stats** display: `"Median/Frame: X | Mean/Frame: Y | Range: Z"`
+- Optionally: a simple inline distribution visualization (a row of small colored boxes representing quartile ranges)
+
+**What doesn't change:** Call stack display, individual allocations list (those stay as-is).
+
+**Definition of done:** Selecting a marker shows First Frame, Min/Max with clickable frame links, Top 3 worst frames, and per-frame statistics in the right panel.
+
+---
+
+### Task 7: Mode Tabs — Single / Compare
+
+**Goal:** Add a tab bar at the top of the window to switch between Single and Compare modes.
+
+**What changes:**
+- New enum `AnalysisMode { Single, Compare }`
+- Tab bar UI at the very top of `CreateGUI()` (above toolbar): two tabs, styled like Profile Analyzer
+- `m_CurrentMode` field, serialized to survive reload
+- When switching modes, show/hide mode-specific UI sections (toolbar rows, left panel columns, right panel layout)
+- Compare mode UI is initially empty/placeholder — subsequent tasks fill it in
+
+**What doesn't change:** All Single mode functionality remains identical. Compare mode is a shell.
+
+**Definition of done:** Two tabs appear. Clicking "Single" shows the current tool. Clicking "Compare" shows a placeholder. Mode survives domain reload.
+
+---
+
+### Task 8: Compare Data Model
+
+**Goal:** The data structures for holding two snapshots and computing deltas between matched groups.
+
+**What changes:**
+- New class `ComparedGroup`:
+  ```csharp
+  class ComparedGroup
+  {
+      public CallsiteGroup Left;   // null if only in Right
+      public CallsiteGroup Right;  // null if only in Left
+      public long DeltaBytes;
+      public int DeltaCount;
+      public float DeltaPercent;   // DeltaBytes / Left.TotalBytes * 100
+  }
+  ```
+- New fields on the window: `AnalysisSnapshot m_LeftSnapshot`, `AnalysisSnapshot m_RightSnapshot`
+- New method `BuildComparison()` that matches groups by `Key` across Left and Right snapshots, produces `List<ComparedGroup>`
+- Matching strategy: exact key match (same callsite). Unmatched groups appear as left-only or right-only.
+
+**What doesn't change:** Single mode. UI (this is data-only).
+
+**Definition of done:** Given two snapshots, `BuildComparison()` produces a correct list of `ComparedGroup` objects with accurate deltas. Unit-testable logic.
+
+---
+
+### Task 9: Compare Toolbar (Dual Pull/Load/Save Rows)
+
+**Goal:** In Compare mode, the toolbar shows two independent rows — one for Left, one for Right — each with Pull Data, Load, Save, frame range.
+
+**What changes:**
+- `BuildToolbar()` becomes mode-aware: calls `BuildSingleToolbar()` or `BuildCompareToolbar()` based on `m_CurrentMode`
+- `BuildCompareToolbar()` creates two rows:
+  - Row 1 (Left): `[Pull Data] [Load] [Save] | Frames: [start]–[end] | (N frames)`
+  - Row 2 (Right): same layout, independent fields
+- Each Pull/Analyze triggers analysis into the respective snapshot (`m_LeftSnapshot` or `m_RightSnapshot`)
+- After both snapshots are populated, auto-run `BuildComparison()` and refresh
+
+**Definition of done:** In Compare mode, two toolbar rows appear. Each can independently pull/load data. Status bar reflects which snapshots are populated.
+
+---
+
+### Task 10: Compare Left Panel (Paired Marker List with Delta Columns)
+
+**Goal:** The marker list in Compare mode shows Left Bytes, Right Bytes, Δ Bytes, Δ%, Left Count, Right Count, Δ Count with colored bars.
+
+**What changes:**
+- New `BuildCompareMarkerHeaders()` with columns: Name, Left Bytes, Right Bytes, Δ Bytes, |Δ Bytes|, Δ%, Left Count, Right Count, Δ Count
+- New `MakeCompareMarkerRow()` / `BindCompareMarkerRow()` that renders `ComparedGroup` items
+- Inline colored bars: blue bar for Left, orange bar for Right, proportional to max in list
+- Sorting on any delta column
+- Color coding: green for improvements (negative Δ), red for regressions (positive Δ)
+- Filter applies to both Left and Right display names
+
+**Definition of done:** Compare mode marker list shows all paired groups with delta columns, visual bars, and color coding. Sorting works on all columns.
+
+---
+
+### Task 11: Compare Right Panel (L/R/Diff Summary + Regressions/Improvements)
+
+**Goal:** The right panel in Compare mode shows a three-column data summary grid and Top Regressions / Top Improvements lists.
+
+**What changes:**
+- `UpdateDataSummary()` becomes mode-aware
+- Compare summary uses a table grid:
+  ```
+                      Left         Right        Diff
+  Frame Count:        1000         585          -415
+  Total GC:           48.2 KB      31.7 KB      -16.5 KB  (-34.2%)
+  Total Allocs:       2,340        1,891        -449      (-19.2%)
+  Unique Sites:       156          142          -14
+  ```
+- New **Top Regressions** foldout: top 10 `ComparedGroup` by positive `DeltaBytes`
+- New **Top Improvements** foldout: top 10 by negative `DeltaBytes`
+- Selecting a `ComparedGroup` shows side-by-side marker detail (Left stats / Right stats / Diff)
+
+**Definition of done:** Compare mode right panel shows L/R/Diff grid, regressions, improvements. Selecting a compared marker shows side-by-side detail.
+
+---
+
+### Task 12: Polish (Bars, Copy, Graph Interaction, Thread Summary)
+
+**Goal:** Final polish pass bringing in the remaining P3 items.
+
+**What changes:**
+- **3.1 Inline proportional bars** in Single mode marker list (colored `VisualElement` behind text, width ∝ value / max)
+- **3.7 Copy to Clipboard** — "Copy Summary" button in Marker Summary → `EditorGUIUtility.systemCopyBuffer`
+- **3.4 Graph interactive selection** — click-drag on the per-frame graph to select a sub-range, updates frame fields and re-filters
+- **3.5 Graph context menu** — right-click: "Select Frame with Most GC", "Select Frame with Least GC", "Show Budget Line"
+- **3.3 Thread Summary** — new foldout in right panel showing per-thread allocation totals and counts
+
+**Definition of done:** Visual bars in marker list. Copy button works. Graph supports drag-select and context menu. Thread summary section shows per-thread breakdown.
+
+---
+
+## Recommended Execution Order
+
+```
+Task 1  → Task 2  → Task 3  → Task 4  → Task 5  → Task 6
+  (refactor)  (save/load) (stats)   (graph)   (filter+   (marker
+                                               menus+csv)  summary)
+
+Task 7  → Task 8  → Task 9  → Task 10 → Task 11 → Task 12
+  (tabs)    (compare   (compare   (compare   (compare   (polish)
+             model)     toolbar)   left)      right)
+```
+
+Tasks 1–6 strengthen Single mode. Tasks 7–11 build Compare mode on that foundation. Task 12 is a polish pass across both modes.
+
+**Start with Task 1** — it's a pure refactor with no UI changes, making it safe and foundational for everything that follows.
