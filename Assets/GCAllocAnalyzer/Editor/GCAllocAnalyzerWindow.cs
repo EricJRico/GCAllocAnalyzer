@@ -2435,6 +2435,65 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append("    "); m_SharedSB.Append(group.FormattedPct); m_SharedSB.Append(" of total");
             m_MarkerStatsLabel.text = m_SharedSB.ToString();
 
+            // Per-frame statistics
+            bool hasPerFrame = group.MaxBytesPerFrame > 0;
+            m_PerFrameStatsContainer.style.display = hasPerFrame ? DisplayStyle.Flex : DisplayStyle.None;
+            if (hasPerFrame)
+            {
+                m_SharedSB.Clear();
+                m_SharedSB.Append("First seen: frame ");
+                m_SharedSB.Append(group.FirstFrame.ToString());
+                m_FirstFrameLabel.text = m_SharedSB.ToString();
+
+                m_SharedSB.Clear();
+                m_SharedSB.Append("Median/Frame: ");
+                m_SharedSB.Append(group.FormattedMedian);
+                m_SharedSB.Append("    Mean/Frame: ");
+                m_SharedSB.Append(group.FormattedMean);
+                m_MedianMeanLabel.text = m_SharedSB.ToString();
+
+                m_SharedSB.Clear();
+                m_SharedSB.Append("Min: ");
+                m_SharedSB.Append(group.FormattedMin);
+                m_SharedSB.Append(" (frame ");
+                m_SharedSB.Append(group.MinFrame.ToString());
+                m_SharedSB.Append(")");
+                m_MinFrameLabel.text = m_SharedSB.ToString();
+                m_MinFrameLabel.userData = group.MinFrame;
+                m_MinFrameLabel.tooltip = "Click to jump to this frame in the Profiler";
+
+                m_SharedSB.Clear();
+                m_SharedSB.Append("Max: ");
+                m_SharedSB.Append(group.FormattedMax);
+                m_SharedSB.Append(" (frame ");
+                m_SharedSB.Append(group.MaxFrame.ToString());
+                m_SharedSB.Append(")");
+                m_MaxFrameLabel.text = m_SharedSB.ToString();
+                m_MaxFrameLabel.userData = group.MaxFrame;
+                m_MaxFrameLabel.tooltip = "Click to jump to this frame in the Profiler";
+            }
+
+            // Top worst frames
+            bool hasTopWorst = group.FormattedTopWorst != null && group.FormattedTopWorst.Length > 0;
+            m_TopWorstContainer.style.display = hasTopWorst ? DisplayStyle.Flex : DisplayStyle.None;
+            if (hasTopWorst)
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    if (i < group.FormattedTopWorst.Length)
+                    {
+                        m_TopWorstLabels[i].text = string.Concat((i + 1).ToString(), ". ", group.FormattedTopWorst[i]);
+                        m_TopWorstLabels[i].userData = group.TopWorstFrameIndices[i];
+                        m_TopWorstLabels[i].tooltip = "Click to jump to this frame in the Profiler";
+                        m_TopWorstLabels[i].style.display = DisplayStyle.Flex;
+                    }
+                    else
+                    {
+                        m_TopWorstLabels[i].style.display = DisplayStyle.None;
+                    }
+                }
+            }
+
             // Call stack
             BuildCallStackDisplay(group);
 
@@ -2570,6 +2629,8 @@ namespace GCAllocBreakdown.Editor
             m_MarkerNameLabel.text = "—";
             m_MarkerSourceLabel.text = "";
             m_MarkerStatsLabel.text = "";
+            m_PerFrameStatsContainer.style.display = DisplayStyle.None;
+            m_TopWorstContainer.style.display = DisplayStyle.None;
             m_CallStackContainer.Clear();
             m_SelectedAllocations = new List<RawAllocation>(0);
             m_AllocListView.itemsSource = m_SelectedAllocations;
