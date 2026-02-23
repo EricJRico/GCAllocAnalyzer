@@ -63,6 +63,7 @@ namespace GCAllocBreakdown.Editor
         Label m_StatusLabel;
         Button m_SaveBtn;
         Button m_LoadBtn;
+        Button m_ExportBtn;
         Label m_LoadedSnapshotLabel;
 
         // Per-frame graph
@@ -234,6 +235,7 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append(m_Snapshot.FrameEnd);
             m_StatusLabel.text = m_SharedSB.ToString();
             m_SaveBtn?.SetEnabled(true);
+            m_ExportBtn?.SetEnabled(true);
         }
 
         // ═══════════════════════════════════════════════════
@@ -267,8 +269,12 @@ namespace GCAllocBreakdown.Editor
             m_SaveBtn.SetEnabled(false);
             bar.Add(m_SaveBtn);
 
-            m_LoadBtn = new Button(OnLoadSnapshot) { text = "Load", style = { marginRight = 12 } };
+            m_LoadBtn = new Button(OnLoadSnapshot) { text = "Load", style = { marginRight = 2 } };
             bar.Add(m_LoadBtn);
+
+            m_ExportBtn = new Button(ShowExportMenu) { text = "Export \u25be", style = { marginRight = 12 } };
+            m_ExportBtn.SetEnabled(false);
+            bar.Add(m_ExportBtn);
 
             bar.Add(MakeSeparator());
 
@@ -415,6 +421,7 @@ namespace GCAllocBreakdown.Editor
             UpdateFrameRangeInfo();
 
             m_SaveBtn.SetEnabled(true);
+            m_ExportBtn.SetEnabled(true);
 
             if (m_FilteredGroups.Count > 0)
                 m_MarkerListView.selectedIndex = 0;
@@ -1043,6 +1050,115 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
+        //  CSV EXPORT
+        // ═══════════════════════════════════════════════════
+
+        void ShowExportMenu()
+        {
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent("Marker Table CSV"), false, ExportMarkerTableCSV);
+            menu.AddItem(new GUIContent("Individual Allocations CSV"), false, ExportAllocationsCSV);
+            menu.ShowAsContext();
+        }
+
+        void ExportMarkerTableCSV()
+        {
+            string path = EditorUtility.SaveFilePanel(
+                "Export Marker Table CSV", "", "marker-table.csv", "csv");
+            if (string.IsNullOrEmpty(path)) return;
+
+            try
+            {
+                using (var writer = new StreamWriter(path, false, Encoding.UTF8))
+                {
+                    writer.WriteLine("Name,Bytes,Count,Avg,Percentage,Median/Frame,Mean/Frame,Min/Frame,Max/Frame,MinFrame,MaxFrame,FirstFrame");
+
+                    for (int i = 0; i < m_FilteredGroups.Count; i++)
+                    {
+                        var g = m_FilteredGroups[i];
+                        writer.Write(EscapeCsvField(g.DisplayName));
+                        writer.Write(','); writer.Write(g.TotalBytes);
+                        writer.Write(','); writer.Write(g.Count);
+                        writer.Write(','); writer.Write(g.TotalBytes / Math.Max(1, g.Count));
+                        writer.Write(','); writer.Write(g.Percentage.ToString("F2"));
+                        writer.Write(','); writer.Write(g.MedianBytesPerFrame);
+                        writer.Write(','); writer.Write(g.MeanBytesPerFrame.ToString("F1"));
+                        writer.Write(','); writer.Write(g.MinBytesPerFrame);
+                        writer.Write(','); writer.Write(g.MaxBytesPerFrame);
+                        writer.Write(','); writer.Write(g.MinFrame);
+                        writer.Write(','); writer.Write(g.MaxFrame);
+                        writer.Write(','); writer.Write(g.FirstFrame);
+                        writer.WriteLine();
+                    }
+                }
+
+                Debug.Log(string.Concat("[GC Alloc Analyzer] Exported ", m_FilteredGroups.Count.ToString(),
+                    " markers to ", path));
+            }
+            catch (Exception e)
+            {
+                Debug.LogError(string.Concat("[GC Alloc Analyzer] CSV export failed: ", e.Message));
+            }
+        }
+
+        static string EscapeCsvField(string field)
+        {
+            if (field == null) return "";
+            if (field.IndexOf(',') < 0 && field.IndexOf('"') < 0 &&
+                field.IndexOf('\n') < 0 && field.IndexOf('\r') < 0)
+                return field;
+            return string.Concat("\"", field.Replace("\"", "\"\""), "\"");
+        }
+
+        void ExportAllocationsCSV()
+        {
+            string path = EditorUtility.SaveFilePanel(
+                "Export Individual Allocations CSV", "", "allocations.csv", "csv");
+            if (string.IsNullOrEmpty(path)) return;
+
+            try
+            {
+                var allocs = m_Snapshot.RawAllocations;
+                using (var writer = new StreamWriter(path, false, Encoding.UTF8))
+                {
+                    writer.WriteLine("Bytes,Frame,Thread,ParentMethod,HierarchyPath,CallStack");
+
+                    var sb = new StringBuilder(256);
+                    for (int i = 0; i < allocs.Count; i++)
+                    {
+                        var a = allocs[i];
+                        writer.Write(a.Bytes);
+                        writer.Write(','); writer.Write(a.FrameIndex);
+                        writer.Write(','); writer.Write(EscapeCsvField(a.ThreadDisplayName));
+                        writer.Write(','); writer.Write(EscapeCsvField(a.ParentMethod));
+                        writer.Write(','); writer.Write(EscapeCsvField(a.HierarchyPath));
+                        writer.Write(',');
+
+                        if (a.ResolvedCallStack != null && a.ResolvedCallStack.Count > 0)
+                        {
+                            sb.Clear();
+                            for (int f = 0; f < a.ResolvedCallStack.Count; f++)
+                            {
+                                if (f > 0) sb.Append(" > ");
+                                sb.Append(a.ResolvedCallStack[f].RawMethodName);
+                            }
+                            writer.Write(EscapeCsvField(sb.ToString()));
+                        }
+
+                        writer.WriteLine();
+                    }
+                }
+
+                Debug.Log(string.Concat("[GC Alloc Analyzer] Exported ", allocs.Count.ToString(),
+                    " allocations to ", path));
+            }
+            catch (Exception e)
+            {
+                Debug.LogError(string.Concat("[GC Alloc Analyzer] CSV export failed: ", e.Message));
+            }
+        }
+
+        // ═══════════════════════════════════════════════════
         //  SORTABLE COLUMN HEADERS — userData, no closures
         // ═══════════════════════════════════════════════════
 
@@ -1550,6 +1666,7 @@ namespace GCAllocBreakdown.Editor
             ShowNoDataState(m_ActiveGroups.Count == 0);
             RebuildGraph();
             m_SaveBtn?.SetEnabled(m_Snapshot.HasData);
+            m_ExportBtn?.SetEnabled(m_Snapshot.HasData);
 
             // Status
             m_SharedSB.Clear();
