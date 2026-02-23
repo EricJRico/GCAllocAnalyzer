@@ -497,6 +497,7 @@ namespace GCAllocBreakdown.Editor
             m_FiltersFoldout.Add(filterRow2);
 
             left.Add(m_FiltersFoldout);
+            left.Add(BuildPerFrameGraph());
 
             // Column headers
             m_MarkerHeaderRow = BuildMarkerHeaders();
@@ -518,6 +519,116 @@ namespace GCAllocBreakdown.Editor
             left.Add(m_MarkerListView);
 
             return left;
+        }
+
+        VisualElement BuildPerFrameGraph()
+        {
+            m_GraphFoldout = MakeSectionFoldout("Per-Frame Graph");
+            m_GraphFoldout.style.marginLeft = 4;
+            m_GraphFoldout.style.marginRight = 4;
+            m_GraphFoldout.style.marginTop = 0;
+            m_GraphFoldout.style.display = DisplayStyle.None; // hidden until data
+
+            m_GraphRoot = new VisualElement
+            {
+                style =
+                {
+                    flexDirection = FlexDirection.Row,
+                    height = GRAPH_HEIGHT + GRAPH_X_AXIS_HEIGHT
+                }
+            };
+
+            // Y-axis labels (left column)
+            var yAxis = new VisualElement
+            {
+                style =
+                {
+                    width = GRAPH_Y_AXIS_WIDTH,
+                    justifyContent = Justify.SpaceBetween,
+                    alignItems = Align.FlexEnd,
+                    paddingRight = 4,
+                    height = GRAPH_HEIGHT
+                }
+            };
+            m_GraphYMax = new Label("—") { style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight } };
+            m_GraphYMid = new Label("—") { style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight } };
+            var yZero = new Label("0") { style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight } };
+            yAxis.Add(m_GraphYMax);
+            yAxis.Add(m_GraphYMid);
+            yAxis.Add(yZero);
+            m_GraphRoot.Add(yAxis);
+
+            // Chart area (right side, fills remaining width)
+            var chartColumn = new VisualElement { style = { flexGrow = 1, flexShrink = 1 } };
+
+            // Bar area — dark background, bars anchored to bottom
+            m_GraphBarArea = new VisualElement
+            {
+                style =
+                {
+                    flexGrow = 0,
+                    height = GRAPH_HEIGHT,
+                    backgroundColor = k_GraphBg,
+                    flexDirection = FlexDirection.Row,
+                    alignItems = Align.FlexEnd,
+                    overflow = Overflow.Hidden,
+                    borderBottomWidth = 1,
+                    borderBottomColor = k_GraphGuideLine
+                }
+            };
+            m_GraphBarArea.RegisterCallback<GeometryChangedEvent>(OnGraphGeometryChanged);
+            chartColumn.Add(m_GraphBarArea);
+
+            // X-axis labels row
+            var xAxis = new VisualElement
+            {
+                style =
+                {
+                    flexDirection = FlexDirection.Row,
+                    justifyContent = Justify.SpaceBetween,
+                    height = GRAPH_X_AXIS_HEIGHT
+                }
+            };
+            m_GraphXStart = new Label("—") { style = { fontSize = 10, color = k_DimGray } };
+            m_GraphXEnd = new Label("—") { style = { fontSize = 10, color = k_DimGray } };
+            xAxis.Add(m_GraphXStart);
+            xAxis.Add(m_GraphXEnd);
+            chartColumn.Add(xAxis);
+
+            m_GraphRoot.Add(chartColumn);
+
+            // Overlay label (selected marker name) — positioned at bottom-right of bar area
+            m_GraphOverlayLabel = new Label("")
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    bottom = GRAPH_X_AXIS_HEIGHT + 2,
+                    right = 4,
+                    fontSize = 10,
+                    color = k_GraphOverlay,
+                    unityTextAlign = TextAnchor.LowerRight
+                }
+            };
+            m_GraphRoot.Add(m_GraphOverlayLabel);
+
+            m_GraphFoldout.Add(m_GraphRoot);
+            return m_GraphFoldout;
+        }
+
+        void OnGraphGeometryChanged(GeometryChangedEvent evt)
+        {
+            if (!m_Snapshot.HasData || m_Snapshot.PerFrameBytes == null) return;
+            // Only rebuild if width actually changed meaningfully (>2px)
+            float oldW = evt.oldRect.width;
+            float newW = evt.newRect.width;
+            if (Mathf.Abs(newW - oldW) < 2f) return;
+            RebuildGraph();
+        }
+
+        void RebuildGraph()
+        {
+            // TODO: Task 3 will implement this
         }
 
         // Non-capturing filter callbacks
