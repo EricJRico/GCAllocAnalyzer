@@ -44,7 +44,7 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_GraphBg = new(0.1f, 0.1f, 0.1f);
         static readonly Color k_GraphGuideLine = new(0.2f, 0.2f, 0.2f);
         static readonly Color k_GraphBarNormal = new(0.27f, 0.67f, 0.6f);    // teal
-        static readonly Color k_GraphBarElevated = new(1f, 0.8f, 0.2f);      // yellow
+        static readonly Color k_GraphBarElevated = new(1f, 0.6f, 0.15f);     // orange
         static readonly Color k_GraphBarSpike = new(1f, 0.27f, 0.27f);       // red
         static readonly Color k_GraphOverlay = new(1f, 1f, 1f, 0.85f);       // bright white
 
@@ -650,13 +650,11 @@ namespace GCAllocBreakdown.Editor
             if (areaWidth < 1f) areaWidth = 400f; // fallback before first layout
 
             // Bucketing: cap bar count at pixel width
-            m_GraphBucketCount = frameCount;
             m_GraphFramesPerBucket = 1;
             if (frameCount > (int)areaWidth)
-            {
-                m_GraphBucketCount = Mathf.Max(1, (int)areaWidth);
-                m_GraphFramesPerBucket = Mathf.CeilToInt((float)frameCount / m_GraphBucketCount);
-            }
+                m_GraphFramesPerBucket = Mathf.CeilToInt((float)frameCount / Mathf.Max(1f, areaWidth));
+            // Derive bucket count from framesPerBucket so no trailing empty buckets
+            m_GraphBucketCount = Mathf.CeilToInt((float)frameCount / m_GraphFramesPerBucket);
 
             // Ensure bucket buffer
             if (m_GraphBuckets == null || m_GraphBuckets.Length < m_GraphBucketCount)
