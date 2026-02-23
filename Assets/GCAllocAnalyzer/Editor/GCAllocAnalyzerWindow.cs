@@ -29,6 +29,10 @@ namespace GCAllocBreakdown.Editor
         const string k_MainThread = "Main Thread";
         const string k_RenderThread = "Render Thread";
 
+        const float GRAPH_HEIGHT = 120;
+        const float GRAPH_Y_AXIS_WIDTH = 52;
+        const float GRAPH_X_AXIS_HEIGHT = 16;
+
         static readonly Color k_Red = new(1f, 0.3f, 0.3f);
         static readonly Color k_Yellow = new(1f, 0.85f, 0.2f);
         static readonly Color k_DimGray = new(0.7f, 0.7f, 0.7f);
@@ -37,6 +41,12 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_LinkBlue = new(0.4f, 0.7f, 1f);
         static readonly Color k_SubtleText = new(0.5f, 0.5f, 0.5f);
         static readonly Color k_HoverBg = new(0.3f, 0.3f, 0.3f);
+        static readonly Color k_GraphBg = new(0.1f, 0.1f, 0.1f);
+        static readonly Color k_GraphGuideLine = new(0.2f, 0.2f, 0.2f);
+        static readonly Color k_GraphBarNormal = new(0.27f, 0.67f, 0.6f);    // teal
+        static readonly Color k_GraphBarElevated = new(1f, 0.8f, 0.2f);      // yellow
+        static readonly Color k_GraphBarSpike = new(1f, 0.27f, 0.27f);       // red
+        static readonly Color k_GraphOverlay = new(0.67f, 0.87f, 0.8f);      // light cyan
 
         // ═══════════════════════════════════════════════════
         //  UI FIELDS
@@ -54,6 +64,14 @@ namespace GCAllocBreakdown.Editor
         Label m_StatusLabel;
         Button m_SaveBtn;
         Button m_LoadBtn;
+
+        // Per-frame graph
+        Foldout m_GraphFoldout;
+        VisualElement m_GraphRoot;          // holds Y-axis + chart area side-by-side
+        VisualElement m_GraphBarArea;       // dark background, bars live here
+        Label m_GraphYMax, m_GraphYMid;
+        Label m_GraphXStart, m_GraphXEnd;
+        Label m_GraphOverlayLabel;          // selected marker name, bottom-right of chart
 
         // Right panel
         Label m_FrameCountLabel, m_FrameRangeLabel, m_TotalGcLabel;
@@ -116,6 +134,12 @@ namespace GCAllocBreakdown.Editor
         // Grouping work buffers
         readonly Dictionary<string, CallsiteGroup> m_GroupingDict = new(256);
         long[] m_PerFrameBuffer;
+
+        // Graph bucketing buffers
+        long[] m_GraphBuckets;
+        long[] m_GraphOverlayBuckets;
+        int m_GraphBucketCount;
+        int m_GraphFramesPerBucket;
 
         // Filter state cache (to detect actual changes)
         string m_LastNameFilter = "";
