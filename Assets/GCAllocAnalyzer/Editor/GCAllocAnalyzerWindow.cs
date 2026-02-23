@@ -2340,7 +2340,7 @@ namespace GCAllocBreakdown.Editor
         //  ALLOC LIST — VIRTUALIZED, pre-computed strings
         // ═══════════════════════════════════════════════════
 
-        static VisualElement MakeAllocRow()
+        VisualElement MakeAllocRow()
         {
             var row = new VisualElement
             {
@@ -2352,6 +2352,7 @@ namespace GCAllocBreakdown.Editor
             row.Add(new Label { name = "frame", style = { width = ALLOC_COL_FRAME, fontSize = 11 } });
             row.Add(new Label { name = "thread", style = { flexGrow = 1, fontSize = 11,
                 overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } });
+            row.AddManipulator(new ContextualMenuManipulator(OnAllocRowContextMenu));
             return row;
         }
 
@@ -2359,6 +2360,7 @@ namespace GCAllocBreakdown.Editor
         {
             if (index < 0 || index >= m_SelectedAllocations.Count) return;
             var a = m_SelectedAllocations[index];
+            el.userData = a;
 
             // index+1 display — avoid ToString in hot path by pre-checking
             // (ListView only binds visible rows so this is acceptable)
@@ -2367,6 +2369,28 @@ namespace GCAllocBreakdown.Editor
             el.Q<Label>("frame").text = a.FormattedFrame;
             el.Q<Label>("thread").text = a.ThreadDisplayName;
             el.tooltip = a.HierarchyPath;
+        }
+
+        void OnAllocRowContextMenu(ContextualMenuPopulateEvent evt)
+        {
+            var alloc = (evt.currentTarget as VisualElement)?.userData as RawAllocation;
+            if (alloc == null) return;
+
+            evt.menu.AppendAction("Jump to Frame in Profiler", _ =>
+            {
+                if (!m_IsLoadedSnapshot) SelectInCpuModule(alloc);
+            },
+            m_IsLoadedSnapshot ? DropdownMenuAction.Status.Disabled : DropdownMenuAction.Status.Normal);
+
+            var sb = new StringBuilder(128);
+            sb.Append(alloc.FormattedBytes);
+            sb.Append(" | Frame "); sb.Append(alloc.FormattedFrame);
+            sb.Append(" | "); sb.Append(alloc.ThreadDisplayName);
+            sb.Append(" | "); sb.Append(alloc.HierarchyPath);
+            string details = sb.ToString();
+
+            evt.menu.AppendAction("Copy Details", _ =>
+                EditorGUIUtility.systemCopyBuffer = details);
         }
 
         void OnAllocSelectionChanged(IEnumerable<object> selection)
