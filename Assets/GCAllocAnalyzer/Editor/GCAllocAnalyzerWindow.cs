@@ -46,7 +46,7 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_GraphBarNormal = new(0.27f, 0.67f, 0.6f);    // teal
         static readonly Color k_GraphBarElevated = new(1f, 0.8f, 0.2f);      // yellow
         static readonly Color k_GraphBarSpike = new(1f, 0.27f, 0.27f);       // red
-        static readonly Color k_GraphOverlay = new(0.67f, 0.87f, 0.8f);      // light cyan
+        static readonly Color k_GraphOverlay = new(1f, 1f, 1f, 0.85f);       // bright white
 
         // ═══════════════════════════════════════════════════
         //  UI FIELDS
@@ -595,28 +595,30 @@ namespace GCAllocBreakdown.Editor
                     height = GRAPH_X_AXIS_HEIGHT
                 }
             };
-            m_GraphXStart = new Label("—") { style = { fontSize = 10, color = k_DimGray } };
-            m_GraphXEnd = new Label("—") { style = { fontSize = 10, color = k_DimGray } };
-            xAxis.Add(m_GraphXStart);
-            xAxis.Add(m_GraphXEnd);
-            chartColumn.Add(xAxis);
-
-            m_GraphRoot.Add(chartColumn);
-
-            // Overlay label (selected marker name) — positioned at bottom-right of bar area
+            m_GraphXStart = new Label("—") { style = { fontSize = 10, color = k_DimGray, flexShrink = 0 } };
             m_GraphOverlayLabel = new Label("")
             {
                 style =
                 {
-                    position = Position.Absolute,
-                    bottom = GRAPH_X_AXIS_HEIGHT + 2,
-                    right = 4,
+                    flexGrow = 1,
+                    flexShrink = 1,
                     fontSize = 10,
-                    color = k_GraphOverlay,
-                    unityTextAlign = TextAnchor.LowerRight
+                    color = k_DimGray,
+                    unityTextAlign = TextAnchor.MiddleCenter,
+                    overflow = Overflow.Hidden,
+                    textOverflow = TextOverflow.Ellipsis,
+                    whiteSpace = WhiteSpace.NoWrap,
+                    marginLeft = 8,
+                    marginRight = 8
                 }
             };
-            m_GraphRoot.Add(m_GraphOverlayLabel);
+            m_GraphXEnd = new Label("—") { style = { fontSize = 10, color = k_DimGray, flexShrink = 0 } };
+            xAxis.Add(m_GraphXStart);
+            xAxis.Add(m_GraphOverlayLabel);
+            xAxis.Add(m_GraphXEnd);
+            chartColumn.Add(xAxis);
+
+            m_GraphRoot.Add(chartColumn);
 
             m_GraphFoldout.Add(m_GraphRoot);
             return m_GraphFoldout;
@@ -773,8 +775,13 @@ namespace GCAllocBreakdown.Editor
                 m_GraphBarArea.Add(bar);
             }
 
-            // Clear overlay since selection may no longer be valid
-            m_GraphOverlayLabel.text = "";
+            // Re-apply overlay for currently selected marker (if any)
+            if (m_MarkerListView != null &&
+                m_MarkerListView.selectedIndex >= 0 &&
+                m_MarkerListView.selectedIndex < m_FilteredGroups.Count)
+                UpdateGraphOverlay(m_FilteredGroups[m_MarkerListView.selectedIndex]);
+            else
+                m_GraphOverlayLabel.text = "";
         }
 
         void OnGraphBarClicked(ClickEvent evt)
