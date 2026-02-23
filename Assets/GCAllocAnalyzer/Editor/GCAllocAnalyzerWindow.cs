@@ -2482,7 +2482,11 @@ namespace GCAllocBreakdown.Editor
                 {
                     if (i < group.FormattedTopWorst.Length)
                     {
-                        m_TopWorstLabels[i].text = string.Concat((i + 1).ToString(), ". ", group.FormattedTopWorst[i]);
+                        m_SharedSB.Clear();
+                        m_SharedSB.Append((i + 1).ToString());
+                        m_SharedSB.Append(". ");
+                        m_SharedSB.Append(group.FormattedTopWorst[i]);
+                        m_TopWorstLabels[i].text = m_SharedSB.ToString();
                         m_TopWorstLabels[i].userData = group.TopWorstFrameIndices[i];
                         m_TopWorstLabels[i].tooltip = "Click to jump to this frame in the Profiler";
                         m_TopWorstLabels[i].style.display = DisplayStyle.Flex;
