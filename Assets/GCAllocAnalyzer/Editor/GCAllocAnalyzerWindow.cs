@@ -55,6 +55,7 @@ namespace GCAllocBreakdown.Editor
         Label m_FrameRangeInfo;
         Foldout m_FiltersFoldout;
         TextField m_NameFilter;
+        TextField m_ExcludeFilter;
         Button m_ThreadFilterBtn;
         Toggle m_GroupByCallsite;
         ListView m_MarkerListView;
@@ -145,6 +146,7 @@ namespace GCAllocBreakdown.Editor
 
         // Filter state cache (to detect actual changes)
         string m_LastNameFilter = "";
+        string m_LastExcludeFilter = "";
         int m_LastSelectedThreadCount = -1;
 
         // ═══════════════════════════════════════════════════
@@ -475,6 +477,13 @@ namespace GCAllocBreakdown.Editor
             };
             m_NameFilter.RegisterValueChangedCallback(OnNameFilterChanged);
             filterRow1.Add(m_NameFilter);
+
+            m_ExcludeFilter = new TextField("Exclude:")
+            {
+                style = { minWidth = 150, flexGrow = 1, marginRight = 12 }
+            };
+            m_ExcludeFilter.RegisterValueChangedCallback(OnExcludeFilterChanged);
+            filterRow1.Add(m_ExcludeFilter);
 
             var threadGroup = new VisualElement
             {
@@ -894,6 +903,7 @@ namespace GCAllocBreakdown.Editor
 
         // Non-capturing filter callbacks
         void OnNameFilterChanged(ChangeEvent<string> evt) => ApplyFilters();
+        void OnExcludeFilterChanged(ChangeEvent<string> evt) => ApplyFilters();
         void OnGroupByChanged(ChangeEvent<bool> evt) => SwapGroupingAndRefresh();
 
         void OnShowAssemblyChanged(ChangeEvent<bool> evt)
@@ -1759,6 +1769,7 @@ namespace GCAllocBreakdown.Editor
             if (m_ActiveGroups == null) return;
 
             string nameFilter = m_NameFilter != null ? m_NameFilter.value : "";
+            string excludeFilter = m_ExcludeFilter != null ? m_ExcludeFilter.value : "";
             bool allThreads = m_SelectedThreads.Count == 0;
 
             m_FilteredGroups.Clear();
@@ -1769,6 +1780,11 @@ namespace GCAllocBreakdown.Editor
                 // Name filter
                 if (nameFilter.Length > 0 &&
                     g.DisplayName.IndexOf(nameFilter, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+
+                // Exclude filter
+                if (excludeFilter.Length > 0 &&
+                    g.DisplayName.IndexOf(excludeFilter, StringComparison.OrdinalIgnoreCase) >= 0)
                     continue;
 
                 // Thread filter
