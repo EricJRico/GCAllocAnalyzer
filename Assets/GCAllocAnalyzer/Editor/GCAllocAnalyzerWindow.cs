@@ -628,7 +628,181 @@ namespace GCAllocBreakdown.Editor
 
         void RebuildGraph()
         {
-            // TODO: Task 3 will implement this
+            if (m_GraphBarArea == null) return;
+
+            var perFrame = m_Snapshot.PerFrameBytes;
+            if (perFrame == null || perFrame.Length == 0)
+            {
+                m_GraphFoldout.style.display = DisplayStyle.None;
+                return;
+            }
+
+            m_GraphFoldout.style.display = DisplayStyle.Flex;
+
+            int frameCount = perFrame.Length;
+            float areaWidth = m_GraphBarArea.resolvedStyle.width;
+            if (areaWidth < 1f) areaWidth = 400f; // fallback before first layout
+
+            // Bucketing: cap bar count at pixel width
+            m_GraphBucketCount = frameCount;
+            m_GraphFramesPerBucket = 1;
+            if (frameCount > (int)areaWidth)
+            {
+                m_GraphBucketCount = Mathf.Max(1, (int)areaWidth);
+                m_GraphFramesPerBucket = Mathf.CeilToInt((float)frameCount / m_GraphBucketCount);
+            }
+
+            // Ensure bucket buffer
+            if (m_GraphBuckets == null || m_GraphBuckets.Length < m_GraphBucketCount)
+                m_GraphBuckets = new long[m_GraphBucketCount];
+            else
+                Array.Clear(m_GraphBuckets, 0, m_GraphBucketCount);
+
+            // Fill buckets (max of frames in each bucket)
+            long maxValue = 0;
+            double sum = 0;
+            for (int b = 0; b < m_GraphBucketCount; b++)
+            {
+                int startIdx = b * m_GraphFramesPerBucket;
+                int endIdx = Mathf.Min(startIdx + m_GraphFramesPerBucket, frameCount);
+                long bucketMax = 0;
+                for (int i = startIdx; i < endIdx; i++)
+                {
+                    if (perFrame[i] > bucketMax) bucketMax = perFrame[i];
+                }
+                m_GraphBuckets[b] = bucketMax;
+                sum += bucketMax;
+                if (bucketMax > maxValue) maxValue = bucketMax;
+            }
+
+            // Compute mean and stddev for color thresholds
+            double mean = sum / m_GraphBucketCount;
+            double varianceSum = 0;
+            for (int b = 0; b < m_GraphBucketCount; b++)
+            {
+                double diff = m_GraphBuckets[b] - mean;
+                varianceSum += diff * diff;
+            }
+            double stddev = Math.Sqrt(varianceSum / m_GraphBucketCount);
+            double threshold1 = mean + stddev;
+            double threshold2 = mean + 2 * stddev;
+
+            // Update Y-axis labels
+            m_GraphYMax.text = FormatBytes(maxValue);
+            m_GraphYMid.text = FormatBytes(maxValue / 2);
+
+            // Update X-axis labels
+            m_GraphXStart.text = m_Snapshot.FrameStart.ToString();
+            m_GraphXEnd.text = m_Snapshot.FrameEnd.ToString();
+
+            // Clear old bars
+            m_GraphBarArea.Clear();
+
+            float barWidth = areaWidth / m_GraphBucketCount;
+            float maxHeight = GRAPH_HEIGHT;
+
+            // Add horizontal guide line (mid-point)
+            var guideMid = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    left = 0, right = 0,
+                    bottom = maxHeight / 2,
+                    height = 1,
+                    backgroundColor = k_GraphGuideLine
+                }
+            };
+            m_GraphBarArea.Add(guideMid);
+
+            for (int b = 0; b < m_GraphBucketCount; b++)
+            {
+                long val = m_GraphBuckets[b];
+                float height = maxValue > 0 ? (float)val / maxValue * maxHeight : 0;
+
+                // Color based on statistical threshold
+                Color barColor;
+                if (val > threshold2) barColor = k_GraphBarSpike;
+                else if (val > threshold1) barColor = k_GraphBarElevated;
+                else barColor = k_GraphBarNormal;
+
+                // Outer bar element
+                var bar = new VisualElement
+                {
+                    style =
+                    {
+                        width = Mathf.Max(barWidth, 1f),
+                        height = Mathf.Max(height, val > 0 ? 1f : 0f),
+                        backgroundColor = barColor,
+                        flexShrink = 0
+                    },
+                    userData = b // bucket index for click handler
+                };
+
+                // Inner overlay element (hidden by default)
+                var overlay = new VisualElement
+                {
+                    name = "overlay",
+                    style =
+                    {
+                        width = Length.Percent(100),
+                        height = 0,
+                        backgroundColor = k_GraphOverlay,
+                        position = Position.Absolute,
+                        bottom = 0
+                    }
+                };
+                bar.Add(overlay);
+
+                // Tooltip
+                int frameStart = m_Snapshot.FrameStart + b * m_GraphFramesPerBucket;
+                int frameEnd = Mathf.Min(frameStart + m_GraphFramesPerBucket - 1, m_Snapshot.FrameEnd);
+                if (m_GraphFramesPerBucket == 1)
+                    bar.tooltip = string.Concat("Frame ", frameStart.ToString(), ": ", FormatBytes(val));
+                else
+                    bar.tooltip = string.Concat("Frames ", frameStart.ToString(), "\u2013", frameEnd.ToString(), ": ", FormatBytes(val), " (max)");
+
+                // Click handler
+                bar.RegisterCallback<ClickEvent>(OnGraphBarClicked);
+
+                m_GraphBarArea.Add(bar);
+            }
+
+            // Clear overlay since selection may no longer be valid
+            m_GraphOverlayLabel.text = "";
+        }
+
+        void OnGraphBarClicked(ClickEvent evt)
+        {
+            var bar = evt.currentTarget as VisualElement;
+            if (bar?.userData is not int bucketIdx) return;
+
+            // Find the frame with max allocation in this bucket
+            var perFrame = m_Snapshot.PerFrameBytes;
+            if (perFrame == null) return;
+
+            int startIdx = bucketIdx * m_GraphFramesPerBucket;
+            int endIdx = Mathf.Min(startIdx + m_GraphFramesPerBucket, perFrame.Length);
+
+            int maxIdx = startIdx;
+            long maxVal = 0;
+            for (int i = startIdx; i < endIdx; i++)
+            {
+                if (perFrame[i] > maxVal) { maxVal = perFrame[i]; maxIdx = i; }
+            }
+
+            int frameIndex = m_Snapshot.FrameStart + maxIdx;
+
+            // Jump to frame in Profiler
+            EnsureProfilerRef();
+            if (m_ProfilerWindow != null)
+            {
+                try { m_ProfilerWindow.selectedFrameIndex = frameIndex; }
+                catch (Exception e)
+                {
+                    Debug.LogWarning(string.Concat("[GC Alloc Analyzer] Graph click frame=", frameIndex.ToString(), ": ", e.Message));
+                }
+            }
         }
 
         // Non-capturing filter callbacks
