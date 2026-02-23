@@ -115,6 +115,7 @@ namespace GCAllocBreakdown.Editor
 
         // Grouping work buffers
         readonly Dictionary<string, CallsiteGroup> m_GroupingDict = new(256);
+        long[] m_PerFrameBuffer;
 
         // Filter state cache (to detect actual changes)
         string m_LastNameFilter = "";
@@ -180,6 +181,7 @@ namespace GCAllocBreakdown.Editor
             // Rebuild both groupings from raw data
             BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
             BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
+            ComputeSnapshotPerFrameBytes();
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
@@ -360,6 +362,7 @@ namespace GCAllocBreakdown.Editor
 
             BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
             BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
+            ComputeSnapshotPerFrameBytes();
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
@@ -1123,6 +1126,7 @@ namespace GCAllocBreakdown.Editor
             // Build BOTH groupings once
             BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
             BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
+            ComputeSnapshotPerFrameBytes();
 
             // Set active based on current toggle
             m_ActiveGroups = m_GroupByCallsite.value ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
@@ -1199,7 +1203,7 @@ namespace GCAllocBreakdown.Editor
                 g.Allocations.Add(alloc);
             }
 
-            // Pre-compute display strings for each group
+            // Pre-compute display strings and per-frame stats for each group
             for (int i = 0; i < target.Count; i++)
             {
                 var g = target[i];
@@ -1212,6 +1216,19 @@ namespace GCAllocBreakdown.Editor
                 m_SharedSB.Append(g.Percentage.ToString("F1"));
                 m_SharedSB.Append('%');
                 g.FormattedPct = m_SharedSB.ToString();
+
+                ComputePerFrameStats(g, m_Snapshot.FrameStart, m_Snapshot.FrameEnd);
+                if (g.MaxBytesPerFrame > 0)
+                {
+                    g.FormattedMedian = FormatBytes(g.MedianBytesPerFrame);
+                    g.FormattedMin = FormatBytes(g.MinBytesPerFrame);
+                    g.FormattedMax = FormatBytes(g.MaxBytesPerFrame);
+                    g.FormattedMean = FormatBytes((long)g.MeanBytesPerFrame);
+                }
+                else
+                {
+                    g.FormattedMedian = g.FormattedMin = g.FormattedMax = g.FormattedMean = "—";
+                }
             }
         }
 
@@ -1235,6 +1252,103 @@ namespace GCAllocBreakdown.Editor
             m_ActiveGroups = m_GroupByCallsite.value ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
             BuildThreadIndex(m_ActiveGroups);
             ApplyFilters();
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  PER-FRAME STATISTICS
+        // ═══════════════════════════════════════════════════
+
+        void EnsurePerFrameBuffer(int frameCount)
+        {
+            if (m_PerFrameBuffer == null || m_PerFrameBuffer.Length < frameCount)
+                m_PerFrameBuffer = new long[frameCount];
+            else
+                Array.Clear(m_PerFrameBuffer, 0, frameCount);
+        }
+
+        void ComputePerFrameStats(CallsiteGroup group, int frameStart, int frameEnd)
+        {
+            int frameCount = frameEnd - frameStart + 1;
+            if (frameCount <= 0 || group.Allocations.Count == 0) return;
+
+            // Reuse class-level buffer to avoid per-group allocations
+            EnsurePerFrameBuffer(frameCount);
+            int firstFrame = int.MaxValue;
+
+            for (int i = 0; i < group.Allocations.Count; i++)
+            {
+                var alloc = group.Allocations[i];
+                int idx = alloc.FrameIndex - frameStart;
+                if (idx >= 0 && idx < frameCount)
+                    m_PerFrameBuffer[idx] += alloc.Bytes;
+                if (alloc.FrameIndex < firstFrame)
+                    firstFrame = alloc.FrameIndex;
+            }
+
+            group.FirstFrame = firstFrame;
+
+            // Find min/max among frames that actually had allocations.
+            // Min/Max/Median only consider frames with allocations.
+            long min = long.MaxValue;
+            long max = long.MinValue;
+            int minFrame = frameStart;
+            int maxFrame = frameStart;
+            long sum = 0;
+            int framesWithAllocs = 0;
+
+            for (int i = 0; i < frameCount; i++)
+            {
+                long val = m_PerFrameBuffer[i];
+                if (val > 0)
+                {
+                    framesWithAllocs++;
+                    sum += val;
+                    if (val < min) { min = val; minFrame = frameStart + i; }
+                    if (val > max) { max = val; maxFrame = frameStart + i; }
+                }
+            }
+
+            if (framesWithAllocs == 0) return;
+
+            group.MinBytesPerFrame = min;
+            group.MaxBytesPerFrame = max;
+            group.MinFrame = minFrame;
+            group.MaxFrame = maxFrame;
+
+            // Mean uses total frameCount (including zero-alloc frames) so it reflects
+            // the amortized per-frame cost across the full analyzed range.
+            group.MeanBytesPerFrame = (double)sum / frameCount;
+
+            // Median: pack non-zero values to front of buffer, sort that region
+            int ni = 0;
+            for (int i = 0; i < frameCount; i++)
+            {
+                if (m_PerFrameBuffer[i] > 0)
+                    m_PerFrameBuffer[ni++] = m_PerFrameBuffer[i];
+            }
+            Array.Sort(m_PerFrameBuffer, 0, framesWithAllocs);
+
+            // Integer division is intentional — byte counts are discrete
+            if (framesWithAllocs % 2 == 1)
+                group.MedianBytesPerFrame = m_PerFrameBuffer[framesWithAllocs / 2];
+            else
+                group.MedianBytesPerFrame = (m_PerFrameBuffer[framesWithAllocs / 2 - 1] + m_PerFrameBuffer[framesWithAllocs / 2]) / 2;
+        }
+
+        void ComputeSnapshotPerFrameBytes()
+        {
+            int frameCount = m_Snapshot.FrameEnd - m_Snapshot.FrameStart + 1;
+            if (frameCount <= 0) { m_Snapshot.PerFrameBytes = null; return; }
+
+            var perFrame = new long[frameCount];
+            for (int i = 0; i < m_Snapshot.RawAllocations.Count; i++)
+            {
+                var alloc = m_Snapshot.RawAllocations[i];
+                int idx = alloc.FrameIndex - m_Snapshot.FrameStart;
+                if (idx >= 0 && idx < frameCount)
+                    perFrame[idx] += alloc.Bytes;
+            }
+            m_Snapshot.PerFrameBytes = perFrame;
         }
 
         // ═══════════════════════════════════════════════════
@@ -2300,6 +2414,7 @@ namespace GCAllocBreakdown.Editor
 
             [NonSerialized] public List<CallsiteGroup> GroupsByFullCallstack = new(256);
             [NonSerialized] public List<CallsiteGroup> GroupsByTopFrame = new(256);
+            [NonSerialized] public long[] PerFrameBytes;
 
             public bool HasData => RawAllocations != null && RawAllocations.Count > 0;
 
@@ -2351,11 +2466,24 @@ namespace GCAllocBreakdown.Editor
             public List<ResolvedFrame> ResolvedCallStack;
             public List<RawAllocation> Allocations;
 
+            // Per-frame statistics (computed during grouping)
+            public double MeanBytesPerFrame;
+            public long MedianBytesPerFrame;
+            public long MinBytesPerFrame;
+            public long MaxBytesPerFrame;
+            public int MinFrame;
+            public int MaxFrame;
+            public int FirstFrame;
+
             // Pre-computed display strings (built once during grouping)
             public string FormattedBytes;
             public string FormattedCount;
             public string FormattedAvg;
             public string FormattedPct;
+            public string FormattedMedian;
+            public string FormattedMin;
+            public string FormattedMax;
+            public string FormattedMean;
         }
 
         [Serializable]
