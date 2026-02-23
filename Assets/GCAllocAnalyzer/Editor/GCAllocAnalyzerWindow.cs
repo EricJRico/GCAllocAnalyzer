@@ -26,6 +26,8 @@ namespace GCAllocBreakdown.Editor
         const int MARKER_ROW_HEIGHT = 22;
         const int ALLOC_ROW_HEIGHT = 20;
         const int MAX_CALLSTACK_FRAMES = 20;
+        const string k_MainThread = "Main Thread";
+        const string k_RenderThread = "Render Thread";
 
         static readonly Color k_Red = new(1f, 0.3f, 0.3f);
         static readonly Color k_Yellow = new(1f, 0.85f, 0.2f);
@@ -538,6 +540,18 @@ namespace GCAllocBreakdown.Editor
                                m_SelectedThreads.Count == m_AllThreadNames.Count;
 
             menu.AddItem(new GUIContent("All Threads"), allSelected, OnThreadMenuAll);
+
+            // Quick-select shortcuts for common threads
+            for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
+            {
+                string t = m_Snapshot.SortedThreadNames[i];
+                if (t == k_MainThread || t == k_RenderThread)
+                {
+                    bool on = m_SelectedThreads.Count == 1 && m_SelectedThreads.Contains(t);
+                    menu.AddItem(new GUIContent(string.Concat(t, " Only")), on, OnThreadMenuSolo, t);
+                }
+            }
+
             menu.AddSeparator("");
 
             for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
@@ -553,6 +567,15 @@ namespace GCAllocBreakdown.Editor
         void OnThreadMenuAll()
         {
             m_SelectedThreads.Clear();
+            UpdateThreadButtonLabel();
+            ApplyFilters();
+        }
+
+        void OnThreadMenuSolo(object userData)
+        {
+            string thread = (string)userData;
+            m_SelectedThreads.Clear();
+            m_SelectedThreads.Add(thread);
             UpdateThreadButtonLabel();
             ApplyFilters();
         }
