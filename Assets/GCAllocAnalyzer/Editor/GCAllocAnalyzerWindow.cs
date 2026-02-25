@@ -78,9 +78,6 @@ namespace GCAllocBreakdown.Editor
         Label m_FrameCountLabel, m_FrameRangeLabel, m_TotalGcLabel;
         Label m_TotalAllocsLabel, m_UniqueSitesLabel;
         Label m_MarkerNameLabel, m_MarkerSourceLabel, m_MarkerStatsLabel;
-        VisualElement m_PerFrameStatsContainer, m_TopWorstContainer;
-        Label m_FirstFrameLabel, m_MedianMeanLabel, m_MinFrameLabel, m_MaxFrameLabel;
-        Label[] m_TopWorstLabels;
         VisualElement m_CallStackContainer;
         ScrollView m_CallStackScroll;
         ListView m_AllocListView;
@@ -1319,79 +1316,6 @@ namespace GCAllocBreakdown.Editor
             };
             siteFoldout.Add(m_MarkerStatsLabel);
 
-            // ── Per-Frame Statistics ──
-            m_PerFrameStatsContainer = new VisualElement
-            {
-                style = { marginBottom = 4, borderTopWidth = 1,
-                    borderTopColor = new Color(0.2f, 0.2f, 0.2f), paddingTop = 4 }
-            };
-            m_PerFrameStatsContainer.Add(new Label("Per-Frame Statistics")
-            {
-                style = { unityFontStyleAndWeight = FontStyle.Bold, fontSize = 11, marginBottom = 2 }
-            });
-
-            m_FirstFrameLabel = new Label("")
-            {
-                style = { fontSize = 11, color = k_SubtleText, marginBottom = 1 }
-            };
-            m_PerFrameStatsContainer.Add(m_FirstFrameLabel);
-
-            m_MedianMeanLabel = new Label("")
-            {
-                style = { fontSize = 11, marginBottom = 1 }
-            };
-            m_PerFrameStatsContainer.Add(m_MedianMeanLabel);
-
-            // Min frame — clickable
-            m_MinFrameLabel = new Label("")
-            {
-                style = { fontSize = 11, marginBottom = 1 }
-            };
-            m_MinFrameLabel.RegisterCallback<ClickEvent>(OnMinFrameClicked);
-            m_MinFrameLabel.RegisterCallback<MouseEnterEvent>(OnFrameLinkEnter);
-            m_MinFrameLabel.RegisterCallback<MouseLeaveEvent>(OnFrameLinkLeave);
-            m_PerFrameStatsContainer.Add(m_MinFrameLabel);
-
-            // Max frame — clickable
-            m_MaxFrameLabel = new Label("")
-            {
-                style = { fontSize = 11, marginBottom = 1 }
-            };
-            m_MaxFrameLabel.RegisterCallback<ClickEvent>(OnMaxFrameClicked);
-            m_MaxFrameLabel.RegisterCallback<MouseEnterEvent>(OnFrameLinkEnter);
-            m_MaxFrameLabel.RegisterCallback<MouseLeaveEvent>(OnFrameLinkLeave);
-            m_PerFrameStatsContainer.Add(m_MaxFrameLabel);
-
-            m_PerFrameStatsContainer.style.display = DisplayStyle.None;
-            siteFoldout.Add(m_PerFrameStatsContainer);
-
-            // ── Top Worst Frames ──
-            m_TopWorstContainer = new VisualElement
-            {
-                style = { marginBottom = 4, borderTopWidth = 1,
-                    borderTopColor = new Color(0.2f, 0.2f, 0.2f), paddingTop = 4 }
-            };
-            m_TopWorstContainer.Add(new Label("Top Worst Frames")
-            {
-                style = { unityFontStyleAndWeight = FontStyle.Bold, fontSize = 11, marginBottom = 2 }
-            });
-
-            m_TopWorstLabels = new Label[3];
-            for (int i = 0; i < 3; i++)
-            {
-                m_TopWorstLabels[i] = new Label("")
-                {
-                    style = { fontSize = 11, marginBottom = 1 }
-                };
-                m_TopWorstLabels[i].RegisterCallback<ClickEvent>(OnTopWorstClicked);
-                m_TopWorstLabels[i].RegisterCallback<MouseEnterEvent>(OnFrameLinkEnter);
-                m_TopWorstLabels[i].RegisterCallback<MouseLeaveEvent>(OnFrameLinkLeave);
-                m_TopWorstContainer.Add(m_TopWorstLabels[i]);
-            }
-
-            m_TopWorstContainer.style.display = DisplayStyle.None;
-            siteFoldout.Add(m_TopWorstContainer);
-
             // Call Stack
             siteFoldout.Add(new Label("Call Stack")
             {
@@ -2435,69 +2359,6 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append("    "); m_SharedSB.Append(group.FormattedPct); m_SharedSB.Append(" of total");
             m_MarkerStatsLabel.text = m_SharedSB.ToString();
 
-            // Per-frame statistics
-            bool hasPerFrame = group.MaxBytesPerFrame > 0;
-            m_PerFrameStatsContainer.style.display = hasPerFrame ? DisplayStyle.Flex : DisplayStyle.None;
-            if (hasPerFrame)
-            {
-                m_SharedSB.Clear();
-                m_SharedSB.Append("First seen: frame ");
-                m_SharedSB.Append(group.FirstFrame.ToString());
-                m_FirstFrameLabel.text = m_SharedSB.ToString();
-
-                m_SharedSB.Clear();
-                m_SharedSB.Append("Median/Frame: ");
-                m_SharedSB.Append(group.FormattedMedian);
-                m_SharedSB.Append("    Mean/Frame: ");
-                m_SharedSB.Append(group.FormattedMean);
-                m_MedianMeanLabel.text = m_SharedSB.ToString();
-
-                m_SharedSB.Clear();
-                m_SharedSB.Append("Min: ");
-                m_SharedSB.Append(group.FormattedMin);
-                m_SharedSB.Append(" (frame ");
-                m_SharedSB.Append(group.MinFrame.ToString());
-                m_SharedSB.Append(")");
-                m_MinFrameLabel.text = m_SharedSB.ToString();
-                m_MinFrameLabel.userData = group.MinFrame;
-                m_MinFrameLabel.tooltip = "Click to jump to this frame in the Profiler";
-
-                m_SharedSB.Clear();
-                m_SharedSB.Append("Max: ");
-                m_SharedSB.Append(group.FormattedMax);
-                m_SharedSB.Append(" (frame ");
-                m_SharedSB.Append(group.MaxFrame.ToString());
-                m_SharedSB.Append(")");
-                m_MaxFrameLabel.text = m_SharedSB.ToString();
-                m_MaxFrameLabel.userData = group.MaxFrame;
-                m_MaxFrameLabel.tooltip = "Click to jump to this frame in the Profiler";
-            }
-
-            // Top worst frames
-            bool hasTopWorst = group.FormattedTopWorst != null && group.FormattedTopWorst.Length > 0;
-            m_TopWorstContainer.style.display = hasTopWorst ? DisplayStyle.Flex : DisplayStyle.None;
-            if (hasTopWorst)
-            {
-                for (int i = 0; i < 3; i++)
-                {
-                    if (i < group.FormattedTopWorst.Length)
-                    {
-                        m_SharedSB.Clear();
-                        m_SharedSB.Append((i + 1).ToString());
-                        m_SharedSB.Append(". ");
-                        m_SharedSB.Append(group.FormattedTopWorst[i]);
-                        m_TopWorstLabels[i].text = m_SharedSB.ToString();
-                        m_TopWorstLabels[i].userData = group.TopWorstFrameIndices[i];
-                        m_TopWorstLabels[i].tooltip = "Click to jump to this frame in the Profiler";
-                        m_TopWorstLabels[i].style.display = DisplayStyle.Flex;
-                    }
-                    else
-                    {
-                        m_TopWorstLabels[i].style.display = DisplayStyle.None;
-                    }
-                }
-            }
-
             // Call stack
             BuildCallStackDisplay(group);
 
@@ -2633,8 +2494,6 @@ namespace GCAllocBreakdown.Editor
             m_MarkerNameLabel.text = "—";
             m_MarkerSourceLabel.text = "";
             m_MarkerStatsLabel.text = "";
-            m_PerFrameStatsContainer.style.display = DisplayStyle.None;
-            m_TopWorstContainer.style.display = DisplayStyle.None;
             m_CallStackContainer.Clear();
             m_SelectedAllocations = new List<RawAllocation>(0);
             m_AllocListView.itemsSource = m_SelectedAllocations;
@@ -2756,47 +2615,6 @@ namespace GCAllocBreakdown.Editor
                     "[GC Alloc Analyzer] Selection failed frame=", alloc.FrameIndex.ToString(),
                     " sample=", alloc.RawSampleIndex.ToString(), ": ", e.Message));
             }
-        }
-
-        void NavigateToFrame(int frameIndex)
-        {
-            EnsureProfilerRef();
-            if (m_ProfilerWindow == null) return;
-            try { m_ProfilerWindow.selectedFrameIndex = frameIndex; }
-            catch (Exception e)
-            {
-                Debug.LogWarning(string.Concat(
-                    "[GC Alloc Analyzer] Frame navigation failed frame=",
-                    frameIndex.ToString(), ": ", e.Message));
-            }
-        }
-
-        static void OnFrameLinkEnter(MouseEnterEvent evt)
-        {
-            ((VisualElement)evt.target).style.color = k_LinkBlue;
-        }
-
-        static void OnFrameLinkLeave(MouseLeaveEvent evt)
-        {
-            ((VisualElement)evt.target).style.color = StyleKeyword.Null;
-        }
-
-        void OnMinFrameClicked(ClickEvent evt)
-        {
-            if (evt.target is VisualElement ve && ve.userData is int frame)
-                NavigateToFrame(frame);
-        }
-
-        void OnMaxFrameClicked(ClickEvent evt)
-        {
-            if (evt.target is VisualElement ve && ve.userData is int frame)
-                NavigateToFrame(frame);
-        }
-
-        void OnTopWorstClicked(ClickEvent evt)
-        {
-            if (evt.target is VisualElement ve && ve.userData is int frame)
-                NavigateToFrame(frame);
         }
 
         // ═══════════════════════════════════════════════════
