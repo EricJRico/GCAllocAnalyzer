@@ -20,6 +20,12 @@ namespace GCAllocBreakdown.Editor
         const float COL_COUNT = 55;
         const float COL_AVG = 70;
         const float COL_PCT = 50;
+        const float COL_MEDIAN = 60;
+        const float COL_MEAN   = 60;
+        const float COL_MIN    = 55;
+        const float COL_MAX    = 55;
+        const float COL_RANGE  = 55;
+        const float COL_FIRST  = 45;
         const float ALLOC_COL_NUM = 30;
         const float ALLOC_COL_SIZE = 70;
         const float ALLOC_COL_FRAME = 60;
@@ -104,7 +110,8 @@ namespace GCAllocBreakdown.Editor
         //  SORT
         // ═══════════════════════════════════════════════════
 
-        enum SortCol { Bytes, Count, Avg, Pct, Name }
+        enum SortCol { Bytes = 0, Count = 1, Avg = 2, Pct = 3, Name = 4,
+            Median = 5, Mean = 6, Min = 7, Max = 8, Range = 9, First = 10 }
 
         // ═══════════════════════════════════════════════════
         //  DATA FIELDS — pre-allocated, reused via .Clear()
@@ -166,7 +173,7 @@ namespace GCAllocBreakdown.Editor
         public static GCAllocAnalyzerWindow ShowWindow()
         {
             var w = GetWindow<GCAllocAnalyzerWindow>("GC Alloc Analyzer");
-            w.minSize = new Vector2(750, 420);
+            w.minSize = new Vector2(1000, 420);
             w.Show();
             return w;
         }
@@ -175,7 +182,7 @@ namespace GCAllocBreakdown.Editor
         {
             var root = rootVisualElement;
             root.style.flexGrow = 1;
-            root.style.minWidth = 700;
+            root.style.minWidth = 950;
 
             root.Add(BuildToolbar());
 
@@ -1071,7 +1078,7 @@ namespace GCAllocBreakdown.Editor
             {
                 using (var writer = new StreamWriter(path, false, Encoding.UTF8))
                 {
-                    writer.WriteLine("Name,Bytes,Count,Avg,Percentage,Median/Frame,Mean/Frame,Min/Frame,Max/Frame,MinFrame,MaxFrame,FirstFrame");
+                    writer.WriteLine("Name,Bytes,Count,Avg,Percentage,Median/Frame,Mean/Frame,Min/Frame,Max/Frame,Range/Frame,MinFrame,MaxFrame,FirstFrame");
 
                     for (int i = 0; i < m_FilteredGroups.Count; i++)
                     {
@@ -1085,6 +1092,7 @@ namespace GCAllocBreakdown.Editor
                         writer.Write(','); writer.Write(g.MeanBytesPerFrame.ToString("F1"));
                         writer.Write(','); writer.Write(g.MinBytesPerFrame);
                         writer.Write(','); writer.Write(g.MaxBytesPerFrame);
+                        writer.Write(','); writer.Write(g.RangeBytesPerFrame);
                         writer.Write(','); writer.Write(g.MinFrame);
                         writer.Write(','); writer.Write(g.MaxFrame);
                         writer.Write(','); writer.Write(g.FirstFrame);
@@ -1182,6 +1190,12 @@ namespace GCAllocBreakdown.Editor
             row.Add(MakeSortHeader("Count", COL_COUNT, SortCol.Count));
             row.Add(MakeSortHeader("Avg", COL_AVG, SortCol.Avg));
             row.Add(MakeSortHeader("%", COL_PCT, SortCol.Pct));
+            row.Add(MakeSortHeader("Median", COL_MEDIAN, SortCol.Median));
+            row.Add(MakeSortHeader("Mean", COL_MEAN, SortCol.Mean));
+            row.Add(MakeSortHeader("Min", COL_MIN, SortCol.Min));
+            row.Add(MakeSortHeader("Max", COL_MAX, SortCol.Max));
+            row.Add(MakeSortHeader("Range", COL_RANGE, SortCol.Range));
+            row.Add(MakeSortHeader("First", COL_FIRST, SortCol.First));
             row.Add(MakeSortHeader("Allocation Site", 0, SortCol.Name, 1));
 
             return row;
@@ -1750,6 +1764,9 @@ namespace GCAllocBreakdown.Editor
                     g.FormattedMin = FormatBytes(g.MinBytesPerFrame);
                     g.FormattedMax = FormatBytes(g.MaxBytesPerFrame);
                     g.FormattedMean = FormatBytes((long)g.MeanBytesPerFrame);
+                    g.RangeBytesPerFrame = g.MaxBytesPerFrame - g.MinBytesPerFrame;
+                    g.FormattedRange = FormatBytes(g.RangeBytesPerFrame);
+                    g.FormattedFirst = g.FirstFrame.ToString();
                     if (g.TopWorstFrameIndices != null)
                     {
                         g.FormattedTopWorst = new string[g.TopWorstFrameIndices.Length];
@@ -1767,6 +1784,8 @@ namespace GCAllocBreakdown.Editor
                 else
                 {
                     g.FormattedMedian = g.FormattedMin = g.FormattedMax = g.FormattedMean = "—";
+                    g.FormattedRange = "—";
+                    g.FormattedFirst = "—";
                     g.FormattedTopWorst = null;
                 }
             }
@@ -2001,6 +2020,24 @@ namespace GCAllocBreakdown.Editor
                 case SortCol.Pct:
                     m_FilteredGroups.Sort((a, b) => dir * a.Percentage.CompareTo(b.Percentage));
                     break;
+                case SortCol.Median:
+                    m_FilteredGroups.Sort((a, b) => dir * a.MedianBytesPerFrame.CompareTo(b.MedianBytesPerFrame));
+                    break;
+                case SortCol.Mean:
+                    m_FilteredGroups.Sort((a, b) => dir * a.MeanBytesPerFrame.CompareTo(b.MeanBytesPerFrame));
+                    break;
+                case SortCol.Min:
+                    m_FilteredGroups.Sort((a, b) => dir * a.MinBytesPerFrame.CompareTo(b.MinBytesPerFrame));
+                    break;
+                case SortCol.Max:
+                    m_FilteredGroups.Sort((a, b) => dir * a.MaxBytesPerFrame.CompareTo(b.MaxBytesPerFrame));
+                    break;
+                case SortCol.Range:
+                    m_FilteredGroups.Sort((a, b) => dir * a.RangeBytesPerFrame.CompareTo(b.RangeBytesPerFrame));
+                    break;
+                case SortCol.First:
+                    m_FilteredGroups.Sort((a, b) => dir * a.FirstFrame.CompareTo(b.FirstFrame));
+                    break;
                 case SortCol.Name:
                     m_FilteredGroups.Sort((a, b) =>
                         dir * string.Compare(a.DisplayName, b.DisplayName, StringComparison.Ordinal));
@@ -2046,6 +2083,12 @@ namespace GCAllocBreakdown.Editor
             row.Add(new Label { name = "count", style = { width = COL_COUNT, fontSize = 11 } });
             row.Add(new Label { name = "avg", style = { width = COL_AVG, fontSize = 11 } });
             row.Add(new Label { name = "pct", style = { width = COL_PCT, fontSize = 11 } });
+            row.Add(new Label { name = "median", style = { width = COL_MEDIAN, fontSize = 11 } });
+            row.Add(new Label { name = "mean", style = { width = COL_MEAN, fontSize = 11 } });
+            row.Add(new Label { name = "min", style = { width = COL_MIN, fontSize = 11 } });
+            row.Add(new Label { name = "max", style = { width = COL_MAX, fontSize = 11 } });
+            row.Add(new Label { name = "range", style = { width = COL_RANGE, fontSize = 11 } });
+            row.Add(new Label { name = "first", style = { width = COL_FIRST, fontSize = 11 } });
             row.Add(new Label { name = "site", style = { flexGrow = 1, fontSize = 11,
                 overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } });
 
@@ -2069,6 +2112,17 @@ namespace GCAllocBreakdown.Editor
             el.Q<Label>("count").text = g.FormattedCount;
             el.Q<Label>("avg").text = g.FormattedAvg;
             el.Q<Label>("pct").text = g.FormattedPct;
+            el.Q<Label>("median").text = g.FormattedMedian;
+            el.Q<Label>("mean").text = g.FormattedMean;
+            el.Q<Label>("min").text = g.FormattedMin;
+
+            var maxLbl = el.Q<Label>("max");
+            maxLbl.text = g.FormattedMax;
+            maxLbl.style.color = g.MaxBytesPerFrame >= 10240 ? k_Red
+                : g.MaxBytesPerFrame >= 1024 ? k_Yellow : k_DimGray;
+
+            el.Q<Label>("range").text = g.FormattedRange;
+            el.Q<Label>("first").text = g.FormattedFirst;
 
             var siteLbl = el.Q<Label>("site");
             siteLbl.text = g.DisplayName;
@@ -3131,10 +3185,13 @@ namespace GCAllocBreakdown.Editor
             public string FormattedCount;
             public string FormattedAvg;
             public string FormattedPct;
+            public long RangeBytesPerFrame;    // MaxBytesPerFrame - MinBytesPerFrame
             public string FormattedMedian;
             public string FormattedMin;
             public string FormattedMax;
             public string FormattedMean;
+            public string FormattedRange;
+            public string FormattedFirst;
             public string[] FormattedTopWorst;    // pre-built "frame N — X KB" strings
         }
 
