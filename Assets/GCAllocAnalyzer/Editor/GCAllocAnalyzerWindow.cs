@@ -1186,22 +1186,23 @@ namespace GCAllocBreakdown.Editor
                 }
             };
 
-            row.Add(MakeSortHeader("Bytes", COL_BYTES, SortCol.Bytes));
-            row.Add(MakeSortHeader("Count", COL_COUNT, SortCol.Count));
-            row.Add(MakeSortHeader("Avg", COL_AVG, SortCol.Avg));
-            row.Add(MakeSortHeader("%", COL_PCT, SortCol.Pct));
-            row.Add(MakeSortHeader("Median", COL_MEDIAN, SortCol.Median));
-            row.Add(MakeSortHeader("Mean", COL_MEAN, SortCol.Mean));
-            row.Add(MakeSortHeader("Min", COL_MIN, SortCol.Min));
-            row.Add(MakeSortHeader("Max", COL_MAX, SortCol.Max));
-            row.Add(MakeSortHeader("Range", COL_RANGE, SortCol.Range));
-            row.Add(MakeSortHeader("First", COL_FIRST, SortCol.First));
-            row.Add(MakeSortHeader("Allocation Site", 0, SortCol.Name, 1));
+            row.Add(MakeSortHeader("Allocation Site", 0, SortCol.Name, 1, "Method or call stack that triggered the GC allocation"));
+            row.Add(MakeSortHeader("Bytes", COL_BYTES, SortCol.Bytes, tip: "Total bytes allocated across all frames"));
+            row.Add(MakeSortHeader("Count", COL_COUNT, SortCol.Count, tip: "Total number of allocations"));
+            row.Add(MakeSortHeader("Avg", COL_AVG, SortCol.Avg, tip: "Average bytes per allocation"));
+            row.Add(MakeSortHeader("%", COL_PCT, SortCol.Pct, tip: "Percentage of total GC bytes"));
+            row.Add(MakeSortHeader("Median", COL_MEDIAN, SortCol.Median, tip: "Median bytes per frame"));
+            row.Add(MakeSortHeader("Mean", COL_MEAN, SortCol.Mean, tip: "Mean bytes per frame"));
+            row.Add(MakeSortHeader("Min", COL_MIN, SortCol.Min, tip: "Minimum bytes in a single frame"));
+            row.Add(MakeSortHeader("Max", COL_MAX, SortCol.Max, tip: "Maximum bytes in a single frame (spike)"));
+            row.Add(MakeSortHeader("Range", COL_RANGE, SortCol.Range, tip: "Max minus Min bytes per frame"));
+            row.Add(MakeSortHeader("First", COL_FIRST, SortCol.First, tip: "First frame this site allocated"));
 
             return row;
         }
 
-        Label MakeSortHeader(string text, float width, SortCol col, float grow = 0)
+        Label MakeSortHeader(string text, float width, SortCol col, float grow = 0,
+            string tip = null)
         {
             string arrow = m_SortCol == col ? (m_SortAsc ? " ▲" : " ▼") : "";
             var lbl = new Label(string.Concat(text, arrow))
@@ -1209,6 +1210,7 @@ namespace GCAllocBreakdown.Editor
                 style = { unityFontStyleAndWeight = FontStyle.Bold, fontSize = 11 },
                 userData = col
             };
+            if (tip != null) lbl.tooltip = tip;
             if (width > 0) lbl.style.width = width;
             if (grow > 0) lbl.style.flexGrow = grow;
 
@@ -2079,6 +2081,8 @@ namespace GCAllocBreakdown.Editor
                     paddingLeft = 4, paddingRight = 4 }
             };
 
+            row.Add(new Label { name = "site", style = { flexGrow = 1, fontSize = 11,
+                overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } });
             row.Add(new Label { name = "bytes", style = { width = COL_BYTES, fontSize = 11 } });
             row.Add(new Label { name = "count", style = { width = COL_COUNT, fontSize = 11 } });
             row.Add(new Label { name = "avg", style = { width = COL_AVG, fontSize = 11 } });
@@ -2089,8 +2093,6 @@ namespace GCAllocBreakdown.Editor
             row.Add(new Label { name = "max", style = { width = COL_MAX, fontSize = 11 } });
             row.Add(new Label { name = "range", style = { width = COL_RANGE, fontSize = 11 } });
             row.Add(new Label { name = "first", style = { width = COL_FIRST, fontSize = 11 } });
-            row.Add(new Label { name = "site", style = { flexGrow = 1, fontSize = 11,
-                overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } });
 
             row.AddManipulator(new ContextualMenuManipulator(OnMarkerRowContextMenu));
 
