@@ -536,9 +536,18 @@ namespace GCAllocBreakdown.Editor
             left.Add(m_FiltersFoldout);
             left.Add(BuildPerFrameGraph());
 
+            // Horizontal scroll wrapper for header + list (prevents column overlap)
+            var hScroll = new ScrollView(ScrollViewMode.Horizontal)
+            {
+                style = { flexGrow = 1 },
+                horizontalScrollerVisibility = ScrollerVisibility.Auto,
+                verticalScrollerVisibility = ScrollerVisibility.Hidden
+            };
+            var hScrollContent = new VisualElement { style = { flexGrow = 1, minWidth = 800 } };
+
             // Column headers
             m_MarkerHeaderRow = BuildMarkerHeaders();
-            left.Add(m_MarkerHeaderRow);
+            hScrollContent.Add(m_MarkerHeaderRow);
 
             // Marker list (virtualized)
             m_MarkerListView = new ListView
@@ -553,7 +562,10 @@ namespace GCAllocBreakdown.Editor
             m_MarkerListView.bindItem = BindMarkerRow;
             m_MarkerListView.itemsSource = m_FilteredGroups;
             m_MarkerListView.selectionChanged += OnMarkerSelectionChanged;
-            left.Add(m_MarkerListView);
+            hScrollContent.Add(m_MarkerListView);
+
+            hScroll.Add(hScrollContent);
+            left.Add(hScroll);
 
             return left;
         }
@@ -2081,7 +2093,7 @@ namespace GCAllocBreakdown.Editor
                     paddingLeft = 4, paddingRight = 4 }
             };
 
-            row.Add(new Label { name = "site", style = { flexGrow = 1, fontSize = 11,
+            row.Add(new Label { name = "site", style = { flexGrow = 1, minWidth = 200, fontSize = 11,
                 overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } });
             row.Add(new Label { name = "bytes", style = { width = COL_BYTES, fontSize = 11 } });
             row.Add(new Label { name = "count", style = { width = COL_COUNT, fontSize = 11 } });
