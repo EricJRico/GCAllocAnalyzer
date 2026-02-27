@@ -35,6 +35,15 @@ namespace GCAllocBreakdown.Editor
         const string k_MainThread = "Main Thread";
         const string k_RenderThread = "Render Thread";
 
+        // Marker table column names
+        const string k_ColSite = "site", k_ColBytes = "bytes", k_ColCount = "count";
+        const string k_ColAvg = "avg", k_ColPct = "pct", k_ColMedian = "median";
+        const string k_ColMean = "mean", k_ColMin = "min", k_ColMax = "max";
+        const string k_ColRange = "range", k_ColFirst = "first";
+        // Alloc table column names
+        const string k_AllocColNum = "num", k_AllocColSize = "size";
+        const string k_AllocColFrame = "frame", k_AllocColThread = "thread";
+
         const float GRAPH_HEIGHT = 120;
         const float GRAPH_Y_AXIS_WIDTH = 52;
         const float GRAPH_X_AXIS_HEIGHT = 16;
@@ -64,8 +73,7 @@ namespace GCAllocBreakdown.Editor
         TextField m_ExcludeFilter;
         Button m_ThreadFilterBtn;
         Toggle m_GroupByCallsite;
-        ListView m_MarkerListView;
-        VisualElement m_MarkerHeaderRow;
+        MultiColumnListView m_MarkerListView;
         Label m_StatusLabel;
         Button m_SaveBtn;
         Button m_LoadBtn;
@@ -86,8 +94,7 @@ namespace GCAllocBreakdown.Editor
         Label m_MarkerNameLabel, m_MarkerSourceLabel, m_MarkerStatsLabel;
         VisualElement m_CallStackContainer;
         ScrollView m_CallStackScroll;
-        ListView m_AllocListView;
-        VisualElement m_AllocHeaderRow;
+        MultiColumnListView m_AllocListView;
         VisualElement m_MarkerSummaryRoot;
         Label m_NoDataLabel;
 
@@ -241,6 +248,7 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append('–');
             m_SharedSB.Append(m_Snapshot.FrameEnd);
             m_StatusLabel.text = m_SharedSB.ToString();
+            RestoreMarkerSortIndicator();
             m_SaveBtn?.SetEnabled(true);
             m_ExportBtn?.SetEnabled(true);
         }
@@ -536,36 +544,61 @@ namespace GCAllocBreakdown.Editor
             left.Add(m_FiltersFoldout);
             left.Add(BuildPerFrameGraph());
 
-            // Horizontal scroll wrapper for header + list (prevents column overlap)
-            var hScroll = new ScrollView(ScrollViewMode.Horizontal)
-            {
-                style = { flexGrow = 1 },
-                horizontalScrollerVisibility = ScrollerVisibility.Auto,
-                verticalScrollerVisibility = ScrollerVisibility.Hidden
-            };
-            var hScrollContent = new VisualElement { style = { flexGrow = 1, minWidth = 800 } };
-
-            // Column headers
-            m_MarkerHeaderRow = BuildMarkerHeaders();
-            hScrollContent.Add(m_MarkerHeaderRow);
-
-            // Marker list (virtualized)
-            m_MarkerListView = new ListView
+            // Marker list (multi-column, virtualized)
+            m_MarkerListView = new MultiColumnListView
             {
                 virtualizationMethod = CollectionVirtualizationMethod.FixedHeight,
                 fixedItemHeight = MARKER_ROW_HEIGHT,
                 selectionType = SelectionType.Single,
                 showBorder = true,
+                sortingMode = ColumnSortingMode.Custom,
                 style = { flexGrow = 1 }
             };
-            m_MarkerListView.makeItem = MakeMarkerRow;
-            m_MarkerListView.bindItem = BindMarkerRow;
-            m_MarkerListView.itemsSource = m_FilteredGroups;
-            m_MarkerListView.selectionChanged += OnMarkerSelectionChanged;
-            hScrollContent.Add(m_MarkerListView);
 
-            hScroll.Add(hScrollContent);
-            left.Add(hScroll);
+            m_MarkerListView.columns.Add(new Column { name = k_ColSite, title = "Allocation Site",
+                stretchable = true, minWidth = 200, sortable = true,
+                makeCell = MakeMarkerSiteCell, bindCell = BindMarkerSite });
+            m_MarkerListView.columns.Add(new Column { name = k_ColBytes, title = "Bytes",
+                width = COL_BYTES, sortable = true, resizable = true,
+                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerBytes,
+                unbindCell = UnbindMarkerStyledCell });
+            m_MarkerListView.columns.Add(new Column { name = k_ColCount, title = "Count",
+                width = COL_COUNT, sortable = true, resizable = true,
+                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerCount });
+            m_MarkerListView.columns.Add(new Column { name = k_ColAvg, title = "Avg",
+                width = COL_AVG, sortable = true, resizable = true,
+                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerAvg });
+            m_MarkerListView.columns.Add(new Column { name = k_ColPct, title = "%",
+                width = COL_PCT, sortable = true, resizable = true,
+                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerPct });
+            m_MarkerListView.columns.Add(new Column { name = k_ColMedian, title = "Median",
+                width = COL_MEDIAN, sortable = true, resizable = true,
+                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMedian });
+            m_MarkerListView.columns.Add(new Column { name = k_ColMean, title = "Mean",
+                width = COL_MEAN, sortable = true, resizable = true,
+                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMean });
+            m_MarkerListView.columns.Add(new Column { name = k_ColMin, title = "Min",
+                width = COL_MIN, sortable = true, resizable = true,
+                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMin });
+            m_MarkerListView.columns.Add(new Column { name = k_ColMax, title = "Max",
+                width = COL_MAX, sortable = true, resizable = true,
+                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMax,
+                unbindCell = UnbindMarkerStyledCell });
+            m_MarkerListView.columns.Add(new Column { name = k_ColRange, title = "Range",
+                width = COL_RANGE, sortable = true, resizable = true,
+                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerRange });
+            m_MarkerListView.columns.Add(new Column { name = k_ColFirst, title = "First",
+                width = COL_FIRST, sortable = true, resizable = true,
+                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerFirst });
+
+            m_MarkerListView.itemsSource = m_FilteredGroups;
+
+            // Restore sort indicator before subscribing to avoid double-sort
+            RestoreMarkerSortIndicator();
+            m_MarkerListView.columnSortingChanged += OnMarkerColumnSortingChanged;
+            m_MarkerListView.selectionChanged += OnMarkerSelectionChanged;
+
+            left.Add(m_MarkerListView);
 
             return left;
         }
@@ -1181,76 +1214,6 @@ namespace GCAllocBreakdown.Editor
         // ═══════════════════════════════════════════════════
         //  SORTABLE COLUMN HEADERS — userData, no closures
         // ═══════════════════════════════════════════════════
-
-        VisualElement BuildMarkerHeaders()
-        {
-            var row = new VisualElement
-            {
-                style =
-                {
-                    flexDirection = FlexDirection.Row,
-                    alignItems = Align.Center,
-                    borderBottomWidth = 2,
-                    borderBottomColor = new Color(0.4f, 0.4f, 0.4f),
-                    paddingBottom = 3, paddingTop = 2,
-                    paddingLeft = 4, paddingRight = 4,
-                    flexShrink = 0
-                }
-            };
-
-            row.Add(MakeSortHeader("Allocation Site", 0, SortCol.Name, 1, "Method or call stack that triggered the GC allocation"));
-            row.Add(MakeSortHeader("Bytes", COL_BYTES, SortCol.Bytes, tip: "Total bytes allocated across all frames"));
-            row.Add(MakeSortHeader("Count", COL_COUNT, SortCol.Count, tip: "Total number of allocations"));
-            row.Add(MakeSortHeader("Avg", COL_AVG, SortCol.Avg, tip: "Average bytes per allocation"));
-            row.Add(MakeSortHeader("%", COL_PCT, SortCol.Pct, tip: "Percentage of total GC bytes"));
-            row.Add(MakeSortHeader("Median", COL_MEDIAN, SortCol.Median, tip: "Median bytes per frame"));
-            row.Add(MakeSortHeader("Mean", COL_MEAN, SortCol.Mean, tip: "Mean bytes per frame"));
-            row.Add(MakeSortHeader("Min", COL_MIN, SortCol.Min, tip: "Minimum bytes in a single frame"));
-            row.Add(MakeSortHeader("Max", COL_MAX, SortCol.Max, tip: "Maximum bytes in a single frame (spike)"));
-            row.Add(MakeSortHeader("Range", COL_RANGE, SortCol.Range, tip: "Max minus Min bytes per frame"));
-            row.Add(MakeSortHeader("First", COL_FIRST, SortCol.First, tip: "First frame this site allocated"));
-
-            return row;
-        }
-
-        Label MakeSortHeader(string text, float width, SortCol col, float grow = 0,
-            string tip = null)
-        {
-            string arrow = m_SortCol == col ? (m_SortAsc ? " ▲" : " ▼") : "";
-            var lbl = new Label(string.Concat(text, arrow))
-            {
-                style = { unityFontStyleAndWeight = FontStyle.Bold, fontSize = 11 },
-                userData = col
-            };
-            if (tip != null) lbl.tooltip = tip;
-            if (width > 0) lbl.style.width = width;
-            if (grow > 0) lbl.style.flexGrow = grow;
-
-            lbl.RegisterCallback<MouseEnterEvent>(OnSortHeaderEnter);
-            lbl.RegisterCallback<MouseLeaveEvent>(OnSortHeaderLeave);
-            lbl.RegisterCallback<ClickEvent>(OnSortHeaderClicked);
-            return lbl;
-        }
-
-        static void OnSortHeaderEnter(MouseEnterEvent evt)
-        {
-            ((VisualElement)evt.target).style.color = k_LinkBlue;
-        }
-
-        static void OnSortHeaderLeave(MouseLeaveEvent evt)
-        {
-            ((VisualElement)evt.target).style.color = StyleKeyword.Null;
-        }
-
-        void OnSortHeaderClicked(ClickEvent evt)
-        {
-            var col = (SortCol)((VisualElement)evt.target).userData;
-            if (m_SortCol == col) m_SortAsc = !m_SortAsc;
-            else { m_SortCol = col; m_SortAsc = false; }
-            SortAndRefresh();
-        }
-
-        // ═══════════════════════════════════════════════════
         //  RIGHT PANEL
         // ═══════════════════════════════════════════════════
 
@@ -1369,67 +1332,57 @@ namespace GCAllocBreakdown.Editor
                     borderTopColor = new Color(0.2f, 0.2f, 0.2f), paddingTop = 4 }
             });
 
-            m_AllocHeaderRow = BuildAllocHeaders();
-            siteFoldout.Add(m_AllocHeaderRow);
-
-            m_AllocListView = new ListView
+            m_AllocListView = new MultiColumnListView
             {
                 virtualizationMethod = CollectionVirtualizationMethod.FixedHeight,
                 fixedItemHeight = ALLOC_ROW_HEIGHT,
                 selectionType = SelectionType.Single,
                 showBorder = true,
+                sortingMode = ColumnSortingMode.Custom,
                 style = { flexGrow = 1, minHeight = 80 }
             };
-            m_AllocListView.makeItem = MakeAllocRow;
-            m_AllocListView.bindItem = BindAllocRow;
+
+            m_AllocListView.columns.Add(new Column { name = k_AllocColNum, title = "#",
+                width = ALLOC_COL_NUM, sortable = false, resizable = false,
+                makeCell = MakeAllocCellWithMenu, bindCell = BindAllocNum });
+            m_AllocListView.columns.Add(new Column { name = k_AllocColSize, title = "Size",
+                width = ALLOC_COL_SIZE, sortable = true, resizable = true,
+                makeCell = MakeAllocCellWithMenu, bindCell = BindAllocSize });
+            m_AllocListView.columns.Add(new Column { name = k_AllocColFrame, title = "Frame",
+                width = ALLOC_COL_FRAME, sortable = true, resizable = true,
+                makeCell = MakeAllocCellWithMenu, bindCell = BindAllocFrame });
+            m_AllocListView.columns.Add(new Column { name = k_AllocColThread, title = "Thread",
+                stretchable = true, sortable = false, resizable = true,
+                makeCell = MakeAllocThreadCell, bindCell = BindAllocThread });
+
             m_AllocListView.itemsSource = m_SelectedAllocations;
+            m_AllocListView.columnSortingChanged += OnAllocColumnSortingChanged;
             m_AllocListView.selectionChanged += OnAllocSelectionChanged;
             siteFoldout.Add(m_AllocListView);
 
             return right;
         }
 
-        VisualElement BuildAllocHeaders()
+        void OnAllocColumnSortingChanged()
         {
-            var row = new VisualElement
-            {
-                style = { flexDirection = FlexDirection.Row, paddingBottom = 2,
-                    borderBottomWidth = 1, borderBottomColor = new Color(0.3f, 0.3f, 0.3f),
-                    flexShrink = 0 }
-            };
-            row.Add(Lbl("#", ALLOC_COL_NUM, FontStyle.Bold));
-            row.Add(MakeAllocSortHeader("Size", ALLOC_COL_SIZE, AllocSortCol.Size));
-            row.Add(MakeAllocSortHeader("Frame", ALLOC_COL_FRAME, AllocSortCol.Frame));
-            row.Add(Lbl("Thread", 0, FontStyle.Bold, 1));
-            return row;
-        }
+            using var e = m_AllocListView.sortedColumns.GetEnumerator();
+            if (!e.MoveNext()) return;
+            var desc = e.Current;
 
-        Label MakeAllocSortHeader(string text, float width, AllocSortCol col)
-        {
-            string arrow = m_AllocSortCol == col ? (m_AllocSortAsc ? " ▲" : " ▼") : "";
-            var lbl = new Label(string.Concat(text, arrow))
+            m_AllocSortCol = desc.columnName switch
             {
-                style = { unityFontStyleAndWeight = FontStyle.Bold, fontSize = 11, width = width },
-                userData = col
+                k_AllocColSize  => AllocSortCol.Size,
+                k_AllocColFrame => AllocSortCol.Frame,
+                _               => m_AllocSortCol
             };
-            lbl.RegisterCallback<MouseEnterEvent>(OnSortHeaderEnter);
-            lbl.RegisterCallback<MouseLeaveEvent>(OnSortHeaderLeave);
-            lbl.RegisterCallback<ClickEvent>(OnAllocSortHeaderClicked);
-            return lbl;
-        }
+            m_AllocSortAsc = desc.direction == SortDirection.Ascending;
 
-        void OnAllocSortHeaderClicked(ClickEvent evt)
-        {
-            var col = (AllocSortCol)((VisualElement)evt.target).userData;
-            if (m_AllocSortCol == col) m_AllocSortAsc = !m_AllocSortAsc;
-            else { m_AllocSortCol = col; m_AllocSortAsc = false; }
             SortAllocsAndRefresh();
         }
 
         void SortAllocsAndRefresh()
         {
             SortAllocsInPlace();
-            ReplaceAllocHeaders();
             m_AllocListView.RefreshItems();
         }
 
@@ -1446,16 +1399,6 @@ namespace GCAllocBreakdown.Editor
                     m_SelectedAllocations.Sort((a, b) => dir * a.FrameIndex.CompareTo(b.FrameIndex));
                     break;
             }
-        }
-
-        void ReplaceAllocHeaders()
-        {
-            if (m_AllocHeaderRow == null) return;
-            var parent = m_AllocHeaderRow.parent;
-            int idx = parent.IndexOf(m_AllocHeaderRow);
-            parent.Remove(m_AllocHeaderRow);
-            m_AllocHeaderRow = BuildAllocHeaders();
-            parent.Insert(idx, m_AllocHeaderRow);
         }
 
         VisualElement BuildStatusBar()
@@ -2062,17 +2005,7 @@ namespace GCAllocBreakdown.Editor
         void SortAndRefresh()
         {
             SortInPlace();
-            ReplaceMarkerHeaders();
             RefreshMarkerListView();
-        }
-
-        void ReplaceMarkerHeaders()
-        {
-            var parent = m_MarkerHeaderRow.parent;
-            int idx = parent.IndexOf(m_MarkerHeaderRow);
-            parent.Remove(m_MarkerHeaderRow);
-            m_MarkerHeaderRow = BuildMarkerHeaders();
-            parent.Insert(idx, m_MarkerHeaderRow);
         }
 
         void RefreshMarkerListView()
@@ -2081,66 +2014,177 @@ namespace GCAllocBreakdown.Editor
             m_MarkerListView.Rebuild();
         }
 
-        // ═══════════════════════════════════════════════════
-        //  MARKER LIST — VIRTUALIZED, no allocs in bind
-        // ═══════════════════════════════════════════════════
-
-        VisualElement MakeMarkerRow()
+        void OnMarkerColumnSortingChanged()
         {
-            var row = new VisualElement
+            using var e = m_MarkerListView.sortedColumns.GetEnumerator();
+            if (!e.MoveNext()) return;
+            var desc = e.Current;
+
+            m_SortCol = desc.columnName switch
             {
-                style = { flexDirection = FlexDirection.Row, alignItems = Align.Center,
-                    paddingLeft = 4, paddingRight = 4 }
+                k_ColSite   => SortCol.Name,
+                k_ColBytes  => SortCol.Bytes,
+                k_ColCount  => SortCol.Count,
+                k_ColAvg    => SortCol.Avg,
+                k_ColPct    => SortCol.Pct,
+                k_ColMedian => SortCol.Median,
+                k_ColMean   => SortCol.Mean,
+                k_ColMin    => SortCol.Min,
+                k_ColMax    => SortCol.Max,
+                k_ColRange  => SortCol.Range,
+                k_ColFirst  => SortCol.First,
+                _           => m_SortCol
             };
+            m_SortAsc = desc.direction == SortDirection.Ascending;
 
-            row.Add(new Label { name = "site", style = { flexGrow = 1, minWidth = 200, fontSize = 11,
-                overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } });
-            row.Add(new Label { name = "bytes", style = { width = COL_BYTES, fontSize = 11 } });
-            row.Add(new Label { name = "count", style = { width = COL_COUNT, fontSize = 11 } });
-            row.Add(new Label { name = "avg", style = { width = COL_AVG, fontSize = 11 } });
-            row.Add(new Label { name = "pct", style = { width = COL_PCT, fontSize = 11 } });
-            row.Add(new Label { name = "median", style = { width = COL_MEDIAN, fontSize = 11 } });
-            row.Add(new Label { name = "mean", style = { width = COL_MEAN, fontSize = 11 } });
-            row.Add(new Label { name = "min", style = { width = COL_MIN, fontSize = 11 } });
-            row.Add(new Label { name = "max", style = { width = COL_MAX, fontSize = 11 } });
-            row.Add(new Label { name = "range", style = { width = COL_RANGE, fontSize = 11 } });
-            row.Add(new Label { name = "first", style = { width = COL_FIRST, fontSize = 11 } });
-
-            row.AddManipulator(new ContextualMenuManipulator(OnMarkerRowContextMenu));
-
-            return row;
+            SortInPlace();
+            RefreshMarkerListView();
         }
 
-        void BindMarkerRow(VisualElement el, int index)
+        void RestoreMarkerSortIndicator()
+        {
+            string colName = m_SortCol switch
+            {
+                SortCol.Name   => k_ColSite,
+                SortCol.Bytes  => k_ColBytes,
+                SortCol.Count  => k_ColCount,
+                SortCol.Avg    => k_ColAvg,
+                SortCol.Pct    => k_ColPct,
+                SortCol.Median => k_ColMedian,
+                SortCol.Mean   => k_ColMean,
+                SortCol.Min    => k_ColMin,
+                SortCol.Max    => k_ColMax,
+                SortCol.Range  => k_ColRange,
+                SortCol.First  => k_ColFirst,
+                _              => k_ColBytes
+            };
+
+            var dir = m_SortAsc ? SortDirection.Ascending : SortDirection.Descending;
+            m_MarkerListView.sortColumnDescriptions.Clear();
+            m_MarkerListView.sortColumnDescriptions.Add(
+                new SortColumnDescription { columnName = colName, direction = dir });
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  MARKER LIST — MULTI-COLUMN, no allocs in bind
+        // ═══════════════════════════════════════════════════
+
+        VisualElement MakeMarkerSiteCell()
+        {
+            var lbl = new Label { style = { fontSize = 11, overflow = Overflow.Hidden,
+                textOverflow = TextOverflow.Ellipsis } };
+            lbl.AddManipulator(new ContextualMenuManipulator(OnMarkerRowContextMenu));
+            return lbl;
+        }
+
+        VisualElement MakeMarkerCellWithMenu()
+        {
+            var lbl = new Label { style = { fontSize = 11 } };
+            lbl.AddManipulator(new ContextualMenuManipulator(OnMarkerRowContextMenu));
+            return lbl;
+        }
+
+        void BindMarkerSite(VisualElement cell, int index)
         {
             if (index < 0 || index >= m_FilteredGroups.Count) return;
             var g = m_FilteredGroups[index];
-            el.userData = g;
+            var lbl = (Label)cell;
+            lbl.text = g.DisplayName;
+            lbl.tooltip = g.DisplayName;
+            lbl.userData = g;
+        }
 
-            var bytesLbl = el.Q<Label>("bytes");
-            bytesLbl.text = g.FormattedBytes;
-            bytesLbl.style.color = g.TotalBytes >= 10240 ? k_Red
+        void BindMarkerBytes(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_FilteredGroups.Count) return;
+            var g = m_FilteredGroups[index];
+            var lbl = (Label)cell;
+            lbl.text = g.FormattedBytes;
+            lbl.style.color = g.TotalBytes >= 10240 ? k_Red
                 : g.TotalBytes >= 1024 ? k_Yellow : k_DimGray;
-            bytesLbl.style.unityFontStyleAndWeight = FontStyle.Bold;
+            lbl.style.unityFontStyleAndWeight = FontStyle.Bold;
+            lbl.userData = g;
+        }
 
-            el.Q<Label>("count").text = g.FormattedCount;
-            el.Q<Label>("avg").text = g.FormattedAvg;
-            el.Q<Label>("pct").text = g.FormattedPct;
-            el.Q<Label>("median").text = g.FormattedMedian;
-            el.Q<Label>("mean").text = g.FormattedMean;
-            el.Q<Label>("min").text = g.FormattedMin;
+        void BindMarkerCount(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_FilteredGroups.Count) return;
+            var lbl = (Label)cell;
+            lbl.text = m_FilteredGroups[index].FormattedCount;
+            lbl.userData = m_FilteredGroups[index];
+        }
 
-            var maxLbl = el.Q<Label>("max");
-            maxLbl.text = g.FormattedMax;
-            maxLbl.style.color = g.MaxBytesPerFrame >= 10240 ? k_Red
+        void BindMarkerAvg(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_FilteredGroups.Count) return;
+            var lbl = (Label)cell;
+            lbl.text = m_FilteredGroups[index].FormattedAvg;
+            lbl.userData = m_FilteredGroups[index];
+        }
+
+        void BindMarkerPct(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_FilteredGroups.Count) return;
+            var lbl = (Label)cell;
+            lbl.text = m_FilteredGroups[index].FormattedPct;
+            lbl.userData = m_FilteredGroups[index];
+        }
+
+        void BindMarkerMedian(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_FilteredGroups.Count) return;
+            var lbl = (Label)cell;
+            lbl.text = m_FilteredGroups[index].FormattedMedian;
+            lbl.userData = m_FilteredGroups[index];
+        }
+
+        void BindMarkerMean(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_FilteredGroups.Count) return;
+            var lbl = (Label)cell;
+            lbl.text = m_FilteredGroups[index].FormattedMean;
+            lbl.userData = m_FilteredGroups[index];
+        }
+
+        void BindMarkerMin(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_FilteredGroups.Count) return;
+            var lbl = (Label)cell;
+            lbl.text = m_FilteredGroups[index].FormattedMin;
+            lbl.userData = m_FilteredGroups[index];
+        }
+
+        void BindMarkerMax(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_FilteredGroups.Count) return;
+            var g = m_FilteredGroups[index];
+            var lbl = (Label)cell;
+            lbl.text = g.FormattedMax;
+            lbl.style.color = g.MaxBytesPerFrame >= 10240 ? k_Red
                 : g.MaxBytesPerFrame >= 1024 ? k_Yellow : k_DimGray;
+            lbl.userData = g;
+        }
 
-            el.Q<Label>("range").text = g.FormattedRange;
-            el.Q<Label>("first").text = g.FormattedFirst;
+        void BindMarkerRange(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_FilteredGroups.Count) return;
+            var lbl = (Label)cell;
+            lbl.text = m_FilteredGroups[index].FormattedRange;
+            lbl.userData = m_FilteredGroups[index];
+        }
 
-            var siteLbl = el.Q<Label>("site");
-            siteLbl.text = g.DisplayName;
-            siteLbl.tooltip = g.DisplayName;
+        void BindMarkerFirst(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_FilteredGroups.Count) return;
+            var lbl = (Label)cell;
+            lbl.text = m_FilteredGroups[index].FormattedFirst;
+            lbl.userData = m_FilteredGroups[index];
+        }
+
+        static void UnbindMarkerStyledCell(VisualElement cell, int index)
+        {
+            cell.style.color = StyleKeyword.Null;
+            cell.style.unityFontStyleAndWeight = StyleKeyword.Null;
         }
 
         void OnMarkerRowContextMenu(ContextualMenuPopulateEvent evt)
@@ -2572,35 +2616,58 @@ namespace GCAllocBreakdown.Editor
         //  ALLOC LIST — VIRTUALIZED, pre-computed strings
         // ═══════════════════════════════════════════════════
 
-        VisualElement MakeAllocRow()
+        // ═══════════════════════════════════════════════════
+        //  ALLOC LIST — MULTI-COLUMN, no allocs in bind
+        // ═══════════════════════════════════════════════════
+
+        VisualElement MakeAllocCellWithMenu()
         {
-            var row = new VisualElement
-            {
-                style = { flexDirection = FlexDirection.Row, alignItems = Align.Center,
-                    paddingLeft = 2, paddingRight = 2 }
-            };
-            row.Add(new Label { name = "num", style = { width = ALLOC_COL_NUM, fontSize = 11 } });
-            row.Add(new Label { name = "size", style = { width = ALLOC_COL_SIZE, fontSize = 11 } });
-            row.Add(new Label { name = "frame", style = { width = ALLOC_COL_FRAME, fontSize = 11 } });
-            row.Add(new Label { name = "thread", style = { flexGrow = 1, fontSize = 11,
-                overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } });
-            row.AddManipulator(new ContextualMenuManipulator(OnAllocRowContextMenu));
-            return row;
+            var lbl = new Label { style = { fontSize = 11 } };
+            lbl.AddManipulator(new ContextualMenuManipulator(OnAllocRowContextMenu));
+            return lbl;
         }
 
-        void BindAllocRow(VisualElement el, int index)
+        VisualElement MakeAllocThreadCell()
+        {
+            var lbl = new Label { style = { fontSize = 11, overflow = Overflow.Hidden,
+                textOverflow = TextOverflow.Ellipsis } };
+            lbl.AddManipulator(new ContextualMenuManipulator(OnAllocRowContextMenu));
+            return lbl;
+        }
+
+        void BindAllocNum(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_SelectedAllocations.Count) return;
+            var lbl = (Label)cell;
+            lbl.text = (index + 1).ToString();
+            lbl.userData = m_SelectedAllocations[index];
+        }
+
+        void BindAllocSize(VisualElement cell, int index)
         {
             if (index < 0 || index >= m_SelectedAllocations.Count) return;
             var a = m_SelectedAllocations[index];
-            el.userData = a;
+            var lbl = (Label)cell;
+            lbl.text = a.FormattedBytes;
+            lbl.userData = a;
+        }
 
-            // index+1 display — avoid ToString in hot path by pre-checking
-            // (ListView only binds visible rows so this is acceptable)
-            el.Q<Label>("num").text = (index + 1).ToString();
-            el.Q<Label>("size").text = a.FormattedBytes;
-            el.Q<Label>("frame").text = a.FormattedFrame;
-            el.Q<Label>("thread").text = a.ThreadDisplayName;
-            el.tooltip = a.HierarchyPath;
+        void BindAllocFrame(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_SelectedAllocations.Count) return;
+            var lbl = (Label)cell;
+            lbl.text = m_SelectedAllocations[index].FormattedFrame;
+            lbl.userData = m_SelectedAllocations[index];
+        }
+
+        void BindAllocThread(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_SelectedAllocations.Count) return;
+            var a = m_SelectedAllocations[index];
+            var lbl = (Label)cell;
+            lbl.text = a.ThreadDisplayName;
+            lbl.tooltip = a.HierarchyPath;
+            lbl.userData = a;
         }
 
         void OnAllocRowContextMenu(ContextualMenuPopulateEvent evt)
@@ -3043,17 +3110,6 @@ namespace GCAllocBreakdown.Editor
                 m_SharedSB.Append(stack[i].Name);
             }
             return m_SharedSB.ToString();
-        }
-
-        static Label Lbl(string text, float width, FontStyle font = FontStyle.Normal, float grow = 0)
-        {
-            var lbl = new Label(text)
-            {
-                style = { unityFontStyleAndWeight = font, fontSize = 11 }
-            };
-            if (width > 0) lbl.style.width = width;
-            if (grow > 0) lbl.style.flexGrow = grow;
-            return lbl;
         }
 
         // ═══════════════════════════════════════════════════
