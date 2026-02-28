@@ -60,8 +60,8 @@ Each task below is self-contained. I've listed what files/methods change, what's
 
 **What changes:**
 - `BuildToolbar()`: Add **Save** and **Load** buttons after the Analyze button
-- Save handler: `EditorJsonUtility.ToJson(snapshot)` → `EditorUtility.SaveFilePanel` → `File.WriteAllText`
-- Load handler: `EditorUtility.OpenFilePanel` → `File.ReadAllText` → `EditorJsonUtility.FromJson` → rebuild groupings from loaded snapshot → refresh UI
+- Save handler: `JsonUtility.ToJson(snapshot)` → `EditorUtility.SaveFilePanel` → `File.WriteAllText` (use `JsonUtility`, not `EditorJsonUtility` — the snapshot is a plain `[Serializable]` class, not a `UnityEngine.Object`)
+- Load handler: `EditorUtility.OpenFilePanel` → `File.ReadAllText` → `JsonUtility.FromJson<AnalysisSnapshot>` → rebuild groupings from loaded snapshot → refresh UI
 - `AnalysisSnapshot` must be `[Serializable]` with all nested types also serializable (already the case for `RawAllocation` and `ResolvedFrame`; `CallsiteGroup` needs `[Serializable]`)
 
 **What doesn't change:** Analysis logic, filter logic, UI layout.
@@ -106,10 +106,10 @@ Each task below is self-contained. I've listed what files/methods change, what's
 - New UI section between the filters foldout and the marker list header
 - A custom `VisualElement` (or a container of thin vertical bars) drawn from `PerFrameBytes[]`
 - Bar height proportional to max allocation in the range
-- Color coding: bars above a threshold (e.g., 1 KB) in yellow/red
+- Single bar color matching Unity Profile Analyzer's style — relative heights communicate spikes
 - Click on a bar → select that frame in the Profiler (`SelectInCpuModule` with the frame index)
 - When a `CallsiteGroup` is selected in the marker list, overlay a second color showing that group's per-frame contribution
-- Reasonable height (~80–100px), collapsible via a foldout or toggle
+- Reasonable height, collapsible via a foldout or toggle
 
 **What doesn't change:** Right panel, toolbar, filter logic.
 
@@ -149,22 +149,19 @@ Each task below is self-contained. I've listed what files/methods change, what's
 
 ---
 
-### Task 6: Marker Summary Enrichment
+### Task 6: Per-Frame Stats Columns
 
-**Goal:** Make the right-panel "Selected Allocation Site" section much richer, approaching Profile Analyzer's Marker Summary.
+**Goal:** Surface per-frame statistics as sortable columns in the marker table, matching Profile Analyzer's style.
 
-**What changes to `UpdateMarkerSummary()`:**
-- Add **First Frame** display: `"First seen: frame {FirstFrame}"` (from Task 3 data)
-- Add **Min/Max Allocation** with clickable frame links:
-  - `"Min: {MinBytesPerFrame} (frame {MinFrame})"` — click jumps to Profiler
-  - `"Max: {MaxBytesPerFrame} (frame {MaxFrame})"` — click jumps to Profiler
-- Add **Top 3 Worst Frames** section: the 3 frames with highest bytes for this site, clickable
-- Add **Per-Frame Stats** display: `"Median/Frame: X | Mean/Frame: Y | Range: Z"`
-- Optionally: a simple inline distribution visualization (a row of small colored boxes representing quartile ranges)
+**What changes:**
+- Add sortable columns to the marker MultiColumnListView: **Median**, **Mean**, **Min**, **Max**, **Range**, **First**
+- Per-frame stats computed during grouping (from Task 3 data), displayed as pre-formatted strings
+- Columns sortable like existing columns (Bytes, Count, Avg, %, Name)
+- Column header tooltips for clarity
 
-**What doesn't change:** Call stack display, individual allocations list (those stay as-is).
+**What doesn't change:** Right panel (call stack, individual allocations list, marker stats label). No clickable frame navigation or per-marker detail enrichment.
 
-**Definition of done:** Selecting a marker shows First Frame, Min/Max with clickable frame links, Top 3 worst frames, and per-frame statistics in the right panel.
+**Definition of done:** Marker table has 6 new sortable columns showing per-frame statistics. Users can sort all markers by any stat to find spikiest, most variable, etc.
 
 ---
 

@@ -53,7 +53,6 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_DimGray = new(0.7f, 0.7f, 0.7f);
         static readonly Color k_TopFrame = new(0.9f, 0.9f, 0.6f);
         static readonly Color k_CallerFrame = new(0.55f, 0.55f, 0.55f);
-        static readonly Color k_LinkBlue = new(0.4f, 0.7f, 1f);
         static readonly Color k_SubtleText = new(0.5f, 0.5f, 0.5f);
         static readonly Color k_HoverBg = new(0.3f, 0.3f, 0.3f);
         static readonly Color k_GraphBg = new(0.1f, 0.1f, 0.1f);
@@ -111,7 +110,7 @@ namespace GCAllocBreakdown.Editor
         bool m_AllocSortAsc;
 
         // Loaded snapshot — Profiler sync is invalid for loaded snapshots
-        bool m_IsLoadedSnapshot;
+        [SerializeField] bool m_IsLoadedSnapshot;
 
         // ═══════════════════════════════════════════════════
         //  SORT
@@ -151,6 +150,8 @@ namespace GCAllocBreakdown.Editor
 
         // Grouping work buffers
         readonly Dictionary<string, CallsiteGroup> m_GroupingDict = new(256);
+        // Shared scratch buffer — used by ComputePerFrameStats and UpdateGraphOverlay.
+        // Safe: single-threaded, never called concurrently. Do not use from async paths.
         long[] m_PerFrameBuffer;
 
         // Graph bucketing buffers
@@ -158,11 +159,6 @@ namespace GCAllocBreakdown.Editor
         long[] m_GraphOverlayBuckets;
         int m_GraphBucketCount;
         int m_GraphFramesPerBucket;
-
-        // Filter state cache (to detect actual changes)
-        string m_LastNameFilter = "";
-        string m_LastExcludeFilter = "";
-        int m_LastSelectedThreadCount = -1;
 
         // ═══════════════════════════════════════════════════
         //  PROFILER — lazy, only resolved on selection
@@ -251,6 +247,9 @@ namespace GCAllocBreakdown.Editor
             RestoreMarkerSortIndicator();
             m_SaveBtn?.SetEnabled(true);
             m_ExportBtn?.SetEnabled(true);
+
+            if (m_IsLoadedSnapshot)
+                m_LoadedSnapshotLabel.style.display = DisplayStyle.Flex;
         }
 
         // ═══════════════════════════════════════════════════
@@ -1212,8 +1211,6 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
-        //  SORTABLE COLUMN HEADERS — userData, no closures
-        // ═══════════════════════════════════════════════════
         //  RIGHT PANEL
         // ═══════════════════════════════════════════════════
 
@@ -1386,19 +1383,22 @@ namespace GCAllocBreakdown.Editor
             m_AllocListView.RefreshItems();
         }
 
+        static int CmpAllocSizeAsc(RawAllocation a, RawAllocation b) => a.Bytes.CompareTo(b.Bytes);
+        static int CmpAllocSizeDesc(RawAllocation a, RawAllocation b) => b.Bytes.CompareTo(a.Bytes);
+        static int CmpAllocFrameAsc(RawAllocation a, RawAllocation b) => a.FrameIndex.CompareTo(b.FrameIndex);
+        static int CmpAllocFrameDesc(RawAllocation a, RawAllocation b) => b.FrameIndex.CompareTo(a.FrameIndex);
+
         void SortAllocsInPlace()
         {
             if (m_SelectedAllocations == null || m_SelectedAllocations.Count == 0) return;
-            int dir = m_AllocSortAsc ? 1 : -1;
-            switch (m_AllocSortCol)
+            m_SelectedAllocations.Sort((m_AllocSortCol, m_AllocSortAsc) switch
             {
-                case AllocSortCol.Size:
-                    m_SelectedAllocations.Sort((a, b) => dir * a.Bytes.CompareTo(b.Bytes));
-                    break;
-                case AllocSortCol.Frame:
-                    m_SelectedAllocations.Sort((a, b) => dir * a.FrameIndex.CompareTo(b.FrameIndex));
-                    break;
-            }
+                (AllocSortCol.Size, true)   => CmpAllocSizeAsc,
+                (AllocSortCol.Size, false)  => CmpAllocSizeDesc,
+                (AllocSortCol.Frame, true)  => CmpAllocFrameAsc,
+                (AllocSortCol.Frame, false) => CmpAllocFrameDesc,
+                _                           => CmpAllocSizeDesc
+            });
         }
 
         VisualElement BuildStatusBar()
@@ -1750,14 +1750,20 @@ namespace GCAllocBreakdown.Editor
 
         void BuildThreadIndex(List<CallsiteGroup> groups)
         {
-            m_GroupThreadIndex.Clear();
+            // Clear existing sets for reuse instead of allocating new ones
+            foreach (var kv in m_GroupThreadIndex)
+                kv.Value.Clear();
+
             for (int i = 0; i < groups.Count; i++)
             {
                 var g = groups[i];
-                var threads = new HashSet<string>();
+                if (!m_GroupThreadIndex.TryGetValue(g.Key, out var threads))
+                {
+                    threads = new HashSet<string>();
+                    m_GroupThreadIndex[g.Key] = threads;
+                }
                 for (int j = 0; j < g.Allocations.Count; j++)
                     threads.Add(g.Allocations[j].ThreadDisplayName);
-                m_GroupThreadIndex[g.Key] = threads;
             }
         }
 
@@ -1889,15 +1895,18 @@ namespace GCAllocBreakdown.Editor
             int frameCount = m_Snapshot.FrameEnd - m_Snapshot.FrameStart + 1;
             if (frameCount <= 0) { m_Snapshot.PerFrameBytes = null; return; }
 
-            var perFrame = new long[frameCount];
+            if (m_Snapshot.PerFrameBytes == null || m_Snapshot.PerFrameBytes.Length < frameCount)
+                m_Snapshot.PerFrameBytes = new long[frameCount];
+            else
+                Array.Clear(m_Snapshot.PerFrameBytes, 0, frameCount);
+
             for (int i = 0; i < m_Snapshot.RawAllocations.Count; i++)
             {
                 var alloc = m_Snapshot.RawAllocations[i];
                 int idx = alloc.FrameIndex - m_Snapshot.FrameStart;
                 if (idx >= 0 && idx < frameCount)
-                    perFrame[idx] += alloc.Bytes;
+                    m_Snapshot.PerFrameBytes[idx] += alloc.Bytes;
             }
-            m_Snapshot.PerFrameBytes = perFrame;
         }
 
         // ═══════════════════════════════════════════════════
@@ -1955,51 +1964,51 @@ namespace GCAllocBreakdown.Editor
             return false;
         }
 
+        // Static sort comparisons — pre-allocated to avoid closure allocations on every sort
+        static int CmpBytesAsc(CallsiteGroup a, CallsiteGroup b) => a.TotalBytes.CompareTo(b.TotalBytes);
+        static int CmpBytesDesc(CallsiteGroup a, CallsiteGroup b) => b.TotalBytes.CompareTo(a.TotalBytes);
+        static int CmpCountAsc(CallsiteGroup a, CallsiteGroup b) => a.Count.CompareTo(b.Count);
+        static int CmpCountDesc(CallsiteGroup a, CallsiteGroup b) => b.Count.CompareTo(a.Count);
+        static int CmpAvgAsc(CallsiteGroup a, CallsiteGroup b)
+        { long aa = a.TotalBytes / Math.Max(1, a.Count), bb = b.TotalBytes / Math.Max(1, b.Count); return aa.CompareTo(bb); }
+        static int CmpAvgDesc(CallsiteGroup a, CallsiteGroup b)
+        { long aa = a.TotalBytes / Math.Max(1, a.Count), bb = b.TotalBytes / Math.Max(1, b.Count); return bb.CompareTo(aa); }
+        static int CmpPctAsc(CallsiteGroup a, CallsiteGroup b) => a.Percentage.CompareTo(b.Percentage);
+        static int CmpPctDesc(CallsiteGroup a, CallsiteGroup b) => b.Percentage.CompareTo(a.Percentage);
+        static int CmpMedianAsc(CallsiteGroup a, CallsiteGroup b) => a.MedianBytesPerFrame.CompareTo(b.MedianBytesPerFrame);
+        static int CmpMedianDesc(CallsiteGroup a, CallsiteGroup b) => b.MedianBytesPerFrame.CompareTo(a.MedianBytesPerFrame);
+        static int CmpMeanAsc(CallsiteGroup a, CallsiteGroup b) => a.MeanBytesPerFrame.CompareTo(b.MeanBytesPerFrame);
+        static int CmpMeanDesc(CallsiteGroup a, CallsiteGroup b) => b.MeanBytesPerFrame.CompareTo(a.MeanBytesPerFrame);
+        static int CmpMinAsc(CallsiteGroup a, CallsiteGroup b) => a.MinBytesPerFrame.CompareTo(b.MinBytesPerFrame);
+        static int CmpMinDesc(CallsiteGroup a, CallsiteGroup b) => b.MinBytesPerFrame.CompareTo(a.MinBytesPerFrame);
+        static int CmpMaxAsc(CallsiteGroup a, CallsiteGroup b) => a.MaxBytesPerFrame.CompareTo(b.MaxBytesPerFrame);
+        static int CmpMaxDesc(CallsiteGroup a, CallsiteGroup b) => b.MaxBytesPerFrame.CompareTo(a.MaxBytesPerFrame);
+        static int CmpRangeAsc(CallsiteGroup a, CallsiteGroup b) => a.RangeBytesPerFrame.CompareTo(b.RangeBytesPerFrame);
+        static int CmpRangeDesc(CallsiteGroup a, CallsiteGroup b) => b.RangeBytesPerFrame.CompareTo(a.RangeBytesPerFrame);
+        static int CmpFirstAsc(CallsiteGroup a, CallsiteGroup b) => a.FirstFrame.CompareTo(b.FirstFrame);
+        static int CmpFirstDesc(CallsiteGroup a, CallsiteGroup b) => b.FirstFrame.CompareTo(a.FirstFrame);
+        static int CmpNameAsc(CallsiteGroup a, CallsiteGroup b) => string.Compare(a.DisplayName, b.DisplayName, StringComparison.Ordinal);
+        static int CmpNameDesc(CallsiteGroup a, CallsiteGroup b) => string.Compare(b.DisplayName, a.DisplayName, StringComparison.Ordinal);
+
         void SortInPlace()
         {
-            int dir = m_SortAsc ? 1 : -1;
-            switch (m_SortCol)
+            m_FilteredGroups.Sort(m_SortAsc ? m_SortCol switch
             {
-                case SortCol.Bytes:
-                    m_FilteredGroups.Sort((a, b) => dir * a.TotalBytes.CompareTo(b.TotalBytes));
-                    break;
-                case SortCol.Count:
-                    m_FilteredGroups.Sort((a, b) => dir * a.Count.CompareTo(b.Count));
-                    break;
-                case SortCol.Avg:
-                    m_FilteredGroups.Sort((a, b) =>
-                    {
-                        long aa = a.TotalBytes / Math.Max(1, a.Count);
-                        long bb = b.TotalBytes / Math.Max(1, b.Count);
-                        return dir * aa.CompareTo(bb);
-                    });
-                    break;
-                case SortCol.Pct:
-                    m_FilteredGroups.Sort((a, b) => dir * a.Percentage.CompareTo(b.Percentage));
-                    break;
-                case SortCol.Median:
-                    m_FilteredGroups.Sort((a, b) => dir * a.MedianBytesPerFrame.CompareTo(b.MedianBytesPerFrame));
-                    break;
-                case SortCol.Mean:
-                    m_FilteredGroups.Sort((a, b) => dir * a.MeanBytesPerFrame.CompareTo(b.MeanBytesPerFrame));
-                    break;
-                case SortCol.Min:
-                    m_FilteredGroups.Sort((a, b) => dir * a.MinBytesPerFrame.CompareTo(b.MinBytesPerFrame));
-                    break;
-                case SortCol.Max:
-                    m_FilteredGroups.Sort((a, b) => dir * a.MaxBytesPerFrame.CompareTo(b.MaxBytesPerFrame));
-                    break;
-                case SortCol.Range:
-                    m_FilteredGroups.Sort((a, b) => dir * a.RangeBytesPerFrame.CompareTo(b.RangeBytesPerFrame));
-                    break;
-                case SortCol.First:
-                    m_FilteredGroups.Sort((a, b) => dir * a.FirstFrame.CompareTo(b.FirstFrame));
-                    break;
-                case SortCol.Name:
-                    m_FilteredGroups.Sort((a, b) =>
-                        dir * string.Compare(a.DisplayName, b.DisplayName, StringComparison.Ordinal));
-                    break;
-            }
+                SortCol.Bytes  => CmpBytesAsc,  SortCol.Count  => CmpCountAsc,
+                SortCol.Avg    => CmpAvgAsc,     SortCol.Pct    => CmpPctAsc,
+                SortCol.Median => CmpMedianAsc,  SortCol.Mean   => CmpMeanAsc,
+                SortCol.Min    => CmpMinAsc,      SortCol.Max    => CmpMaxAsc,
+                SortCol.Range  => CmpRangeAsc,   SortCol.First  => CmpFirstAsc,
+                SortCol.Name   => CmpNameAsc,    _              => CmpBytesAsc
+            } : m_SortCol switch
+            {
+                SortCol.Bytes  => CmpBytesDesc,  SortCol.Count  => CmpCountDesc,
+                SortCol.Avg    => CmpAvgDesc,     SortCol.Pct    => CmpPctDesc,
+                SortCol.Median => CmpMedianDesc,  SortCol.Mean   => CmpMeanDesc,
+                SortCol.Min    => CmpMinDesc,      SortCol.Max    => CmpMaxDesc,
+                SortCol.Range  => CmpRangeDesc,   SortCol.First  => CmpFirstDesc,
+                SortCol.Name   => CmpNameDesc,    _              => CmpBytesDesc
+            });
         }
 
         void SortAndRefresh()
@@ -2463,7 +2472,6 @@ namespace GCAllocBreakdown.Editor
                 m_MarkerSourceLabel.text = "";
 
             // Stats
-            long avg = group.TotalBytes / Math.Max(1, group.Count);
             m_SharedSB.Clear();
             m_SharedSB.Append("Total: "); m_SharedSB.Append(group.FormattedBytes);
             m_SharedSB.Append("    Count: "); m_SharedSB.Append(group.FormattedCount);
@@ -2611,10 +2619,6 @@ namespace GCAllocBreakdown.Editor
             m_AllocListView.itemsSource = m_SelectedAllocations;
             m_AllocListView.Rebuild();
         }
-
-        // ═══════════════════════════════════════════════════
-        //  ALLOC LIST — VIRTUALIZED, pre-computed strings
-        // ═══════════════════════════════════════════════════
 
         // ═══════════════════════════════════════════════════
         //  ALLOC LIST — MULTI-COLUMN, no allocs in bind
