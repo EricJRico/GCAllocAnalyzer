@@ -274,7 +274,7 @@ namespace GCAllocBreakdown.Editor
                             if (m_FrameBuf.Count > 0)
                             {
                                 key = BuildKey(m_FrameBuf);
-                                display = FormatTopFrame(m_FrameBuf[0]);
+                                display = GCAllocUtils.FormatTopFrame(m_FrameBuf[0]);
                                 stackCopy = new List<ResolvedFrame>(m_FrameBuf.Count);
                                 for (int fc = 0; fc < m_FrameBuf.Count; fc++)
                                     stackCopy.Add(m_FrameBuf[fc]);
@@ -312,9 +312,9 @@ namespace GCAllocBreakdown.Editor
             for (int i = 0; i < groups.Count; i++)
             {
                 var g = groups[i];
-                g.FormattedBytes = FormatBytes(g.TotalBytes);
+                g.FormattedBytes = GCAllocUtils.FormatBytes(g.TotalBytes);
                 g.FormattedCount = string.Concat(g.Count.ToString(), "x");
-                g.FormattedAvg = FormatBytes(g.TotalBytes / Math.Max(1, g.Count));
+                g.FormattedAvg = GCAllocUtils.FormatBytes(g.TotalBytes / Math.Max(1, g.Count));
 
                 if (g.CallStack != null && g.CallStack.Count > 0)
                 {
@@ -341,7 +341,7 @@ namespace GCAllocBreakdown.Editor
                 TotalBytes = totalBytes,
                 TotalCount = totalCount,
                 HadCallStacks = anyCS,
-                FormattedSummaryBytes = FormatBytes(totalBytes)
+                FormattedSummaryBytes = GCAllocUtils.FormatBytes(totalBytes)
             };
         }
 
@@ -363,7 +363,7 @@ namespace GCAllocBreakdown.Editor
         {
             var d = m_ActiveFrame;
             m_SB.Clear();
-            m_SB.Append("Frame "); m_SB.Append(frameIndex);
+            m_SB.Append("Frame "); m_SB.Append(GCAllocUtils.DisplayFrame(frameIndex));
             m_SB.Append(":  "); m_SB.Append(d.FormattedSummaryBytes);
             m_SB.Append("  across "); m_SB.Append(d.TotalCount);
             m_SB.Append(" alloc(s) in "); m_SB.Append(d.Groups.Count);
@@ -658,43 +658,11 @@ namespace GCAllocBreakdown.Editor
         //  FORMATTING
         // ═══════════════════════════════════════════════════
 
-        static string FormatBytes(long bytes)
-        {
-            if (bytes >= 1024 * 1024)
-                return string.Concat((bytes / (1024f * 1024f)).ToString("F1"), " MB");
-            if (bytes >= 1024)
-                return string.Concat((bytes / 1024f).ToString("F1"), " KB");
-            return string.Concat(bytes.ToString(), " B");
-        }
-
-        static string StripAssembly(string raw)
-        {
-            int bang = raw != null ? raw.IndexOf('!') : -1;
-            string result = bang >= 0 ? raw.Substring(bang + 1) : raw ?? "";
-            if (result.Length > 2 && result[0] == ':' && result[1] == ':')
-                result = result.Substring(2);
-            return result;
-        }
-
-        static string FormatTopFrame(ResolvedFrame frame)
-        {
-            string name = StripAssembly(frame.RawMethodName);
-
-            if (!string.IsNullOrEmpty(frame.SourceFile))
-            {
-                string fn = Path.GetFileName(frame.SourceFile);
-                return frame.SourceLine > 0
-                    ? string.Concat(name, "  —  ", fn, ":", frame.SourceLine.ToString())
-                    : string.Concat(name, "  —  ", fn);
-            }
-            return name;
-        }
-
         string FormatStackFrame(ResolvedFrame frame, int depth)
         {
             m_SB.Clear();
             m_SB.Append(depth == 0 ? "→ " : "  ");
-            m_SB.Append(StripAssembly(frame.RawMethodName));
+            m_SB.Append(GCAllocUtils.StripAssembly(frame.RawMethodName));
 
             if (!string.IsNullOrEmpty(frame.SourceFile))
             {
@@ -717,7 +685,7 @@ namespace GCAllocBreakdown.Editor
             for (int i = 0; i < frames.Count; i++)
             {
                 var f = frames[i];
-                m_SB.Append(StripAssembly(f.RawMethodName));
+                m_SB.Append(GCAllocUtils.StripAssembly(f.RawMethodName));
                 m_SB.Append('@');
                 if (!string.IsNullOrEmpty(f.SourceFile))
                     m_SB.Append(Path.GetFileName(f.SourceFile));
@@ -728,21 +696,8 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
-        //  DATA STRUCTURES
+        //  MODULE-SPECIFIC DATA STRUCTURES
         // ═══════════════════════════════════════════════════
-
-        struct ResolvedFrame
-        {
-            public string RawMethodName;
-            public string SourceFile;
-            public int SourceLine;
-        }
-
-        class DepthEntry
-        {
-            public string Name;
-            public int Remaining;
-        }
 
         class FrameGroup
         {

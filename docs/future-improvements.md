@@ -23,6 +23,14 @@
 
 **Scope:** Replace `ShowThreadFilterMenu()`, remove `GenericMenu`/callback methods (`OnThreadMenuAll`, `OnThreadMenuSolo`, `OnThreadMenuToggle`), add persistent panel with toggles and overlay dismiss logic.
 
+## UX: Progress Indicators for Save/Load/Export
+
+**Problem:** Save, Load, and CSV Export operations can take several seconds on large datasets, during which Unity appears frozen with no visual feedback.
+
+**Proposed Solution:** Show a progress indicator (e.g., `EditorUtility.DisplayProgressBar`) during Save, Load, and both CSV export paths. Clear it in a `finally` block to ensure cleanup on errors.
+
+**Scope:** `ExportMarkerTableCSV`, `ExportAllocationsCSV`, Save/Load snapshot handlers.
+
 ## Performance: Minor Allocation Hotspots
 
 Low-priority items flagged during code review. Not urgent — each allocates once per user action or once per analysis, not per frame.

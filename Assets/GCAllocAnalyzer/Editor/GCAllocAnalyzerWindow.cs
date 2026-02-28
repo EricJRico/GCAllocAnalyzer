@@ -44,9 +44,23 @@ namespace GCAllocBreakdown.Editor
         const string k_AllocColNum = "num", k_AllocColSize = "size";
         const string k_AllocColFrame = "frame", k_AllocColThread = "thread";
 
-        const float GRAPH_HEIGHT = 120;
-        const float GRAPH_Y_AXIS_WIDTH = 52;
-        const float GRAPH_X_AXIS_HEIGHT = 16;
+        // Cached column-header factories — lambdas capture only literals, so the
+        // compiler emits them as static cached delegates (zero per-call allocation).
+        static readonly Func<VisualElement> k_HeaderSite    = () => new Label("Allocation Site") { tooltip = "Method or call site where the GC allocation occurred" };
+        static readonly Func<VisualElement> k_HeaderBytes   = () => new Label("Bytes")           { tooltip = "Total bytes allocated by this call site across all analyzed frames" };
+        static readonly Func<VisualElement> k_HeaderCount   = () => new Label("Count")           { tooltip = "Number of individual GC.Alloc events from this call site" };
+        static readonly Func<VisualElement> k_HeaderAvg     = () => new Label("Avg")             { tooltip = "Average bytes per allocation (Total Bytes \u00f7 Count)" };
+        static readonly Func<VisualElement> k_HeaderPct     = () => new Label("%")               { tooltip = "Percentage of total GC allocation bytes" };
+        static readonly Func<VisualElement> k_HeaderMedian  = () => new Label("Median")          { tooltip = "Median bytes per frame (frames with allocations only)" };
+        static readonly Func<VisualElement> k_HeaderMean    = () => new Label("Mean")            { tooltip = "Mean bytes per frame across all analyzed frames" };
+        static readonly Func<VisualElement> k_HeaderMin     = () => new Label("Min")             { tooltip = "Minimum bytes allocated in any single frame" };
+        static readonly Func<VisualElement> k_HeaderMax     = () => new Label("Max")             { tooltip = "Maximum bytes allocated in any single frame" };
+        static readonly Func<VisualElement> k_HeaderRange   = () => new Label("Range")           { tooltip = "Difference between max and min bytes per frame" };
+        static readonly Func<VisualElement> k_HeaderFirst   = () => new Label("First")           { tooltip = "First frame where this call site allocated" };
+        static readonly Func<VisualElement> k_HeaderAllocNum    = () => new Label("#")       { tooltip = "Allocation index" };
+        static readonly Func<VisualElement> k_HeaderAllocSize   = () => new Label("Size")    { tooltip = "Size of this individual allocation" };
+        static readonly Func<VisualElement> k_HeaderAllocFrame  = () => new Label("Frame")   { tooltip = "Profiler frame number where this allocation occurred" };
+        static readonly Func<VisualElement> k_HeaderAllocThread = () => new Label("Thread")  { tooltip = "Thread where this allocation occurred" };
 
         static readonly Color k_Red = new(1f, 0.3f, 0.3f);
         static readonly Color k_Yellow = new(1f, 0.85f, 0.2f);
@@ -55,10 +69,6 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_CallerFrame = new(0.55f, 0.55f, 0.55f);
         static readonly Color k_SubtleText = new(0.5f, 0.5f, 0.5f);
         static readonly Color k_HoverBg = new(0.3f, 0.3f, 0.3f);
-        static readonly Color k_GraphBg = new(0.1f, 0.1f, 0.1f);
-        static readonly Color k_GraphGuideLine = new(0.2f, 0.2f, 0.2f);
-        static readonly Color k_GraphBar = new(0.27f, 0.67f, 0.6f);          // teal
-        static readonly Color k_GraphOverlay = new(1f, 1f, 1f, 0.85f);       // bright white
 
         // ═══════════════════════════════════════════════════
         //  UI FIELDS
@@ -79,13 +89,8 @@ namespace GCAllocBreakdown.Editor
         Button m_ExportBtn;
         Label m_LoadedSnapshotLabel;
 
-        // Per-frame graph
-        Foldout m_GraphFoldout;
-        VisualElement m_GraphRoot;          // holds Y-axis + chart area side-by-side
-        VisualElement m_GraphBarArea;       // dark background, bars live here
-        Label m_GraphYMax, m_GraphYMid;
-        Label m_GraphXStart, m_GraphXEnd;
-        Label m_GraphOverlayLabel;          // selected marker name, bottom-right of chart
+        // Per-frame graph — delegated to PerFrameGraphController
+        PerFrameGraphController m_GraphController;
 
         // Right panel
         Label m_FrameCountLabel, m_FrameRangeLabel, m_TotalGcLabel;
@@ -150,15 +155,8 @@ namespace GCAllocBreakdown.Editor
 
         // Grouping work buffers
         readonly Dictionary<string, CallsiteGroup> m_GroupingDict = new(256);
-        // Shared scratch buffer — used by ComputePerFrameStats and UpdateGraphOverlay.
-        // Safe: single-threaded, never called concurrently. Do not use from async paths.
+        // Scratch buffer for ComputePerFrameStats (single-threaded, never concurrent)
         long[] m_PerFrameBuffer;
-
-        // Graph bucketing buffers
-        long[] m_GraphBuckets;
-        long[] m_GraphOverlayBuckets;
-        int m_GraphBucketCount;
-        int m_GraphFramesPerBucket;
 
         // ═══════════════════════════════════════════════════
         //  PROFILER — lazy, only resolved on selection
@@ -166,7 +164,7 @@ namespace GCAllocBreakdown.Editor
 
         ProfilerWindow m_ProfilerWindow;
         IProfilerFrameTimeViewSampleSelectionController m_CpuController;
-        readonly Dictionary<string, (MonoScript script, bool found)> m_ScriptCache = new();
+        readonly ScriptOpener m_ScriptOpener = new();
 
         // ═══════════════════════════════════════════════════
         //  WINDOW LIFECYCLE
@@ -231,18 +229,18 @@ namespace GCAllocBreakdown.Editor
             ShowNoDataState(m_ActiveGroups.Count == 0);
             RebuildGraph();
 
-            // Restore frame range in UI
-            m_StartFrameField.value = m_Snapshot.FrameStart;
-            m_EndFrameField.value = m_Snapshot.FrameEnd;
+            // Restore frame range in UI (fields display 1-based)
+            m_StartFrameField.value = GCAllocUtils.DisplayFrame(m_Snapshot.FrameStart);
+            m_EndFrameField.value = GCAllocUtils.DisplayFrame(m_Snapshot.FrameEnd);
             UpdateFrameRangeInfo();
 
             m_SharedSB.Clear();
             m_SharedSB.Append("Restored: ");
             m_SharedSB.Append(m_Snapshot.TotalCount);
             m_SharedSB.Append(" allocs across frames ");
-            m_SharedSB.Append(m_Snapshot.FrameStart);
+            m_SharedSB.Append(GCAllocUtils.DisplayFrame(m_Snapshot.FrameStart));
             m_SharedSB.Append('–');
-            m_SharedSB.Append(m_Snapshot.FrameEnd);
+            m_SharedSB.Append(GCAllocUtils.DisplayFrame(m_Snapshot.FrameEnd));
             m_StatusLabel.text = m_SharedSB.ToString();
             RestoreMarkerSortIndicator();
             m_SaveBtn?.SetEnabled(true);
@@ -430,8 +428,8 @@ namespace GCAllocBreakdown.Editor
             ShowNoDataState(m_ActiveGroups.Count == 0);
             RebuildGraph();
 
-            m_StartFrameField.value = m_Snapshot.FrameStart;
-            m_EndFrameField.value = m_Snapshot.FrameEnd;
+            m_StartFrameField.value = GCAllocUtils.DisplayFrame(m_Snapshot.FrameStart);
+            m_EndFrameField.value = GCAllocUtils.DisplayFrame(m_Snapshot.FrameEnd);
             UpdateFrameRangeInfo();
 
             m_SaveBtn.SetEnabled(true);
@@ -444,9 +442,9 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append("Loaded: ");
             m_SharedSB.Append(m_Snapshot.TotalCount);
             m_SharedSB.Append(" allocs across frames ");
-            m_SharedSB.Append(m_Snapshot.FrameStart);
+            m_SharedSB.Append(GCAllocUtils.DisplayFrame(m_Snapshot.FrameStart));
             m_SharedSB.Append('\u2013');
-            m_SharedSB.Append(m_Snapshot.FrameEnd);
+            m_SharedSB.Append(GCAllocUtils.DisplayFrame(m_Snapshot.FrameEnd));
             m_SharedSB.Append(" from ");
             m_SharedSB.Append(Path.GetFileName(path));
             m_StatusLabel.text = m_SharedSB.ToString();
@@ -556,39 +554,39 @@ namespace GCAllocBreakdown.Editor
 
             m_MarkerListView.columns.Add(new Column { name = k_ColSite, title = "Allocation Site",
                 stretchable = true, minWidth = 200, sortable = true,
-                makeCell = MakeMarkerSiteCell, bindCell = BindMarkerSite });
+                makeHeader = k_HeaderSite, makeCell = MakeMarkerSiteCell, bindCell = BindMarkerSite });
             m_MarkerListView.columns.Add(new Column { name = k_ColBytes, title = "Bytes",
                 width = COL_BYTES, sortable = true, resizable = true,
-                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerBytes,
+                makeHeader = k_HeaderBytes, makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerBytes,
                 unbindCell = UnbindMarkerStyledCell });
             m_MarkerListView.columns.Add(new Column { name = k_ColCount, title = "Count",
                 width = COL_COUNT, sortable = true, resizable = true,
-                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerCount });
+                makeHeader = k_HeaderCount, makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerCount });
             m_MarkerListView.columns.Add(new Column { name = k_ColAvg, title = "Avg",
                 width = COL_AVG, sortable = true, resizable = true,
-                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerAvg });
+                makeHeader = k_HeaderAvg, makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerAvg });
             m_MarkerListView.columns.Add(new Column { name = k_ColPct, title = "%",
                 width = COL_PCT, sortable = true, resizable = true,
-                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerPct });
+                makeHeader = k_HeaderPct, makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerPct });
             m_MarkerListView.columns.Add(new Column { name = k_ColMedian, title = "Median",
                 width = COL_MEDIAN, sortable = true, resizable = true,
-                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMedian });
+                makeHeader = k_HeaderMedian, makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMedian });
             m_MarkerListView.columns.Add(new Column { name = k_ColMean, title = "Mean",
                 width = COL_MEAN, sortable = true, resizable = true,
-                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMean });
+                makeHeader = k_HeaderMean, makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMean });
             m_MarkerListView.columns.Add(new Column { name = k_ColMin, title = "Min",
                 width = COL_MIN, sortable = true, resizable = true,
-                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMin });
+                makeHeader = k_HeaderMin, makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMin });
             m_MarkerListView.columns.Add(new Column { name = k_ColMax, title = "Max",
                 width = COL_MAX, sortable = true, resizable = true,
-                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMax,
+                makeHeader = k_HeaderMax, makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerMax,
                 unbindCell = UnbindMarkerStyledCell });
             m_MarkerListView.columns.Add(new Column { name = k_ColRange, title = "Range",
                 width = COL_RANGE, sortable = true, resizable = true,
-                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerRange });
+                makeHeader = k_HeaderRange, makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerRange });
             m_MarkerListView.columns.Add(new Column { name = k_ColFirst, title = "First",
                 width = COL_FIRST, sortable = true, resizable = true,
-                makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerFirst });
+                makeHeader = k_HeaderFirst, makeCell = MakeMarkerCellWithMenu, bindCell = BindMarkerFirst });
 
             m_MarkerListView.itemsSource = m_FilteredGroups;
 
@@ -603,266 +601,18 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
-        //  PER-FRAME BAR GRAPH
+        //  PER-FRAME BAR GRAPH — delegated to PerFrameGraphController
         // ═══════════════════════════════════════════════════
 
         VisualElement BuildPerFrameGraph()
         {
-            m_GraphFoldout = MakeSectionFoldout("Per-Frame Graph");
-            m_GraphFoldout.style.marginLeft = 4;
-            m_GraphFoldout.style.marginRight = 4;
-            m_GraphFoldout.style.marginTop = 0;
-            m_GraphFoldout.style.display = DisplayStyle.None; // hidden until data
-
-            m_GraphRoot = new VisualElement
-            {
-                style =
-                {
-                    flexDirection = FlexDirection.Row,
-                    height = GRAPH_HEIGHT + GRAPH_X_AXIS_HEIGHT
-                }
-            };
-
-            // Y-axis labels (left column)
-            var yAxis = new VisualElement
-            {
-                style =
-                {
-                    width = GRAPH_Y_AXIS_WIDTH,
-                    justifyContent = Justify.SpaceBetween,
-                    alignItems = Align.FlexEnd,
-                    paddingRight = 4,
-                    height = GRAPH_HEIGHT
-                }
-            };
-            m_GraphYMax = new Label("—") { style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight } };
-            m_GraphYMid = new Label("—") { style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight } };
-            var yZero = new Label("0") { style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight } };
-            yAxis.Add(m_GraphYMax);
-            yAxis.Add(m_GraphYMid);
-            yAxis.Add(yZero);
-            m_GraphRoot.Add(yAxis);
-
-            // Chart area (right side, fills remaining width)
-            var chartColumn = new VisualElement { style = { flexGrow = 1, flexShrink = 1 } };
-
-            // Bar area — dark background, bars anchored to bottom
-            m_GraphBarArea = new VisualElement
-            {
-                style =
-                {
-                    flexGrow = 0,
-                    height = GRAPH_HEIGHT,
-                    backgroundColor = k_GraphBg,
-                    flexDirection = FlexDirection.Row,
-                    alignItems = Align.FlexEnd,
-                    overflow = Overflow.Hidden,
-                    borderBottomWidth = 1,
-                    borderBottomColor = k_GraphGuideLine
-                }
-            };
-            m_GraphBarArea.RegisterCallback<GeometryChangedEvent>(OnGraphGeometryChanged);
-            chartColumn.Add(m_GraphBarArea);
-
-            // X-axis labels row
-            var xAxis = new VisualElement
-            {
-                style =
-                {
-                    flexDirection = FlexDirection.Row,
-                    justifyContent = Justify.SpaceBetween,
-                    height = GRAPH_X_AXIS_HEIGHT
-                }
-            };
-            m_GraphXStart = new Label("—") { style = { fontSize = 10, color = k_DimGray, flexShrink = 0 } };
-            m_GraphOverlayLabel = new Label("")
-            {
-                style =
-                {
-                    flexGrow = 1,
-                    flexShrink = 1,
-                    fontSize = 10,
-                    color = k_DimGray,
-                    unityTextAlign = TextAnchor.MiddleCenter,
-                    overflow = Overflow.Hidden,
-                    textOverflow = TextOverflow.Ellipsis,
-                    whiteSpace = WhiteSpace.NoWrap,
-                    marginLeft = 8,
-                    marginRight = 8
-                }
-            };
-            m_GraphXEnd = new Label("—") { style = { fontSize = 10, color = k_DimGray, flexShrink = 0 } };
-            xAxis.Add(m_GraphXStart);
-            xAxis.Add(m_GraphOverlayLabel);
-            xAxis.Add(m_GraphXEnd);
-            chartColumn.Add(xAxis);
-
-            m_GraphRoot.Add(chartColumn);
-
-            m_GraphFoldout.Add(m_GraphRoot);
-            return m_GraphFoldout;
+            m_GraphController = new PerFrameGraphController(OnGraphFrameSelected, () => m_MarkerListView?.selectedIndex ?? -1);
+            m_GraphController.SetData(m_Snapshot, m_FilteredGroups);
+            return m_GraphController.Root;
         }
 
-        void OnGraphGeometryChanged(GeometryChangedEvent evt)
+        void OnGraphFrameSelected(int frameIndex)
         {
-            if (!m_Snapshot.HasData || m_Snapshot.PerFrameBytes == null) return;
-            // Only rebuild if width actually changed meaningfully (>2px)
-            float oldW = evt.oldRect.width;
-            float newW = evt.newRect.width;
-            if (Mathf.Abs(newW - oldW) < 2f) return;
-            RebuildGraph();
-        }
-
-        void RebuildGraph()
-        {
-            var perFrame = m_Snapshot.PerFrameBytes;
-            if (perFrame == null || perFrame.Length == 0)
-            {
-                m_GraphFoldout.style.display = DisplayStyle.None;
-                return;
-            }
-
-            m_GraphFoldout.style.display = DisplayStyle.Flex;
-
-            int frameCount = perFrame.Length;
-            float areaWidth = m_GraphBarArea.resolvedStyle.width;
-            if (areaWidth < 1f) areaWidth = 400f; // fallback before first layout
-
-            // Bucketing: cap bar count at pixel width
-            m_GraphFramesPerBucket = 1;
-            if (frameCount > (int)areaWidth)
-                m_GraphFramesPerBucket = Mathf.CeilToInt((float)frameCount / Mathf.Max(1f, areaWidth));
-            // Derive bucket count from framesPerBucket so no trailing empty buckets
-            m_GraphBucketCount = Mathf.CeilToInt((float)frameCount / m_GraphFramesPerBucket);
-
-            // Ensure bucket buffer
-            if (m_GraphBuckets == null || m_GraphBuckets.Length < m_GraphBucketCount)
-                m_GraphBuckets = new long[m_GraphBucketCount];
-            else
-                Array.Clear(m_GraphBuckets, 0, m_GraphBucketCount);
-
-            // Fill buckets (max of frames in each bucket)
-            long maxValue = 0;
-            for (int b = 0; b < m_GraphBucketCount; b++)
-            {
-                int startIdx = b * m_GraphFramesPerBucket;
-                int endIdx = Mathf.Min(startIdx + m_GraphFramesPerBucket, frameCount);
-                long bucketMax = 0;
-                for (int i = startIdx; i < endIdx; i++)
-                {
-                    if (perFrame[i] > bucketMax) bucketMax = perFrame[i];
-                }
-                m_GraphBuckets[b] = bucketMax;
-                if (bucketMax > maxValue) maxValue = bucketMax;
-            }
-
-            // Update Y-axis labels
-            m_GraphYMax.text = FormatBytes(maxValue);
-            m_GraphYMid.text = FormatBytes(maxValue / 2);
-
-            // Update X-axis labels
-            m_GraphXStart.text = m_Snapshot.FrameStart.ToString();
-            m_GraphXEnd.text = m_Snapshot.FrameEnd.ToString();
-
-            // Clear old bars
-            m_GraphBarArea.Clear();
-
-            float barWidth = areaWidth / m_GraphBucketCount;
-            float maxHeight = GRAPH_HEIGHT;
-
-            // Add horizontal guide line (mid-point)
-            var guideMid = new VisualElement
-            {
-                name = "guideline",
-                style =
-                {
-                    position = Position.Absolute,
-                    left = 0, right = 0,
-                    bottom = maxHeight / 2,
-                    height = 1,
-                    backgroundColor = k_GraphGuideLine
-                }
-            };
-            m_GraphBarArea.Add(guideMid);
-
-            for (int b = 0; b < m_GraphBucketCount; b++)
-            {
-                long val = m_GraphBuckets[b];
-                float height = maxValue > 0 ? (float)val / maxValue * maxHeight : 0;
-
-                // Outer bar element
-                var bar = new VisualElement
-                {
-                    style =
-                    {
-                        width = Mathf.Max(barWidth, 1f),
-                        height = Mathf.Max(height, val > 0 ? 3f : 0f),
-                        backgroundColor = k_GraphBar,
-                        flexShrink = 0
-                    },
-                    userData = b // bucket index for click handler
-                };
-
-                // Inner overlay element (hidden by default)
-                var overlay = new VisualElement
-                {
-                    name = "overlay",
-                    style =
-                    {
-                        width = Length.Percent(100),
-                        height = 0,
-                        backgroundColor = k_GraphOverlay,
-                        position = Position.Absolute,
-                        bottom = 0
-                    }
-                };
-                bar.Add(overlay);
-
-                // Tooltip
-                int frameStart = m_Snapshot.FrameStart + b * m_GraphFramesPerBucket;
-                int frameEnd = Mathf.Min(frameStart + m_GraphFramesPerBucket - 1, m_Snapshot.FrameEnd);
-                if (m_GraphFramesPerBucket == 1)
-                    bar.tooltip = string.Concat("Frame ", frameStart.ToString(), ": ", FormatBytes(val));
-                else
-                    bar.tooltip = string.Concat("Frames ", frameStart.ToString(), "\u2013", frameEnd.ToString(), ": ", FormatBytes(val), " (max)");
-
-                // Click handler
-                bar.RegisterCallback<ClickEvent>(OnGraphBarClicked);
-
-                m_GraphBarArea.Add(bar);
-            }
-
-            // Re-apply overlay for currently selected marker (if any)
-            if (m_MarkerListView != null &&
-                m_MarkerListView.selectedIndex >= 0 &&
-                m_MarkerListView.selectedIndex < m_FilteredGroups.Count)
-                UpdateGraphOverlay(m_FilteredGroups[m_MarkerListView.selectedIndex]);
-            else
-                m_GraphOverlayLabel.text = "";
-        }
-
-        void OnGraphBarClicked(ClickEvent evt)
-        {
-            var bar = evt.currentTarget as VisualElement;
-            if (bar?.userData is not int bucketIdx) return;
-
-            // Find the frame with max allocation in this bucket
-            var perFrame = m_Snapshot.PerFrameBytes;
-            if (perFrame == null) return;
-
-            int startIdx = bucketIdx * m_GraphFramesPerBucket;
-            int endIdx = Mathf.Min(startIdx + m_GraphFramesPerBucket, perFrame.Length);
-
-            int maxIdx = startIdx;
-            long maxVal = 0;
-            for (int i = startIdx; i < endIdx; i++)
-            {
-                if (perFrame[i] > maxVal) { maxVal = perFrame[i]; maxIdx = i; }
-            }
-
-            int frameIndex = m_Snapshot.FrameStart + maxIdx;
-
-            // Jump to frame in Profiler
             EnsureProfilerRef();
             if (m_ProfilerWindow != null)
             {
@@ -874,90 +624,13 @@ namespace GCAllocBreakdown.Editor
             }
         }
 
-        void UpdateGraphOverlay(CallsiteGroup group)
+        void RebuildGraph()
         {
-            if (m_Snapshot.PerFrameBytes == null) return;
-
-            if (group == null)
-            {
-                ClearGraphOverlay();
-                return;
-            }
-
-            int frameCount = m_Snapshot.PerFrameBytes.Length;
-
-            // Ensure overlay bucket buffer
-            if (m_GraphOverlayBuckets == null || m_GraphOverlayBuckets.Length < m_GraphBucketCount)
-                m_GraphOverlayBuckets = new long[m_GraphBucketCount];
-            else
-                Array.Clear(m_GraphOverlayBuckets, 0, m_GraphBucketCount);
-
-            // Build per-frame bytes for this group
-            // Reuse m_PerFrameBuffer (safe — not called during grouping)
-            EnsurePerFrameBuffer(frameCount);
-            for (int i = 0; i < group.Allocations.Count; i++)
-            {
-                var alloc = group.Allocations[i];
-                int idx = alloc.FrameIndex - m_Snapshot.FrameStart;
-                if (idx >= 0 && idx < frameCount)
-                    m_PerFrameBuffer[idx] += alloc.Bytes;
-            }
-
-            // Bucket the group's per-frame data (same bucketing as main graph)
-            for (int b = 0; b < m_GraphBucketCount; b++)
-            {
-                int startIdx = b * m_GraphFramesPerBucket;
-                int endIdx = Mathf.Min(startIdx + m_GraphFramesPerBucket, frameCount);
-                long bucketMax = 0;
-                for (int i = startIdx; i < endIdx; i++)
-                {
-                    if (m_PerFrameBuffer[i] > bucketMax) bucketMax = m_PerFrameBuffer[i];
-                }
-                m_GraphOverlayBuckets[b] = bucketMax;
-            }
-
-            // Update overlay elements on existing bars
-            long maxValue = 0;
-            for (int b = 0; b < m_GraphBucketCount; b++)
-                if (m_GraphBuckets[b] > maxValue) maxValue = m_GraphBuckets[b];
-
-            int b2 = 0;
-            for (int i = 0; i < m_GraphBarArea.childCount && b2 < m_GraphBucketCount; i++)
-            {
-                var child = m_GraphBarArea[i];
-                if (child.name == "guideline") continue;
-
-                var overlay = child.Q("overlay");
-                if (overlay == null) { b2++; continue; }
-
-                long overlayVal = m_GraphOverlayBuckets[b2];
-                if (overlayVal <= 0 || maxValue <= 0)
-                {
-                    overlay.style.height = 0;
-                    b2++;
-                    continue;
-                }
-
-                float overlayHeight = (float)overlayVal / maxValue * GRAPH_HEIGHT;
-                overlay.style.height = Mathf.Max(overlayHeight, 1f);
-                b2++;
-            }
-
-            // Update overlay label
-            m_GraphOverlayLabel.text = group.DisplayName;
+            m_GraphController?.SetData(m_Snapshot, m_FilteredGroups);
+            m_GraphController?.RebuildGraph();
         }
-
-        void ClearGraphOverlay()
-        {
-            for (int i = 0; i < m_GraphBarArea.childCount; i++)
-            {
-                var child = m_GraphBarArea[i];
-                if (child.name == "guideline") continue;
-                var overlay = child.Q("overlay");
-                if (overlay != null) overlay.style.height = 0;
-            }
-            m_GraphOverlayLabel.text = "";
-        }
+        void UpdateGraphOverlay(CallsiteGroup group) => m_GraphController?.UpdateOverlay(group);
+        void ClearGraphOverlay() => m_GraphController?.ClearOverlay();
 
         // Non-capturing filter callbacks
         void OnNameFilterChanged(ChangeEvent<string> evt) => ApplyFilters();
@@ -1101,113 +774,15 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
-        //  CSV EXPORT
+        //  CSV EXPORT — delegated to GCAllocExporter
         // ═══════════════════════════════════════════════════
 
         void ShowExportMenu()
         {
             var menu = new GenericMenu();
-            menu.AddItem(new GUIContent("Marker Table CSV"), false, ExportMarkerTableCSV);
-            menu.AddItem(new GUIContent("Individual Allocations CSV"), false, ExportAllocationsCSV);
+            menu.AddItem(new GUIContent("Marker Table CSV"), false, () => GCAllocExporter.ExportMarkerTableCSV(m_FilteredGroups));
+            menu.AddItem(new GUIContent("Individual Allocations CSV"), false, () => GCAllocExporter.ExportAllocationsCSV(m_Snapshot));
             menu.ShowAsContext();
-        }
-
-        void ExportMarkerTableCSV()
-        {
-            string path = EditorUtility.SaveFilePanel(
-                "Export Marker Table CSV", "", "marker-table.csv", "csv");
-            if (string.IsNullOrEmpty(path)) return;
-
-            try
-            {
-                using (var writer = new StreamWriter(path, false, Encoding.UTF8))
-                {
-                    writer.WriteLine("Name,Bytes,Count,Avg,Percentage,Median/Frame,Mean/Frame,Min/Frame,Max/Frame,Range/Frame,MinFrame,MaxFrame,FirstFrame");
-
-                    for (int i = 0; i < m_FilteredGroups.Count; i++)
-                    {
-                        var g = m_FilteredGroups[i];
-                        writer.Write(EscapeCsvField(g.DisplayName));
-                        writer.Write(','); writer.Write(g.TotalBytes);
-                        writer.Write(','); writer.Write(g.Count);
-                        writer.Write(','); writer.Write(g.TotalBytes / Math.Max(1, g.Count));
-                        writer.Write(','); writer.Write(g.Percentage.ToString("F2"));
-                        writer.Write(','); writer.Write(g.MedianBytesPerFrame);
-                        writer.Write(','); writer.Write(g.MeanBytesPerFrame.ToString("F1"));
-                        writer.Write(','); writer.Write(g.MinBytesPerFrame);
-                        writer.Write(','); writer.Write(g.MaxBytesPerFrame);
-                        writer.Write(','); writer.Write(g.RangeBytesPerFrame);
-                        writer.Write(','); writer.Write(g.MinFrame);
-                        writer.Write(','); writer.Write(g.MaxFrame);
-                        writer.Write(','); writer.Write(g.FirstFrame);
-                        writer.WriteLine();
-                    }
-                }
-
-                Debug.Log(string.Concat("[GC Alloc Analyzer] Exported ", m_FilteredGroups.Count.ToString(),
-                    " markers to ", path));
-            }
-            catch (Exception e)
-            {
-                Debug.LogError(string.Concat("[GC Alloc Analyzer] CSV export failed: ", e.Message));
-            }
-        }
-
-        static string EscapeCsvField(string field)
-        {
-            if (field == null) return "";
-            if (field.IndexOf(',') < 0 && field.IndexOf('"') < 0 &&
-                field.IndexOf('\n') < 0 && field.IndexOf('\r') < 0)
-                return field;
-            return string.Concat("\"", field.Replace("\"", "\"\""), "\"");
-        }
-
-        void ExportAllocationsCSV()
-        {
-            string path = EditorUtility.SaveFilePanel(
-                "Export Individual Allocations CSV", "", "allocations.csv", "csv");
-            if (string.IsNullOrEmpty(path)) return;
-
-            try
-            {
-                var allocs = m_Snapshot.RawAllocations;
-                using (var writer = new StreamWriter(path, false, Encoding.UTF8))
-                {
-                    writer.WriteLine("Bytes,Frame,Thread,ParentMethod,HierarchyPath,CallStack");
-
-                    var sb = new StringBuilder(256);
-                    for (int i = 0; i < allocs.Count; i++)
-                    {
-                        var a = allocs[i];
-                        writer.Write(a.Bytes);
-                        writer.Write(','); writer.Write(a.FrameIndex);
-                        writer.Write(','); writer.Write(EscapeCsvField(a.ThreadDisplayName));
-                        writer.Write(','); writer.Write(EscapeCsvField(a.ParentMethod));
-                        writer.Write(','); writer.Write(EscapeCsvField(a.HierarchyPath));
-                        writer.Write(',');
-
-                        if (a.ResolvedCallStack != null && a.ResolvedCallStack.Count > 0)
-                        {
-                            sb.Clear();
-                            for (int f = 0; f < a.ResolvedCallStack.Count; f++)
-                            {
-                                if (f > 0) sb.Append(" > ");
-                                sb.Append(a.ResolvedCallStack[f].RawMethodName);
-                            }
-                            writer.Write(EscapeCsvField(sb.ToString()));
-                        }
-
-                        writer.WriteLine();
-                    }
-                }
-
-                Debug.Log(string.Concat("[GC Alloc Analyzer] Exported ", allocs.Count.ToString(),
-                    " allocations to ", path));
-            }
-            catch (Exception e)
-            {
-                Debug.LogError(string.Concat("[GC Alloc Analyzer] CSV export failed: ", e.Message));
-            }
         }
 
         // ═══════════════════════════════════════════════════
@@ -1341,16 +916,16 @@ namespace GCAllocBreakdown.Editor
 
             m_AllocListView.columns.Add(new Column { name = k_AllocColNum, title = "#",
                 width = ALLOC_COL_NUM, sortable = false, resizable = false,
-                makeCell = MakeAllocCellWithMenu, bindCell = BindAllocNum });
+                makeHeader = k_HeaderAllocNum, makeCell = MakeAllocCellWithMenu, bindCell = BindAllocNum });
             m_AllocListView.columns.Add(new Column { name = k_AllocColSize, title = "Size",
                 width = ALLOC_COL_SIZE, sortable = true, resizable = true,
-                makeCell = MakeAllocCellWithMenu, bindCell = BindAllocSize });
+                makeHeader = k_HeaderAllocSize, makeCell = MakeAllocCellWithMenu, bindCell = BindAllocSize });
             m_AllocListView.columns.Add(new Column { name = k_AllocColFrame, title = "Frame",
                 width = ALLOC_COL_FRAME, sortable = true, resizable = true,
-                makeCell = MakeAllocCellWithMenu, bindCell = BindAllocFrame });
+                makeHeader = k_HeaderAllocFrame, makeCell = MakeAllocCellWithMenu, bindCell = BindAllocFrame });
             m_AllocListView.columns.Add(new Column { name = k_AllocColThread, title = "Thread",
                 stretchable = true, sortable = false, resizable = true,
-                makeCell = MakeAllocThreadCell, bindCell = BindAllocThread });
+                makeHeader = k_HeaderAllocThread, makeCell = MakeAllocThreadCell, bindCell = BindAllocThread });
 
             m_AllocListView.itemsSource = m_SelectedAllocations;
             m_AllocListView.columnSortingChanged += OnAllocColumnSortingChanged;
@@ -1430,15 +1005,15 @@ namespace GCAllocBreakdown.Editor
                 m_StatusLabel.text = "No profiler data available. Capture or load data first.";
                 return;
             }
-            m_StartFrameField.value = first;
-            m_EndFrameField.value = last;
+            m_StartFrameField.value = GCAllocUtils.DisplayFrame(first);
+            m_EndFrameField.value = GCAllocUtils.DisplayFrame(last);
             UpdateFrameRangeInfo();
 
             m_SharedSB.Clear();
             m_SharedSB.Append("Pulled: frames ");
-            m_SharedSB.Append(first);
+            m_SharedSB.Append(GCAllocUtils.DisplayFrame(first));
             m_SharedSB.Append('–');
-            m_SharedSB.Append(last);
+            m_SharedSB.Append(GCAllocUtils.DisplayFrame(last));
             m_SharedSB.Append(" (");
             m_SharedSB.Append(last - first + 1);
             m_SharedSB.Append(" frames). Adjust range if needed, then click Analyze.");
@@ -1447,8 +1022,9 @@ namespace GCAllocBreakdown.Editor
 
         void OnAnalyze()
         {
-            int start = m_StartFrameField.value;
-            int end = m_EndFrameField.value;
+            // Fields hold 1-based display values; convert to 0-based API indices
+            int start = GCAllocUtils.ApiFrame(m_StartFrameField.value);
+            int end = GCAllocUtils.ApiFrame(m_EndFrameField.value);
             if (end < start || start < 0)
             {
                 m_StatusLabel.text = "Invalid frame range. Use Pull Data first.";
@@ -1465,7 +1041,7 @@ namespace GCAllocBreakdown.Editor
         {
             m_IsLoadedSnapshot = false;
             m_LoadedSnapshotLabel.style.display = DisplayStyle.None;
-            m_ScriptCache.Clear();
+            m_ScriptOpener.ClearCache();
             m_Snapshot.RawAllocations.Clear();
             m_AllThreadNames.Clear();
             m_SelectedThreads.Clear();
@@ -1574,21 +1150,21 @@ namespace GCAllocBreakdown.Editor
                                     ParentMethod = parentMethod,
                                     HierarchyPath = hierarchyPath,
                                     ResolvedCallStack = resolvedCopy,
-                                    FormattedBytes = FormatBytes(bytes),
-                                    FormattedFrame = f.ToString()
+                                    FormattedBytes = GCAllocUtils.FormatBytes(bytes),
+                                    FormattedFrame = GCAllocUtils.DisplayFrame(f).ToString()
                                 };
 
                                 // Pre-compute keys
                                 alloc.FullCallstackKey = resolvedCopy.Count > 0
                                     ? BuildNormalizedCallStackKey(resolvedCopy) : "";
                                 alloc.TopFrameKey = resolvedCopy.Count > 0
-                                    ? NormalizeKeyPart(resolvedCopy[0]) : "";
+                                    ? GCAllocUtils.NormalizeKeyPart(resolvedCopy[0]) : "";
                                 alloc.DisplayName = resolvedCopy.Count > 0
-                                    ? FormatTopFrame(resolvedCopy[0])
-                                    : StripAssembly(parentMethod);
+                                    ? GCAllocUtils.FormatTopFrame(resolvedCopy[0])
+                                    : GCAllocUtils.StripAssembly(parentMethod);
                                 alloc.DisplayNameWithAssembly = resolvedCopy.Count > 0
-                                    ? FormatTopFrameWithAssembly(resolvedCopy[0])
-                                    : StripLeadingColons(parentMethod);
+                                    ? GCAllocUtils.FormatTopFrameWithAssembly(resolvedCopy[0])
+                                    : GCAllocUtils.StripLeadingColons(parentMethod);
 
                                 m_Snapshot.RawAllocations.Add(alloc);
                             }
@@ -1644,11 +1220,11 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append("Analyzed ");
             m_SharedSB.Append(totalFrames);
             m_SharedSB.Append(" frames (");
-            m_SharedSB.Append(startFrame);
+            m_SharedSB.Append(GCAllocUtils.DisplayFrame(startFrame));
             m_SharedSB.Append('–');
-            m_SharedSB.Append(endFrame);
+            m_SharedSB.Append(GCAllocUtils.DisplayFrame(endFrame));
             m_SharedSB.Append(") | ");
-            m_SharedSB.Append(FormatBytes(totalBytes));
+            m_SharedSB.Append(GCAllocUtils.FormatBytes(totalBytes));
             m_SharedSB.Append(", ");
             m_SharedSB.Append(m_Snapshot.TotalCount);
             m_SharedSB.Append(" allocs, ");
@@ -1705,9 +1281,9 @@ namespace GCAllocBreakdown.Editor
             {
                 var g = target[i];
                 g.Percentage = (float)g.TotalBytes / total * 100f;
-                g.FormattedBytes = FormatBytes(g.TotalBytes);
+                g.FormattedBytes = GCAllocUtils.FormatBytes(g.TotalBytes);
                 g.FormattedCount = string.Concat(g.Count.ToString(), "x");
-                g.FormattedAvg = FormatBytes(g.TotalBytes / Math.Max(1, g.Count));
+                g.FormattedAvg = GCAllocUtils.FormatBytes(g.TotalBytes / Math.Max(1, g.Count));
 
                 m_SharedSB.Clear();
                 m_SharedSB.Append(g.Percentage.ToString("F1"));
@@ -1717,13 +1293,13 @@ namespace GCAllocBreakdown.Editor
                 ComputePerFrameStats(g, m_Snapshot.FrameStart, m_Snapshot.FrameEnd);
                 if (g.MaxBytesPerFrame > 0)
                 {
-                    g.FormattedMedian = FormatBytes(g.MedianBytesPerFrame);
-                    g.FormattedMin = FormatBytes(g.MinBytesPerFrame);
-                    g.FormattedMax = FormatBytes(g.MaxBytesPerFrame);
-                    g.FormattedMean = FormatBytes((long)g.MeanBytesPerFrame);
+                    g.FormattedMedian = GCAllocUtils.FormatBytes(g.MedianBytesPerFrame);
+                    g.FormattedMin = GCAllocUtils.FormatBytes(g.MinBytesPerFrame);
+                    g.FormattedMax = GCAllocUtils.FormatBytes(g.MaxBytesPerFrame);
+                    g.FormattedMean = GCAllocUtils.FormatBytes((long)g.MeanBytesPerFrame);
                     g.RangeBytesPerFrame = g.MaxBytesPerFrame - g.MinBytesPerFrame;
-                    g.FormattedRange = FormatBytes(g.RangeBytesPerFrame);
-                    g.FormattedFirst = g.FirstFrame.ToString();
+                    g.FormattedRange = GCAllocUtils.FormatBytes(g.RangeBytesPerFrame);
+                    g.FormattedFirst = GCAllocUtils.DisplayFrame(g.FirstFrame).ToString();
                     if (g.TopWorstFrameIndices != null)
                     {
                         g.FormattedTopWorst = new string[g.TopWorstFrameIndices.Length];
@@ -1731,9 +1307,9 @@ namespace GCAllocBreakdown.Editor
                         {
                             m_SharedSB.Clear();
                             m_SharedSB.Append("frame ");
-                            m_SharedSB.Append(g.TopWorstFrameIndices[tw].ToString());
+                            m_SharedSB.Append(GCAllocUtils.DisplayFrame(g.TopWorstFrameIndices[tw]).ToString());
                             m_SharedSB.Append(" \u2014 ");
-                            m_SharedSB.Append(FormatBytes(g.TopWorstFrameBytes[tw]));
+                            m_SharedSB.Append(GCAllocUtils.FormatBytes(g.TopWorstFrameBytes[tw]));
                             g.FormattedTopWorst[tw] = m_SharedSB.ToString();
                         }
                     }
@@ -2244,7 +1820,7 @@ namespace GCAllocBreakdown.Editor
             m_MarkerSummaryRoot.style.display = show ? DisplayStyle.None : DisplayStyle.Flex;
             m_TopOffendersFoldout.style.display = show ? DisplayStyle.None : DisplayStyle.Flex;
             // Graph visibility is managed by RebuildGraph(); only hide here
-            if (show) m_GraphFoldout.style.display = DisplayStyle.None;
+            if (show && m_GraphController != null) m_GraphController.Root.style.display = DisplayStyle.None;
         }
 
         void UpdateDataSummary()
@@ -2254,9 +1830,9 @@ namespace GCAllocBreakdown.Editor
 
             m_FrameCountLabel.text = hasData ? string.Concat("Frame Count: ", count.ToString()) : "Frame Count: —";
             m_FrameRangeLabel.text = hasData
-                ? string.Concat("Frame Range: ", m_Snapshot.FrameStart.ToString(), "–", m_Snapshot.FrameEnd.ToString())
+                ? string.Concat("Frame Range: ", GCAllocUtils.DisplayFrame(m_Snapshot.FrameStart).ToString(), "–", GCAllocUtils.DisplayFrame(m_Snapshot.FrameEnd).ToString())
                 : "Frame Range: —";
-            m_TotalGcLabel.text = hasData ? string.Concat("Total GC: ", FormatBytes(m_Snapshot.TotalBytes)) : "Total GC: —";
+            m_TotalGcLabel.text = hasData ? string.Concat("Total GC: ", GCAllocUtils.FormatBytes(m_Snapshot.TotalBytes)) : "Total GC: —";
             m_TotalAllocsLabel.text = hasData ? string.Concat("Total Allocs: ", m_Snapshot.TotalCount.ToString()) : "Total Allocs: —";
             m_UniqueSitesLabel.text = hasData ? string.Concat("Unique Sites: ", m_ActiveGroups.Count.ToString()) : "Unique Sites: —";
         }
@@ -2451,7 +2027,7 @@ namespace GCAllocBreakdown.Editor
             string topMethod = group.ResolvedCallStack != null && group.ResolvedCallStack.Count > 0
                 ? group.ResolvedCallStack[0].RawMethodName : group.DisplayName;
 
-            m_MarkerNameLabel.text = StripAssembly(topMethod);
+            m_MarkerNameLabel.text = GCAllocUtils.StripAssembly(topMethod);
 
             if (group.ResolvedCallStack != null && group.ResolvedCallStack.Count > 0)
             {
@@ -2464,7 +2040,7 @@ namespace GCAllocBreakdown.Editor
                 }
                 else
                 {
-                    string asm = ExtractAssembly(top.RawMethodName);
+                    string asm = GCAllocUtils.ExtractAssembly(top.RawMethodName);
                     m_MarkerSourceLabel.text = asm.Length > 0 ? string.Concat("[", asm, "]") : "";
                 }
             }
@@ -2487,6 +2063,7 @@ namespace GCAllocBreakdown.Editor
             SortAllocsInPlace();
             m_AllocListView.itemsSource = m_SelectedAllocations;
             m_AllocListView.Rebuild();
+            m_AllocListView.selectedIndex = m_SelectedAllocations.Count > 0 ? 0 : -1;
         }
 
         void BuildCallStackDisplay(CallsiteGroup group)
@@ -2757,263 +2334,21 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
-        //  SCRIPT OPENING — no path filtering
+        //  SCRIPT OPENING — delegated to ScriptOpener
         // ═══════════════════════════════════════════════════
 
-        bool CanOpenScript(ResolvedFrame frame)
-        {
-            if (!string.IsNullOrEmpty(frame.SourceFile))
-                return FindScript(Path.GetFileNameWithoutExtension(frame.SourceFile)) != null;
-
-            return FindScriptFromMethodName(frame.RawMethodName) != null;
-        }
-
-        void OpenScript(ResolvedFrame frame)
-        {
-            MonoScript script = null;
-            int line = 1;
-
-            if (!string.IsNullOrEmpty(frame.SourceFile))
-            {
-                script = FindScript(Path.GetFileNameWithoutExtension(frame.SourceFile));
-                if (frame.SourceLine > 0) line = frame.SourceLine;
-            }
-
-            if (script == null)
-            {
-                script = FindScriptFromMethodName(frame.RawMethodName);
-                if (script == null) return;
-
-                // Try to find the method in the source text to jump to the right line
-                if (frame.SourceLine <= 0)
-                {
-                    string methodName = ExtractMethodNameFromEnd(frame.RawMethodName);
-                    if (methodName.Length > 0)
-                    {
-                        // Strip generic marker
-                        int bt = methodName.IndexOf('`');
-                        if (bt >= 0) methodName = methodName.Substring(0, bt);
-
-                        string text = script.text;
-                        int idx = text.IndexOf(methodName, StringComparison.Ordinal);
-                        if (idx >= 0)
-                        {
-                            int lineCount = 1;
-                            for (int c = 0; c < idx; c++)
-                                if (text[c] == '\n') lineCount++;
-                            line = lineCount;
-                        }
-                    }
-                }
-                else
-                    line = frame.SourceLine;
-            }
-
-            if (script != null)
-                AssetDatabase.OpenAsset(script, line);
-        }
-
-        /// <summary>
-        /// Walk backwards through the segments of a method name to find a matching script.
-        /// For IL2CPP (::), the class name is always the segment immediately before "::".
-        /// For Mono (.), splits by '.' and walks backwards from second-to-last.
-        /// Also handles nested classes "+" and generics "`".
-        /// </summary>
-        MonoScript FindScriptFromMethodName(string raw)
-        {
-            if (string.IsNullOrEmpty(raw)) return null;
-
-            // Check cache first with full raw name as key
-            if (m_ScriptCache.TryGetValue(raw, out var cached)) return cached.script;
-
-            // Strip assembly prefix
-            string clean = StripAssembly(raw);
-
-            // Strip arguments
-            int paren = clean.IndexOf('(');
-            if (paren >= 0) clean = clean.Substring(0, paren).TrimEnd();
-
-            // Handle IL2CPP "::" — format is Namespace::Class.Method
-            // Class name is the first segment AFTER ::
-            int dcolon = clean.IndexOf("::", StringComparison.Ordinal);
-            if (dcolon >= 0)
-            {
-                string afterDcolon = clean.Substring(dcolon + 2);
-
-                // afterDcolon is "Class.Method" or just "Method"
-                // Walk backwards: last segment is method, everything before is class candidates
-                string[] parts = afterDcolon.Split('.');
-
-                // Walk backwards from second-to-last (skip method at end)
-                for (int i = parts.Length - 2; i >= 0; i--)
-                {
-                    string candidate = parts[i];
-
-                    int plus = candidate.IndexOf('+');
-                    if (plus >= 0) candidate = candidate.Substring(0, plus);
-                    int backtick = candidate.IndexOf('`');
-                    if (backtick >= 0) candidate = candidate.Substring(0, backtick);
-
-                    if (candidate.Length == 0) continue;
-
-                    var script = FindScript(candidate);
-                    if (script != null)
-                    {
-                        m_ScriptCache[raw] = (script, true);
-                        return script;
-                    }
-                }
-
-                m_ScriptCache[raw] = (null, false);
-                return null;
-            }
-
-            // Mono style: "Namespace.ClassName.MethodName" — last is method, walk backwards for class
-            int lastDotMono = clean.LastIndexOf('.');
-            if (lastDotMono <= 0)
-            {
-                m_ScriptCache[raw] = (null, false);
-                return null;
-            }
-
-            string typeSide = clean.Substring(0, lastDotMono);
-            string[] segments = typeSide.Split('.');
-
-            // Walk backwards — last segment is most likely the class
-            for (int i = segments.Length - 1; i >= 0; i--)
-            {
-                string candidate = segments[i];
-
-                // Handle nested class: take part before '+'
-                int p = candidate.IndexOf('+');
-                if (p >= 0) candidate = candidate.Substring(0, p);
-
-                // Handle generics: strip '`1'
-                int bt = candidate.IndexOf('`');
-                if (bt >= 0) candidate = candidate.Substring(0, bt);
-
-                if (candidate.Length == 0) continue;
-
-                var script = FindScript(candidate);
-                if (script != null)
-                {
-                    m_ScriptCache[raw] = (script, true);
-                    return script;
-                }
-            }
-
-            // Also try nested class parts after '+'
-            for (int i = segments.Length - 1; i >= 0; i--)
-            {
-                int p = segments[i].IndexOf('+');
-                if (p < 0) continue;
-
-                string nested = segments[i].Substring(p + 1);
-                int bt = nested.IndexOf('`');
-                if (bt >= 0) nested = nested.Substring(0, bt);
-
-                if (nested.Length == 0) continue;
-
-                var script = FindScript(nested);
-                if (script != null)
-                {
-                    m_ScriptCache[raw] = (script, true);
-                    return script;
-                }
-            }
-
-            m_ScriptCache[raw] = (null, false);
-            return null;
-        }
-
-        /// <summary>
-        /// Extracts just the method name (last segment) for line searching.
-        /// </summary>
-        static string ExtractMethodNameFromEnd(string raw)
-        {
-            string clean = StripAssembly(raw);
-            int paren = clean.IndexOf('(');
-            if (paren >= 0) clean = clean.Substring(0, paren).TrimEnd();
-
-            // IL2CPP: Namespace::Class.Method — method is last segment after ::
-            int dcolon = clean.IndexOf("::", StringComparison.Ordinal);
-            int lastDot = 0;
-            if (dcolon >= 0)
-            {
-                string afterDcolon = clean.Substring(dcolon + 2);
-                lastDot = afterDcolon.LastIndexOf('.');
-                return lastDot >= 0 ? afterDcolon.Substring(lastDot + 1) : afterDcolon;
-            }
-
-            // Mono: after last '.'
-            lastDot = clean.LastIndexOf('.');
-            return lastDot >= 0 ? clean.Substring(lastDot + 1) : clean;
-        }
-
-        MonoScript FindScript(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return null;
-            if (m_ScriptCache.TryGetValue(name, out var cached)) return cached.script;
-
-            string[] guids = AssetDatabase.FindAssets(string.Concat("t:MonoScript ", name));
-            for (int i = 0; i < guids.Length; i++)
-            {
-                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
-                if (Path.GetFileNameWithoutExtension(path) != name) continue;
-
-                var script = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
-                m_ScriptCache[name] = (script, script != null);
-                return script;
-            }
-
-            m_ScriptCache[name] = (null, false);
-            return null;
-        }
+        bool CanOpenScript(ResolvedFrame frame) => m_ScriptOpener.CanOpen(frame);
+        void OpenScript(ResolvedFrame frame) => m_ScriptOpener.Open(frame);
 
         // ═══════════════════════════════════════════════════
-        //  METHOD NAME PARSING
-        // ═══════════════════════════════════════════════════
-
-        static string ExtractAssembly(string raw)
-        {
-            if (string.IsNullOrEmpty(raw)) return "";
-            int bang = raw.IndexOf('!');
-            return bang > 0 ? raw.Substring(0, bang) : "";
-        }
-
-        static string StripAssembly(string raw)
-        {
-            int bang = raw != null ? raw.IndexOf('!') : -1;
-            string result = bang >= 0 ? raw.Substring(bang + 1) : raw ?? "";
-            if (result.Length > 2 && result[0] == ':' && result[1] == ':')
-                result = result.Substring(2);
-            return result;
-        }
-
-        /// <summary>
-        /// Keeps the assembly prefix but strips a leading :: after the ! separator.
-        /// e.g. "mscorlib!::String.Concat" → "mscorlib!String.Concat"
-        /// </summary>
-        static string StripLeadingColons(string raw)
-        {
-            if (string.IsNullOrEmpty(raw)) return raw ?? "";
-            int bang = raw.IndexOf('!');
-            if (bang < 0) return raw;
-            int afterBang = bang + 1;
-            if (afterBang + 1 < raw.Length && raw[afterBang] == ':' && raw[afterBang + 1] == ':')
-                return string.Concat(raw.Substring(0, afterBang), raw.Substring(afterBang + 2));
-            return raw;
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  FORMATTING — used during analysis (not per-bind)
+        //  FORMATTING — uses shared StringBuilder (instance)
         // ═══════════════════════════════════════════════════
 
         string FormatStackFrameDisplay(ResolvedFrame frame, int depth)
         {
             m_SharedSB.Clear();
             m_SharedSB.Append(depth == 0 ? "→ " : "  ");
-            m_SharedSB.Append(StripAssembly(frame.RawMethodName));
+            m_SharedSB.Append(GCAllocUtils.StripAssembly(frame.RawMethodName));
 
             if (!string.IsNullOrEmpty(frame.SourceFile))
             {
@@ -3030,43 +2365,6 @@ namespace GCAllocBreakdown.Editor
             return m_SharedSB.ToString();
         }
 
-        static string FormatTopFrame(ResolvedFrame frame)
-        {
-            string name = StripAssembly(frame.RawMethodName);
-
-            if (!string.IsNullOrEmpty(frame.SourceFile))
-            {
-                string fn = Path.GetFileName(frame.SourceFile);
-                return frame.SourceLine > 0
-                    ? string.Concat(name, "  —  ", fn, ":", frame.SourceLine.ToString())
-                    : string.Concat(name, "  —  ", fn);
-            }
-            return name;
-        }
-
-        static string FormatTopFrameWithAssembly(ResolvedFrame frame)
-        {
-            string name = StripLeadingColons(frame.RawMethodName);
-
-            if (!string.IsNullOrEmpty(frame.SourceFile))
-            {
-                string fn = Path.GetFileName(frame.SourceFile);
-                return frame.SourceLine > 0
-                    ? string.Concat(name, "  —  ", fn, ":", frame.SourceLine.ToString())
-                    : string.Concat(name, "  —  ", fn);
-            }
-            return name;
-        }
-
-        static string FormatBytes(long bytes)
-        {
-            if (bytes >= 1024 * 1024)
-                return string.Concat((bytes / (1024f * 1024f)).ToString("F1"), " MB");
-            if (bytes >= 1024)
-                return string.Concat((bytes / 1024f).ToString("F1"), " KB");
-            return string.Concat(bytes.ToString(), " B");
-        }
-
         // ═══════════════════════════════════════════════════
         //  CALLSTACK KEY — uses shared StringBuilder
         // ═══════════════════════════════════════════════════
@@ -3076,32 +2374,10 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Clear();
             for (int i = 0; i < frames.Count; i++)
             {
-                AppendNormalizedKeyPart(m_SharedSB, frames[i]);
+                GCAllocUtils.AppendNormalizedKeyPart(m_SharedSB, frames[i]);
                 m_SharedSB.Append('|');
             }
             return m_SharedSB.ToString();
-        }
-
-        static string NormalizeKeyPart(ResolvedFrame f)
-        {
-            string method = StripAssembly(f.RawMethodName);
-            string file = !string.IsNullOrEmpty(f.SourceFile) ? Path.GetFileName(f.SourceFile) : "";
-            return f.SourceLine > 0
-                ? string.Concat(method, "@", file, ":", f.SourceLine.ToString())
-                : string.Concat(method, "@", file);
-        }
-
-        static void AppendNormalizedKeyPart(StringBuilder sb, ResolvedFrame f)
-        {
-            sb.Append(StripAssembly(f.RawMethodName));
-            sb.Append('@');
-            if (!string.IsNullOrEmpty(f.SourceFile))
-                sb.Append(Path.GetFileName(f.SourceFile));
-            if (f.SourceLine > 0)
-            {
-                sb.Append(':');
-                sb.Append(f.SourceLine);
-            }
         }
 
         string BuildHierarchyPath(List<DepthEntry> stack)
@@ -3174,113 +2450,5 @@ namespace GCAllocBreakdown.Editor
             if (el != null) el.style.backgroundColor = StyleKeyword.Null;
         }
 
-        // ═══════════════════════════════════════════════════
-        //  ANALYSIS SNAPSHOT — serializable data container
-        // ═══════════════════════════════════════════════════
-
-        [Serializable]
-        class AnalysisSnapshot
-        {
-            public List<RawAllocation> RawAllocations = new(4096);
-            public List<string> SortedThreadNames = new(32);
-            public long TotalBytes;
-            public int TotalCount;
-            public int FrameStart;
-            public int FrameEnd;
-            public bool HadCallStacks;
-
-            [NonSerialized] public List<CallsiteGroup> GroupsByFullCallstack = new(256);
-            [NonSerialized] public List<CallsiteGroup> GroupsByTopFrame = new(256);
-            [NonSerialized] public long[] PerFrameBytes;
-
-            public bool HasData => RawAllocations != null && RawAllocations.Count > 0;
-
-            public void EnsureNonSerializedLists()
-            {
-                GroupsByFullCallstack ??= new List<CallsiteGroup>(256);
-                GroupsByTopFrame ??= new List<CallsiteGroup>(256);
-            }
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  DATA STRUCTURES
-        // ═══════════════════════════════════════════════════
-
-        [Serializable]
-        class RawAllocation
-        {
-            public long Bytes;
-            public int FrameIndex;
-            public int RawSampleIndex;
-            public string ThreadDisplayName;
-            public string ThreadName;
-            public string ThreadGroupName;
-            public ulong ThreadId;
-            public int ThreadIndex;
-            public string ParentMethod;
-            public string HierarchyPath;
-            public List<ResolvedFrame> ResolvedCallStack;
-
-            // Pre-computed keys (built once during analysis)
-            public string FullCallstackKey;
-            public string TopFrameKey;
-            public string DisplayName;
-            public string DisplayNameWithAssembly;
-
-            // Pre-computed display strings (built once during analysis)
-            public string FormattedBytes;
-            public string FormattedFrame;
-        }
-
-        [Serializable]
-        class CallsiteGroup
-        {
-            public string Key;
-            public string DisplayName;
-            public long TotalBytes;
-            public int Count;
-            public float Percentage;
-            public List<ResolvedFrame> ResolvedCallStack;
-            public List<RawAllocation> Allocations;
-
-            // Per-frame statistics (computed during grouping)
-            public double MeanBytesPerFrame;
-            public long MedianBytesPerFrame;
-            public long MinBytesPerFrame;
-            public long MaxBytesPerFrame;
-            public int MinFrame;
-            public int MaxFrame;
-            public int FirstFrame;
-            public int[] TopWorstFrameIndices;   // up to 3, descending by bytes
-            public long[] TopWorstFrameBytes;     // parallel array, same length
-
-            // Pre-computed display strings (built once during grouping)
-            public string FormattedBytes;
-            public string FormattedCount;
-            public string FormattedAvg;
-            public string FormattedPct;
-            public long RangeBytesPerFrame;    // MaxBytesPerFrame - MinBytesPerFrame
-            public string FormattedMedian;
-            public string FormattedMin;
-            public string FormattedMax;
-            public string FormattedMean;
-            public string FormattedRange;
-            public string FormattedFirst;
-            public string[] FormattedTopWorst;    // pre-built "frame N — X KB" strings
-        }
-
-        [Serializable]
-        struct ResolvedFrame
-        {
-            public string RawMethodName;
-            public string SourceFile;
-            public int SourceLine;
-        }
-
-        class DepthEntry
-        {
-            public string Name;
-            public int Remaining;
-        }
     }
 }
