@@ -165,7 +165,60 @@ Each task below is self-contained. I've listed what files/methods change, what's
 
 ---
 
-### Task 7: Mode Tabs — Single / Compare
+### Task 7: Graph Interactivity & Custom Rendering
+
+**Goal:** Replace the UIElements-per-bar graph with a custom GL-rendered graph (referencing Profile Analyzer's `Draw2D`/`FrameTimeGraph`) and add full interactivity: drag-selection, keyboard navigation, sorted view, and grid lines. This establishes the graph infrastructure that Compare mode's paired graphs will reuse.
+
+**Reference:** Unity Profile Analyzer's `FrameTimeGraph.cs` (~2300 lines) and `Draw2D.cs` (~210 lines) in `Library/PackageCache/com.unity.performance.profile-analyzer`. Follow the same patterns but render within UIElements (via `generateVisualContent` / `MeshGenerationContext`) rather than IMGUI's `GL.Begin`/`GL.End`.
+
+**What changes:**
+
+#### 7a: Custom GL Rendering Engine
+- New `Draw2D` utility class adapted from Profile Analyzer — draws filled boxes, lines, outlined boxes using `Painter2D` or `MeshGenerationContext` within a UIElements `VisualElement.generateVisualContent` callback
+- Custom shader with clip rect support (adapt `ProfileAnalyzerShader.shader` for UIElements context)
+- Replace per-bar `VisualElement` creation with a single custom-drawn element — eliminates the VisualElement-per-bucket scaling concern noted in `future-improvements.md`
+
+#### 7b: Bar Rendering with Selection Highlighting
+- `RegenerateBars()` method matching Profile Analyzer's approach: one bar per pixel (or per data point if fewer than pixels), storing `BarData` structs with position, height, min/max, data offset ranges
+- Two-pass rendering: background fill → selected region background → bars (selected color vs normal color) → overlay
+- Selected bar/frame highlighting with distinct color when a frame is clicked
+- Overflow indicators for bars exceeding Y-axis range
+
+#### 7c: Drag-to-Select Frame Range
+- Mouse input handling: click & drag to create a selection range on the graph
+- Shift+click inside selection to move the entire selection
+- Selection state: `None`, `Dragging`, `DragComplete`
+- Selection callback notifies main window — could update toolbar frame range fields or provide a "Re-analyze Selection" action
+- Visual: selected region gets a distinct background color, selected bars use `m_ColorBarSelected`
+
+#### 7d: Keyboard Navigation
+- Arrow keys: move selection left/right (shift for 10-frame steps)
+- `+` / `-`: grow/shrink selection symmetrically
+- `<` / `>`: grow/shrink left/right edge independently
+
+#### 7e: Multiple Grid Lines with Labels
+- Horizontal grid lines at meaningful byte thresholds (auto-computed based on Y-axis range)
+- Labels on grid lines (e.g., "1 MB", "512 KB")
+- Frame index labels on X-axis with smart positioning to avoid overlap
+
+#### 7f: Order-by-Magnitude Sorted View
+- Toggle to reorder bars by allocation size (descending) instead of frame order
+- Reveals distribution shape: one spike vs consistently high allocations
+- Matching Profile Analyzer's `showOrderedByFrameDuration` toggle
+
+#### 7g: Context Menu
+- Right-click menu: "Select All", "Clear Selection", "Select Frame with Max GC", "Select Frame with Min GC", "Zoom to Selection", "Zoom All"
+
+#### 7h: Marker Overlay
+- When a `CallsiteGroup` is selected, draw overlay bars in a distinct color showing that group's per-frame contribution (ported from current overlay logic into the new rendering path)
+
+**What doesn't change:** Data model, toolbar, right panel, filter logic. The graph still reads from `AnalysisSnapshot.PerFrameBytes` and group allocation data.
+
+**Definition of done:** Graph renders via custom drawing, supports drag-select with keyboard navigation, shows grid lines, has sorted view toggle and context menu. Clicking a bar still jumps to that frame in the Profiler. Marker overlay still works. No VisualElement-per-bar scaling concern remains.
+
+---
+
+### Task 8: Mode Tabs — Single / Compare
 
 **Goal:** Add a tab bar at the top of the window to switch between Single and Compare modes.
 
@@ -182,7 +235,7 @@ Each task below is self-contained. I've listed what files/methods change, what's
 
 ---
 
-### Task 8: Compare Data Model
+### Task 9: Compare Data Model
 
 **Goal:** The data structures for holding two snapshots and computing deltas between matched groups.
 
@@ -208,7 +261,7 @@ Each task below is self-contained. I've listed what files/methods change, what's
 
 ---
 
-### Task 9: Compare Toolbar (Dual Pull/Load/Save Rows)
+### Task 10: Compare Toolbar (Dual Pull/Load/Save Rows)
 
 **Goal:** In Compare mode, the toolbar shows two independent rows — one for Left, one for Right — each with Pull Data, Load, Save, frame range.
 
@@ -224,7 +277,7 @@ Each task below is self-contained. I've listed what files/methods change, what's
 
 ---
 
-### Task 10: Compare Left Panel (Paired Marker List with Delta Columns)
+### Task 11: Compare Left Panel (Paired Marker List with Delta Columns)
 
 **Goal:** The marker list in Compare mode shows Left Bytes, Right Bytes, Δ Bytes, Δ%, Left Count, Right Count, Δ Count with colored bars.
 
@@ -240,7 +293,27 @@ Each task below is self-contained. I've listed what files/methods change, what's
 
 ---
 
-### Task 11: Compare Right Panel (L/R/Diff Summary + Regressions/Improvements)
+### Task 12: Compare Per-Frame Graphs (Paired Left/Right)
+
+**Goal:** In Compare mode, show two paired per-frame graphs (Left and Right) that reuse the custom GL graph infrastructure from Task 7, with synced selection and visual comparison of allocation patterns.
+
+**Reference:** Profile Analyzer creates `m_LeftFrameTimeGraph` and `m_RightFrameTimeGraph` as separate `FrameTimeGraph` instances sharing a `Draw2D` renderer, with a pairing system that syncs selection between them.
+
+**What changes:**
+- Two `PerFrameGraphController` instances in Compare mode — one for `m_LeftSnapshot`, one for `m_RightSnapshot`
+- **Pairing system:** selection on one graph syncs to the other (drag-select on Left selects the same frame range on Right, and vice versa). Matching Profile Analyzer's `SetPairing()` / `PairTo()` pattern
+- **Layout:** stacked vertically with "Left" / "Right" labels, or side-by-side if window is wide enough
+- **Overlay:** selecting a `ComparedGroup` in the compare marker list shows that group's overlay on both graphs simultaneously, making it easy to see how a specific call site's allocation pattern changed between runs
+- **Shared Y-axis range:** option to lock both graphs to the same Y-axis max so bar heights are directly comparable, or auto-scale each independently (toggle in context menu)
+- All Task 7 interactivity available on both graphs: drag-select, keyboard nav, grid lines, sorted view, context menu
+
+**What doesn't change:** Single mode graph. Compare data model. Compare toolbar.
+
+**Definition of done:** Compare mode shows two paired graphs. Selecting a frame range on one syncs to the other. Marker overlay works on both. Shared Y-axis toggle works. All interactive features from Task 7 function on both graphs.
+
+---
+
+### Task 13: Compare Right Panel (L/R/Diff Summary + Regressions/Improvements)
 
 **Goal:** The right panel in Compare mode shows a three-column data summary grid and Top Regressions / Top Improvements lists.
 
@@ -262,33 +335,31 @@ Each task below is self-contained. I've listed what files/methods change, what's
 
 ---
 
-### Task 12: Polish (Bars, Copy, Graph Interaction, Thread Summary)
+### Task 14: Polish (Bars, Copy, Thread Summary)
 
-**Goal:** Final polish pass bringing in the remaining P3 items.
+**Goal:** Final polish pass bringing in the remaining P3 items. Graph interactivity (3.4, 3.5) moved to Task 7.
 
 **What changes:**
 - **3.1 Inline proportional bars** in Single mode marker list (colored `VisualElement` behind text, width ∝ value / max)
 - **3.7 Copy to Clipboard** — "Copy Summary" button in Marker Summary → `EditorGUIUtility.systemCopyBuffer`
-- **3.4 Graph interactive selection** — click-drag on the per-frame graph to select a sub-range, updates frame fields and re-filters
-- **3.5 Graph context menu** — right-click: "Select Frame with Most GC", "Select Frame with Least GC", "Show Budget Line"
 - **3.3 Thread Summary** — new foldout in right panel showing per-thread allocation totals and counts
 
-**Definition of done:** Visual bars in marker list. Copy button works. Graph supports drag-select and context menu. Thread summary section shows per-thread breakdown.
+**Definition of done:** Visual bars in marker list. Copy button works. Thread summary section shows per-thread breakdown.
 
 ---
 
 ## Recommended Execution Order
 
 ```
-Task 1  → Task 2  → Task 3  → Task 4  → Task 5  → Task 6
-  (refactor)  (save/load) (stats)   (graph)   (filter+   (marker
-                                               menus+csv)  summary)
+Task 1  → Task 2  → Task 3  → Task 4  → Task 5  → Task 6  → Task 7
+  (refactor)  (save/load) (stats)   (graph)   (filter+   (stats     (graph
+                                               menus+csv)  columns)   interactivity)
 
-Task 7  → Task 8  → Task 9  → Task 10 → Task 11 → Task 12
-  (tabs)    (compare   (compare   (compare   (compare   (polish)
-             model)     toolbar)   left)      right)
+Task 8  → Task 9  → Task 10 → Task 11 → Task 12 → Task 13 → Task 14
+  (tabs)    (compare   (compare   (compare   (compare   (compare   (polish)
+             model)     toolbar)   left)      graphs)    right)
 ```
 
-Tasks 1–6 strengthen Single mode. Tasks 7–11 build Compare mode on that foundation. Task 12 is a polish pass across both modes.
+Tasks 1–6 strengthen Single mode. Task 7 upgrades the graph to custom GL rendering with full interactivity. Tasks 8–13 build Compare mode on that foundation (Task 12 reuses the graph infrastructure for paired left/right graphs). Task 14 is a polish pass across both modes.
 
 **Start with Task 1** — it's a pure refactor with no UI changes, making it safe and foundational for everything that follows.
