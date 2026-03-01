@@ -228,4 +228,53 @@ namespace GCAllocBreakdown.Editor
             return string.Concat("\"", field.Replace("\"", "\"\""), "\"");
         }
     }
+
+    // ═══════════════════════════════════════════════════
+    //  GRAPH FRAME STORE — full-range data + analysis cache
+    //  Source of truth for the graph; separate from
+    //  AnalysisSnapshot which represents the current view.
+    // ═══════════════════════════════════════════════════
+
+    [Serializable]
+    internal class GraphFrameStore
+    {
+        public int FullFrameStart;
+        public int FullFrameEnd;
+        public long[] FullFrameBytes;              // per-frame GC totals for entire profiler range
+
+        [NonSerialized] public List<RawAllocation> CachedRawAllocations;
+        [NonSerialized] public List<string> CachedSortedThreadNames;
+
+        public bool HasFullFrameData => FullFrameBytes != null && FullFrameBytes.Length > 0;
+        public bool HasCachedAnalysis => CachedRawAllocations != null && CachedRawAllocations.Count > 0;
+
+        public int FullFrameCount => HasFullFrameData ? FullFrameEnd - FullFrameStart + 1 : 0;
+
+        public void Clear()
+        {
+            FullFrameStart = 0;
+            FullFrameEnd = 0;
+            FullFrameBytes = null;
+            CachedRawAllocations = null;
+            CachedSortedThreadNames = null;
+        }
+
+        public void CacheAnalysis(List<RawAllocation> rawAllocations, List<string> sortedThreadNames)
+        {
+            // Deep copy so the cache is independent of the snapshot
+            CachedRawAllocations = new List<RawAllocation>(rawAllocations.Count);
+            for (int i = 0; i < rawAllocations.Count; i++)
+                CachedRawAllocations.Add(rawAllocations[i]);
+
+            CachedSortedThreadNames = new List<string>(sortedThreadNames.Count);
+            for (int i = 0; i < sortedThreadNames.Count; i++)
+                CachedSortedThreadNames.Add(sortedThreadNames[i]);
+        }
+
+        public void EnsureNonSerializedLists()
+        {
+            // After domain reload, non-serialized fields are null.
+            // We don't try to restore them — a fresh Analyze is needed.
+        }
+    }
 }
