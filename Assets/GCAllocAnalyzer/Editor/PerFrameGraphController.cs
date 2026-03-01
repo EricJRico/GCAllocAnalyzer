@@ -86,8 +86,16 @@ namespace GCAllocBreakdown.Editor
         int m_LastSelectionStartBar = -1;
         int m_LastSelectionEndBar = -1;
 
+        // Selection stored as frame indices so it survives viewport changes
+        int m_SelectionFrameStart = -1;
+        int m_SelectionFrameEnd = -1;
+        int m_HighlightedFrame = -1;
+
         // Cached tooltip bar index to avoid per-move string allocations
         int m_LastTooltipBar = -1;
+
+        // Last known mouse X within the graph, for WASD zoom anchor
+        float m_LastMouseNormX = 0.5f;
 
         // Per-frame scratch buffer
         long[] m_PerFrameBuffer;
@@ -310,7 +318,7 @@ namespace GCAllocBreakdown.Editor
 
             // ── Sorted view (order by magnitude) ──
             if (m_OrderByMagnitude)
-                ApplySortedOrder(fullBarWidth);
+                ApplySortedOrder(bucketCount, fullBarWidth);
             else
                 m_SortedBarIndices = null;
 
@@ -353,6 +361,15 @@ namespace GCAllocBreakdown.Editor
             if (m_AnalyzedFrameStart >= 0 && m_AnalyzedFrameEnd >= 0)
             {
                 ComputeAnalyzedBarRange(out analyzedStartBar, out analyzedEndBar);
+
+                // If analyzed range exists but no visible bars overlap, dim everything.
+                // Use a range that excludes all bars (e.g. -2,-2) so the GraphElement
+                // knows dimming is active but no bar falls within the range.
+                if (analyzedStartBar < 0)
+                {
+                    analyzedStartBar = -2;
+                    analyzedEndBar = -2;
+                }
             }
 
             // ── Push data to GraphElement ──
@@ -396,6 +413,9 @@ namespace GCAllocBreakdown.Editor
             // ── Overview strip bars (always full range, no viewport clipping) ──
             RebuildOverviewStrip(perFrame, frameCount, maxValue);
             UpdateViewportRect();
+
+            // ── Restore selection from frame coordinates ──
+            RestoreSelectionFromFrames();
 
             // ── Show/hide reset button ──
             UpdateResetButtonVisibility();
@@ -482,6 +502,66 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.SetHighlightedBar(-1);
             m_LastSelectionStartBar = -1;
             m_LastSelectionEndBar = -1;
+            m_SelectionFrameStart = -1;
+            m_SelectionFrameEnd = -1;
+            m_HighlightedFrame = -1;
+        }
+
+        /// <summary>
+        /// Remap frame-based selection/highlight to current visible bar indices.
+        /// Called after every RebuildGraph to keep visual selection in sync.
+        /// </summary>
+        void RestoreSelectionFromFrames()
+        {
+            if (m_BarCount == 0)
+            {
+                m_GraphElement.SetSelection(-1, -1);
+                m_GraphElement.SetHighlightedBar(-1);
+                m_LastSelectionStartBar = -1;
+                m_LastSelectionEndBar = -1;
+                return;
+            }
+
+            // Restore range selection
+            if (m_SelectionFrameStart >= 0 && m_SelectionFrameEnd >= 0)
+            {
+                int sBar = FindBarContainingFrame(m_SelectionFrameStart);
+                int eBar = FindBarContainingFrame(m_SelectionFrameEnd);
+
+                // If selection is partially off-screen, clamp to visible bars
+                if (sBar < 0 && eBar >= 0) sBar = 0;
+                if (eBar < 0 && sBar >= 0) eBar = m_BarCount - 1;
+
+                if (sBar >= 0 && eBar >= 0)
+                {
+                    m_GraphElement.SetSelection(sBar, eBar);
+                    m_LastSelectionStartBar = sBar;
+                    m_LastSelectionEndBar = eBar;
+                }
+                else
+                {
+                    m_GraphElement.SetSelection(-1, -1);
+                    m_LastSelectionStartBar = -1;
+                    m_LastSelectionEndBar = -1;
+                }
+            }
+            else
+            {
+                m_GraphElement.SetSelection(-1, -1);
+                m_LastSelectionStartBar = -1;
+                m_LastSelectionEndBar = -1;
+            }
+
+            // Restore single-bar highlight
+            if (m_HighlightedFrame >= 0)
+            {
+                int hBar = FindBarContainingFrame(m_HighlightedFrame);
+                m_GraphElement.SetHighlightedBar(hBar);
+            }
+            else
+            {
+                m_GraphElement.SetHighlightedBar(-1);
+            }
         }
 
         /// <summary>
@@ -742,11 +822,11 @@ namespace GCAllocBreakdown.Editor
             switch (evt.keyCode)
             {
                 case KeyCode.W:
-                    ZoomViewport(0.7f, 0.5f);
+                    ZoomViewport(0.7f, m_LastMouseNormX);
                     handled = true;
                     break;
                 case KeyCode.S:
-                    ZoomViewport(1.4f, 0.5f);
+                    ZoomViewport(1.4f, m_LastMouseNormX);
                     handled = true;
                     break;
                 case KeyCode.A:
@@ -800,6 +880,7 @@ namespace GCAllocBreakdown.Editor
             }
 
             int frameIndex = m_FrameStore.FullFrameStart + maxIdx;
+            m_HighlightedFrame = frameIndex;
 
             if (m_OnFrameSelected != null)
                 m_OnFrameSelected(frameIndex);
@@ -809,24 +890,33 @@ namespace GCAllocBreakdown.Editor
         {
             m_LastSelectionStartBar = startBar;
             m_LastSelectionEndBar = endBar;
-            if (OnSelectionChanged == null) return;
             MapBarRangeToFrameRange(startBar, endBar, out int startFrame, out int endFrame);
-            OnSelectionChanged(startFrame, endFrame);
+            m_SelectionFrameStart = startFrame;
+            m_SelectionFrameEnd = endFrame;
+            if (OnSelectionChanged != null)
+                OnSelectionChanged(startFrame, endFrame);
         }
 
         void OnDragCompletedInternal(int startBar, int endBar)
         {
             m_LastSelectionStartBar = startBar;
             m_LastSelectionEndBar = endBar;
-            if (OnDragCompleted == null) return;
             MapBarRangeToFrameRange(startBar, endBar, out int startFrame, out int endFrame);
-            OnDragCompleted(startFrame, endFrame);
+            m_SelectionFrameStart = startFrame;
+            m_SelectionFrameEnd = endFrame;
+            if (OnDragCompleted != null)
+                OnDragCompleted(startFrame, endFrame);
         }
 
         static void OnGraphPointerEnter(PointerEnterEvent evt, GraphElement graph) => graph.Focus();
 
         void OnGraphPointerMove(PointerMoveEvent evt)
         {
+            // Track mouse position for WASD zoom anchor
+            float areaW = m_GraphElement.contentRect.width;
+            if (areaW > 0f)
+                m_LastMouseNormX = Mathf.Clamp01(evt.localPosition.x / areaW);
+
             if (m_BarCount == 0 || m_FrameStore == null)
             {
                 m_LastTooltipBar = -1;
@@ -922,15 +1012,17 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.SetSelection(0, m_BarCount - 1);
             m_LastSelectionStartBar = 0;
             m_LastSelectionEndBar = m_BarCount - 1;
+            if (m_BarCount > 0)
+            {
+                m_SelectionFrameStart = m_Bars[0].StartFrame;
+                m_SelectionFrameEnd = m_Bars[m_BarCount - 1].EndFrame;
+            }
             NotifySelectionChanged(0, m_BarCount - 1);
         }
 
         void OnContextClearSelection(DropdownMenuAction _)
         {
-            m_GraphElement.SetSelection(-1, -1);
-            m_GraphElement.SetHighlightedBar(-1);
-            m_LastSelectionStartBar = -1;
-            m_LastSelectionEndBar = -1;
+            ClearSelection();
         }
 
         void OnContextSelectMaxGC(DropdownMenuAction _) => SelectExtremeFrame(true);
@@ -1010,6 +1102,10 @@ namespace GCAllocBreakdown.Editor
             m_LastSelectionEndBar = barIdx;
 
             int frameIndex = m_FrameStore.FullFrameStart + extremeIdx;
+            m_SelectionFrameStart = m_Bars[barIdx].StartFrame;
+            m_SelectionFrameEnd = m_Bars[barIdx].EndFrame;
+            m_HighlightedFrame = frameIndex;
+
             if (m_OnFrameSelected != null)
                 m_OnFrameSelected(frameIndex);
         }
@@ -1045,6 +1141,7 @@ namespace GCAllocBreakdown.Editor
                 m_GridLines[m_GridLineCount++] = new GridLine
                 {
                     Y = y,
+                    Value = v,
                     Label = GCAllocUtils.FormatBytes(v)
                 };
             }
@@ -1059,15 +1156,22 @@ namespace GCAllocBreakdown.Editor
                     m_GridLineLabels[i].style.display = DisplayStyle.None;
             }
 
+            // Use actual content rect height for positioning (may differ from k_GraphHeight)
+            float actualHeight = m_GraphElement.contentRect.height;
+            if (float.IsNaN(actualHeight) || actualHeight < 1f) actualHeight = k_GraphHeight;
+
             // Position labels for current grid lines
             for (int i = 0; i < m_GridLineCount && i < k_MaxGridLineLabels; i++)
             {
                 Label label = EnsureGridLineLabel(i);
                 label.text = m_GridLines[i].Label;
                 label.style.display = DisplayStyle.Flex;
-                // Position from bottom of the graph element
+                // Position from bottom, scaling the grid line value to actual height
                 label.style.position = Position.Absolute;
-                label.style.bottom = m_GridLines[i].Y - 6; // center the 12px label on the line
+                float bottomPos = m_YAxisMax > 0
+                    ? (float)m_GridLines[i].Value / m_YAxisMax * actualHeight
+                    : m_GridLines[i].Y;
+                label.style.bottom = bottomPos - 6; // center the 12px label on the line
                 label.style.right = 4;
             }
 
@@ -1085,23 +1189,23 @@ namespace GCAllocBreakdown.Editor
             public int Compare(int a, int b) => Bars[b].Value.CompareTo(Bars[a].Value);
         }
 
-        void ApplySortedOrder(float barWidth)
+        void ApplySortedOrder(int count, float barWidth)
         {
             // Build index array: maps display position -> original bucket index
-            if (m_SortedBarIndices == null || m_SortedBarIndices.Length < m_BarCount)
-                m_SortedBarIndices = new int[m_BarCount];
+            if (m_SortedBarIndices == null || m_SortedBarIndices.Length < count)
+                m_SortedBarIndices = new int[count];
 
-            for (int i = 0; i < m_BarCount; i++)
+            for (int i = 0; i < count; i++)
                 m_SortedBarIndices[i] = i;
 
             // Sort descending by value — O(n log n) via Array.Sort with struct comparer (no allocations)
             var comparer = new BarValueDescComparer { Bars = m_Bars };
-            Array.Sort(m_SortedBarIndices, 0, m_BarCount, comparer);
+            Array.Sort(m_SortedBarIndices, 0, count, comparer);
 
             // Rearrange bars into display order so array index == display position.
             // This ensures GraphElement's selection (which uses display indices) lines up.
-            EnsureBarCapacity(ref m_SortScratch, m_BarCount);
-            for (int displayIdx = 0; displayIdx < m_BarCount; displayIdx++)
+            EnsureBarCapacity(ref m_SortScratch, count);
+            for (int displayIdx = 0; displayIdx < count; displayIdx++)
             {
                 int origIdx = m_SortedBarIndices[displayIdx];
                 m_SortScratch[displayIdx] = m_Bars[origIdx];
@@ -1134,6 +1238,7 @@ namespace GCAllocBreakdown.Editor
             m_HScroller.lowValue = 0;
             m_HScroller.highValue = Mathf.Max(0, 1f - span);
             m_HScroller.slider.pageSize = span;
+            m_HScroller.Adjust(span);
             m_HScroller.slider.SetValueWithoutNotify(m_ViewportStart);
         }
 
@@ -1366,6 +1471,16 @@ namespace GCAllocBreakdown.Editor
             m_GridLineLabels[index] = label;
             m_GraphElement.Add(label);
             return label;
+        }
+
+        int FindBarContainingFrame(int frameIndex)
+        {
+            for (int i = 0; i < m_BarCount; i++)
+            {
+                if (m_Bars[i].StartFrame <= frameIndex && m_Bars[i].EndFrame >= frameIndex)
+                    return i;
+            }
+            return -1;
         }
 
         int FindBarAtX(float localX)

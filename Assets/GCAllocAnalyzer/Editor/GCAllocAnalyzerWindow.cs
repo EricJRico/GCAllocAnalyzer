@@ -674,6 +674,38 @@ namespace GCAllocBreakdown.Editor
                     Debug.LogWarning(string.Concat("[GC Alloc Analyzer] Graph click frame=", frameIndex.ToString(), ": ", e.Message));
                 }
             }
+
+            // Select the allocation site with the most bytes in this frame
+            SelectTopAllocatorForFrame(frameIndex);
+        }
+
+        void SelectTopAllocatorForFrame(int frameIndex)
+        {
+            if (m_FilteredGroups == null || m_FilteredGroups.Count == 0) return;
+
+            int bestIdx = -1;
+            long bestBytes = 0;
+            for (int g = 0; g < m_FilteredGroups.Count; g++)
+            {
+                var group = m_FilteredGroups[g];
+                long groupBytes = 0;
+                for (int a = 0; a < group.Allocations.Count; a++)
+                {
+                    if (group.Allocations[a].FrameIndex == frameIndex)
+                        groupBytes += group.Allocations[a].Bytes;
+                }
+                if (groupBytes > bestBytes)
+                {
+                    bestBytes = groupBytes;
+                    bestIdx = g;
+                }
+            }
+
+            if (bestIdx >= 0 && bestIdx != m_MarkerListView.selectedIndex)
+            {
+                m_MarkerListView.selectedIndex = bestIdx;
+                m_MarkerListView.ScrollToItem(bestIdx);
+            }
         }
 
         void RebuildGraph()
@@ -1389,7 +1421,6 @@ namespace GCAllocBreakdown.Editor
             }
 
             m_Snapshot.RawAllocations.Clear();
-            m_AllThreadNames.Clear();
             m_SelectedThreads.Clear();
             long totalBytes = 0;
             bool anyCallStacks = false;
@@ -1404,9 +1435,17 @@ namespace GCAllocBreakdown.Editor
 
                 m_Snapshot.RawAllocations.Add(alloc);
                 totalBytes += alloc.Bytes;
-                m_AllThreadNames.Add(alloc.ThreadDisplayName);
                 if (alloc.ResolvedCallStack != null && alloc.ResolvedCallStack.Count > 0)
                     anyCallStacks = true;
+            }
+
+            // Restore full thread set from cache (not just threads in the sub-range)
+            m_AllThreadNames.Clear();
+            var cachedThreads = m_FrameStore.CachedSortedThreadNames;
+            if (cachedThreads != null)
+            {
+                for (int i = 0; i < cachedThreads.Count; i++)
+                    m_AllThreadNames.Add(cachedThreads[i]);
             }
 
             m_Snapshot.TotalBytes = totalBytes;

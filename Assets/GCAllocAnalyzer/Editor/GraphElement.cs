@@ -20,7 +20,8 @@ namespace GCAllocBreakdown.Editor
 
     internal struct GridLine
     {
-        public float Y;          // Y position from bottom of graph area
+        public float Y;          // Y position from bottom of graph area (computed against k_GraphHeight)
+        public long Value;       // raw byte value for this grid line
         public string Label;     // e.g. "1 MB", "512 KB" (pre-computed by controller)
     }
 
@@ -237,8 +238,11 @@ namespace GCAllocBreakdown.Editor
 
             for (int i = 0; i < m_GridLineCount; i++)
             {
-                // GridLine.Y is from bottom; convert to top-left origin
-                float y = rect.height - m_GridLines[i].Y;
+                // Compute Y from raw value to match bar height scaling
+                float fromBottom = m_YAxisMax > 0
+                    ? (float)m_GridLines[i].Value / m_YAxisMax * rect.height
+                    : m_GridLines[i].Y;
+                float y = rect.height - fromBottom;
                 if (y < 0f || y > rect.height) continue;
 
                 painter.BeginPath();
@@ -296,12 +300,17 @@ namespace GCAllocBreakdown.Editor
 
             for (int i = 0; i < m_BarCount; i++)
             {
-                float barHeight = m_Bars[i].Height;
+                // Scale bar height to actual content rect (was computed against k_GraphHeight)
+                float barHeight = m_YAxisMax > 0
+                    ? (float)m_Bars[i].Value / m_YAxisMax * areaHeight
+                    : 0f;
                 if (barHeight <= 0f) continue;
 
-                // Determine bar color — dimming for bars outside analyzed range
-                bool inAnalyzed = m_AnalyzedStartBar < 0
-                    || (i >= m_AnalyzedStartBar && i <= m_AnalyzedEndBar);
+                // Determine bar color — dimming for bars outside analyzed range.
+                // m_AnalyzedStartBar == -1 means no analysis active (no dimming).
+                // m_AnalyzedStartBar == -2 means analysis active but off-screen (dim all).
+                bool inAnalyzed = m_AnalyzedStartBar == -1
+                    || (m_AnalyzedStartBar >= 0 && i >= m_AnalyzedStartBar && i <= m_AnalyzedEndBar);
                 Color color;
                 if (i == m_HighlightedBar)
                     color = k_BarHighlighted;
@@ -340,7 +349,10 @@ namespace GCAllocBreakdown.Editor
 
             for (int i = 0; i < m_OverlayBarCount; i++)
             {
-                float barHeight = m_OverlayBars[i].Height;
+                // Scale overlay bar height to actual content rect
+                float barHeight = m_YAxisMax > 0
+                    ? (float)m_OverlayBars[i].Value / m_YAxisMax * areaHeight
+                    : 0f;
                 if (barHeight <= 0f) continue;
 
                 // Skip overlay for bars outside analyzed range
