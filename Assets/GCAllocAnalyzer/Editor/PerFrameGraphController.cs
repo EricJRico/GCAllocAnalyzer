@@ -78,6 +78,13 @@ namespace GCAllocBreakdown.Editor
         int m_FramesPerBucket;
         long m_YAxisMax;
 
+        // Viewport state: normalized range [0,1] over the full bar set
+        float m_ViewportStart;
+        float m_ViewportEnd = 1f;
+        const float k_MinVisibleBars = 10f;
+        int m_ViewportStartBucket; // first bucket index visible in the viewport
+        int m_TotalBucketCount;    // total buckets before viewport clipping
+
         // Last known selection bar indices (for context menu access)
         int m_LastSelectionStartBar = -1;
         int m_LastSelectionEndBar = -1;
@@ -87,6 +94,16 @@ namespace GCAllocBreakdown.Editor
 
         // Per-frame scratch buffer
         long[] m_PerFrameBuffer;
+
+        // Overview strip
+        const float k_OverviewHeight = 24f;
+        GraphElement m_OverviewElement;
+        VisualElement m_ViewportRect;
+        BarData[] m_OverviewBars;
+        int m_OverviewBarCount;
+        bool m_OverviewDragging;
+        float m_OverviewDragStartX;
+        float m_OverviewDragStartVP;
 
         // ═══════════════════════════════════════════════════
         //  SORTING
@@ -110,6 +127,63 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
+        //  VIEWPORT — zoom / pan
+        // ═══════════════════════════════════════════════════
+
+        /// <summary>Current viewport normalized start [0,1].</summary>
+        public float ViewportStart => m_ViewportStart;
+
+        /// <summary>Current viewport normalized end [0,1].</summary>
+        public float ViewportEnd => m_ViewportEnd;
+
+        /// <summary>True when the detail view is zoomed in.</summary>
+        public bool IsZoomedIn => m_ViewportEnd - m_ViewportStart < 0.999f;
+
+        public void ResetViewport()
+        {
+            m_ViewportStart = 0f;
+            m_ViewportEnd = 1f;
+            RebuildGraph();
+        }
+
+        void ZoomViewport(float zoomFactor, float anchorNormalized)
+        {
+            float span = m_ViewportEnd - m_ViewportStart;
+            float newSpan = Mathf.Clamp(span * zoomFactor, k_MinVisibleBars / Mathf.Max(1, m_TotalBucketCount), 1f);
+            float anchor = m_ViewportStart + span * anchorNormalized;
+
+            m_ViewportStart = anchor - newSpan * anchorNormalized;
+            m_ViewportEnd = m_ViewportStart + newSpan;
+            ClampViewport();
+            RebuildGraph();
+        }
+
+        void PanViewport(float delta)
+        {
+            float span = m_ViewportEnd - m_ViewportStart;
+            m_ViewportStart += delta;
+            m_ViewportEnd = m_ViewportStart + span;
+            ClampViewport();
+            RebuildGraph();
+        }
+
+        void ClampViewport()
+        {
+            float span = m_ViewportEnd - m_ViewportStart;
+            if (m_ViewportStart < 0f)
+            {
+                m_ViewportStart = 0f;
+                m_ViewportEnd = span;
+            }
+            if (m_ViewportEnd > 1f)
+            {
+                m_ViewportEnd = 1f;
+                m_ViewportStart = 1f - span;
+            }
+            if (m_ViewportStart < 0f) m_ViewportStart = 0f;
+        }
+
+        // ═══════════════════════════════════════════════════
         //  UI ELEMENTS
         // ═══════════════════════════════════════════════════
 
@@ -121,6 +195,7 @@ namespace GCAllocBreakdown.Editor
         Label m_GraphOverlayLabel;
         Button m_SortToggleBtn;
         Button m_ResetBtn;
+        Scroller m_HScroller;
 
         // Grid line labels (absolutely positioned over the graph)
         Label[] m_GridLineLabels;
@@ -193,12 +268,12 @@ namespace GCAllocBreakdown.Editor
                 m_FramesPerBucket = Mathf.CeilToInt((float)frameCount / Mathf.Max(1f, areaWidth));
 
             int bucketCount = Mathf.CeilToInt((float)frameCount / m_FramesPerBucket);
+            m_TotalBucketCount = bucketCount;
 
             // ── Ensure bar buffer capacity ──
             EnsureBarCapacity(ref m_Bars, bucketCount);
-            m_BarCount = bucketCount;
 
-            // ── Fill buckets and find max ──
+            // ── Fill buckets and find max (over ALL buckets for consistent Y axis) ──
             long maxValue = 0;
             for (int b = 0; b < bucketCount; b++)
             {
@@ -225,12 +300,12 @@ namespace GCAllocBreakdown.Editor
 
             m_YAxisMax = maxValue;
 
-            // ── Compute X/W/Height for each bar ──
-            float barWidth = areaWidth / bucketCount;
+            // ── Compute X/W/Height for each bar (pre-sort, pre-viewport) ──
+            float fullBarWidth = areaWidth / bucketCount;
             for (int b = 0; b < bucketCount; b++)
             {
-                m_Bars[b].X = b * barWidth;
-                m_Bars[b].W = Mathf.Max(barWidth, 1f);
+                m_Bars[b].X = b * fullBarWidth;
+                m_Bars[b].W = Mathf.Max(fullBarWidth, 1f);
                 m_Bars[b].Height = maxValue > 0
                     ? (float)m_Bars[b].Value / maxValue * k_GraphHeight
                     : 0f;
@@ -238,9 +313,39 @@ namespace GCAllocBreakdown.Editor
 
             // ── Sorted view (order by magnitude) ──
             if (m_OrderByMagnitude)
-                ApplySortedOrder(barWidth);
+                ApplySortedOrder(fullBarWidth);
             else
                 m_SortedBarIndices = null;
+
+            // ── Viewport clipping — only layout visible bars ──
+            int visibleStart = Mathf.FloorToInt(m_ViewportStart * bucketCount);
+            int visibleEnd = Mathf.CeilToInt(m_ViewportEnd * bucketCount);
+            visibleStart = Mathf.Clamp(visibleStart, 0, bucketCount - 1);
+            visibleEnd = Mathf.Clamp(visibleEnd, visibleStart, bucketCount);
+            int visibleCount = visibleEnd - visibleStart;
+            m_ViewportStartBucket = visibleStart;
+
+            if (visibleCount <= 0)
+            {
+                m_BarCount = 0;
+                m_GraphElement.SetBarData(m_Bars, 0);
+                return;
+            }
+
+            // Recompute X/W for visible bars to fill the graph width
+            float visibleBarWidth = areaWidth / visibleCount;
+            for (int i = 0; i < visibleCount; i++)
+            {
+                int srcIdx = visibleStart + i;
+                m_Bars[i] = m_Bars[srcIdx]; // shift to front of array
+                m_Bars[i].X = i * visibleBarWidth;
+                m_Bars[i].W = Mathf.Max(visibleBarWidth, 1f);
+                // Recalculate height against global max (unchanged)
+                m_Bars[i].Height = maxValue > 0
+                    ? (float)m_Bars[i].Value / maxValue * k_GraphHeight
+                    : 0f;
+            }
+            m_BarCount = visibleCount;
 
             // ── Grid lines ──
             ComputeGridLines(maxValue, k_GraphHeight);
@@ -262,8 +367,11 @@ namespace GCAllocBreakdown.Editor
             // ── Update axis labels ──
             m_GraphYMax.text = GCAllocUtils.FormatBytes(maxValue);
             m_GraphYMid.text = GCAllocUtils.FormatBytes(maxValue / 2);
-            m_GraphXStart.text = GCAllocUtils.DisplayFrame(m_FrameStore.FullFrameStart).ToString();
-            m_GraphXEnd.text = GCAllocUtils.DisplayFrame(m_FrameStore.FullFrameEnd).ToString();
+            if (m_BarCount > 0)
+            {
+                m_GraphXStart.text = GCAllocUtils.DisplayFrame(m_Bars[0].StartFrame).ToString();
+                m_GraphXEnd.text = GCAllocUtils.DisplayFrame(m_Bars[m_BarCount - 1].EndFrame).ToString();
+            }
 
             // ── Position grid line labels ──
             PositionGridLineLabels();
@@ -283,6 +391,13 @@ namespace GCAllocBreakdown.Editor
                 UpdateOverlay(m_FilteredGroups[selectedIdx]);
             else
                 m_GraphOverlayLabel.text = "";
+
+            // ── Update horizontal scroller ──
+            UpdateHorizontalScroller();
+
+            // ── Overview strip bars (always full range, no viewport clipping) ──
+            RebuildOverviewStrip(perFrame, frameCount, maxValue);
+            UpdateViewportRect();
 
             // ── Show/hide reset button ──
             UpdateResetButtonVisibility();
@@ -322,7 +437,9 @@ namespace GCAllocBreakdown.Editor
 
             for (int b = 0; b < m_BarCount; b++)
             {
-                int origBucket = m_SortedBarIndices != null ? m_SortedBarIndices[b] : b;
+                int origBucket = m_SortedBarIndices != null
+                    ? m_SortedBarIndices[b + m_ViewportStartBucket]
+                    : b + m_ViewportStartBucket;
                 int startIdx = origBucket * m_FramesPerBucket;
                 int endIdx = Mathf.Min(startIdx + m_FramesPerBucket, fullFrameCount);
 
@@ -446,10 +563,59 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.RegisterCallback<PointerMoveEvent>(OnGraphPointerMove);
             m_GraphElement.AddManipulator(new ContextualMenuManipulator(OnGraphContextMenu));
 
+            // Make focusable for keyboard input; auto-focus on hover
+            m_GraphElement.focusable = true;
+            m_GraphElement.RegisterCallback<PointerEnterEvent>(_ => m_GraphElement.Focus());
+            m_GraphElement.RegisterCallback<KeyDownEvent>(OnGraphKeyDown);
+            m_GraphElement.RegisterCallback<WheelEvent>(OnGraphWheel);
+
             // Subscribe to GraphElement events
             m_GraphElement.BarClicked += OnBarClicked;
             m_GraphElement.SelectionChanged += OnSelectionChangedInternal;
             m_GraphElement.DragCompleted += OnDragCompletedInternal;
+
+            // ── Overview strip (miniature full-range view) ──
+            var overviewContainer = new VisualElement
+            {
+                style =
+                {
+                    height = k_OverviewHeight,
+                    marginBottom = 2,
+                    flexShrink = 0
+                }
+            };
+
+            m_OverviewElement = new GraphElement
+            {
+                style =
+                {
+                    height = k_OverviewHeight,
+                    flexGrow = 1
+                }
+            };
+            m_OverviewElement.pickingMode = PickingMode.Ignore;
+
+            m_ViewportRect = new VisualElement
+            {
+                style =
+                {
+                    position = Position.Absolute,
+                    top = 0,
+                    bottom = 0,
+                    backgroundColor = new Color(1f, 1f, 1f, 0.15f),
+                    borderLeftWidth = 1, borderRightWidth = 1,
+                    borderLeftColor = new Color(1f, 1f, 1f, 0.5f),
+                    borderRightColor = new Color(1f, 1f, 1f, 0.5f)
+                }
+            };
+
+            overviewContainer.Add(m_OverviewElement);
+            overviewContainer.Add(m_ViewportRect);
+            overviewContainer.RegisterCallback<PointerDownEvent>(OnOverviewPointerDown);
+            overviewContainer.RegisterCallback<PointerMoveEvent>(OnOverviewPointerMove);
+            overviewContainer.RegisterCallback<PointerUpEvent>(OnOverviewPointerUp);
+
+            chartColumn.Add(overviewContainer);
 
             chartColumn.Add(m_GraphElement);
 
@@ -472,6 +638,17 @@ namespace GCAllocBreakdown.Editor
                 }
             };
             m_GraphElement.Add(m_ResetBtn);
+
+            // ── Horizontal scroller (visible when zoomed) ──
+            m_HScroller = new Scroller(0, 1, OnScrollerChanged, SliderDirection.Horizontal)
+            {
+                style =
+                {
+                    height = 14,
+                    display = DisplayStyle.None
+                }
+            };
+            chartColumn.Add(m_HScroller);
 
             // ── X-axis labels row ──
             var xAxis = new VisualElement
@@ -538,6 +715,15 @@ namespace GCAllocBreakdown.Editor
         //  EVENT HANDLERS
         // ═══════════════════════════════════════════════════
 
+        void OnScrollerChanged(float value)
+        {
+            float span = m_ViewportEnd - m_ViewportStart;
+            m_ViewportStart = value;
+            m_ViewportEnd = value + span;
+            ClampViewport();
+            RebuildGraph();
+        }
+
         void OnGraphGeometryChanged(GeometryChangedEvent evt)
         {
             if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
@@ -547,14 +733,61 @@ namespace GCAllocBreakdown.Editor
             RebuildGraph();
         }
 
+        void OnGraphKeyDown(KeyDownEvent evt)
+        {
+            if (m_TotalBucketCount == 0) return;
+            bool handled = false;
+            float span = m_ViewportEnd - m_ViewportStart;
+            float panStep = span * 0.15f;
+
+            switch (evt.keyCode)
+            {
+                case KeyCode.W:
+                    ZoomViewport(0.7f, 0.5f);
+                    handled = true;
+                    break;
+                case KeyCode.S:
+                    ZoomViewport(1.4f, 0.5f);
+                    handled = true;
+                    break;
+                case KeyCode.A:
+                    PanViewport(-panStep);
+                    handled = true;
+                    break;
+                case KeyCode.D:
+                    PanViewport(panStep);
+                    handled = true;
+                    break;
+            }
+
+            if (handled)
+                evt.StopPropagation();
+        }
+
+        void OnGraphWheel(WheelEvent evt)
+        {
+            if (m_TotalBucketCount == 0) return;
+
+            // Compute anchor as normalized position within the graph
+            float localX = evt.localMousePosition.x;
+            float areaWidth = m_GraphElement.contentRect.width;
+            float anchor = areaWidth > 0 ? Mathf.Clamp01(localX / areaWidth) : 0.5f;
+
+            float zoomFactor = evt.delta.y > 0 ? 1.2f : 0.8f;
+            ZoomViewport(zoomFactor, anchor);
+            evt.StopPropagation();
+        }
+
         void OnBarClicked(int barIndex)
         {
             if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
             var perFrame = m_FrameStore.FullFrameBytes;
             if (barIndex < 0 || barIndex >= m_BarCount) return;
 
-            // Resolve the actual bar index if sorted
-            int resolvedIndex = m_SortedBarIndices != null ? m_SortedBarIndices[barIndex] : barIndex;
+            // Resolve the actual bar index, accounting for viewport offset and sorting
+            int resolvedIndex = m_SortedBarIndices != null
+                ? m_SortedBarIndices[barIndex + m_ViewportStartBucket]
+                : barIndex + m_ViewportStartBucket;
 
             // Find the frame with max allocation in this bucket
             int startIdx = resolvedIndex * m_FramesPerBucket;
@@ -855,6 +1088,24 @@ namespace GCAllocBreakdown.Editor
         //  PRIVATE HELPERS
         // ═══════════════════════════════════════════════════
 
+        void UpdateHorizontalScroller()
+        {
+            if (m_HScroller == null) return;
+
+            if (!IsZoomedIn)
+            {
+                m_HScroller.style.display = DisplayStyle.None;
+                return;
+            }
+
+            m_HScroller.style.display = DisplayStyle.Flex;
+            float span = m_ViewportEnd - m_ViewportStart;
+            m_HScroller.lowValue = 0;
+            m_HScroller.highValue = Mathf.Max(0, 1f - span);
+            m_HScroller.slider.pageSize = span;
+            m_HScroller.slider.SetValueWithoutNotify(m_ViewportStart);
+        }
+
         void UpdateResetButtonVisibility()
         {
             if (m_ResetBtn == null || m_FrameStore == null) return;
@@ -866,6 +1117,142 @@ namespace GCAllocBreakdown.Editor
                     || m_AnalyzedFrameEnd != m_FrameStore.FullFrameEnd);
 
             m_ResetBtn.style.display = isSubRange ? DisplayStyle.Flex : DisplayStyle.None;
+        }
+
+        void RebuildOverviewStrip(long[] perFrame, int frameCount, long maxValue)
+        {
+            if (m_OverviewElement == null) return;
+
+            float overviewWidth = m_OverviewElement.contentRect.width;
+            if (float.IsNaN(overviewWidth) || overviewWidth < 1f) overviewWidth = 400f;
+
+            int overviewBucketSize = 1;
+            if (frameCount > (int)overviewWidth)
+                overviewBucketSize = Mathf.CeilToInt((float)frameCount / Mathf.Max(1f, overviewWidth));
+
+            int bucketCount = Mathf.CeilToInt((float)frameCount / overviewBucketSize);
+            EnsureBarCapacity(ref m_OverviewBars, bucketCount);
+            m_OverviewBarCount = bucketCount;
+
+            float barWidth = overviewWidth / bucketCount;
+            for (int b = 0; b < bucketCount; b++)
+            {
+                int startIdx = b * overviewBucketSize;
+                int endIdx = Mathf.Min(startIdx + overviewBucketSize, frameCount);
+                long bucketMax = 0;
+                for (int i = startIdx; i < endIdx; i++)
+                    if (perFrame[i] > bucketMax) bucketMax = perFrame[i];
+
+                m_OverviewBars[b] = new BarData
+                {
+                    X = b * barWidth,
+                    W = Mathf.Max(barWidth, 1f),
+                    Height = maxValue > 0 ? (float)bucketMax / maxValue * k_OverviewHeight : 0f,
+                    Value = bucketMax,
+                    StartFrame = m_FrameStore.FullFrameStart + startIdx,
+                    EndFrame = m_FrameStore.FullFrameStart + endIdx - 1
+                };
+            }
+
+            m_OverviewElement.YAxisMax = maxValue;
+            m_OverviewElement.SetBarData(m_OverviewBars, m_OverviewBarCount);
+
+            // Apply analyzed-range dimming to overview too
+            if (m_AnalyzedFrameStart >= 0 && m_AnalyzedFrameEnd >= 0)
+            {
+                int aStart = -1, aEnd = -1;
+                for (int i = 0; i < m_OverviewBarCount; i++)
+                {
+                    if (m_OverviewBars[i].EndFrame >= m_AnalyzedFrameStart &&
+                        m_OverviewBars[i].StartFrame <= m_AnalyzedFrameEnd)
+                    {
+                        if (aStart < 0) aStart = i;
+                        aEnd = i;
+                    }
+                }
+                m_OverviewElement.SetAnalyzedRange(aStart, aEnd);
+            }
+            else
+            {
+                m_OverviewElement.SetAnalyzedRange(-1, -1);
+            }
+
+            m_OverviewElement.HasData = true;
+        }
+
+        void UpdateViewportRect()
+        {
+            if (m_ViewportRect == null || m_OverviewElement == null) return;
+            float overviewWidth = m_OverviewElement.contentRect.width;
+            if (float.IsNaN(overviewWidth) || overviewWidth < 1f) return;
+
+            m_ViewportRect.style.left = m_ViewportStart * overviewWidth;
+            m_ViewportRect.style.width = (m_ViewportEnd - m_ViewportStart) * overviewWidth;
+
+            // Hide overview strip when fully zoomed out
+            bool show = IsZoomedIn;
+            m_OverviewElement.parent.style.display = show ? DisplayStyle.Flex : DisplayStyle.None;
+        }
+
+        void OnOverviewPointerDown(PointerDownEvent evt)
+        {
+            if (evt.button != 0 || m_OverviewBarCount == 0) return;
+
+            float overviewWidth = m_OverviewElement.contentRect.width;
+            if (overviewWidth < 1f) return;
+
+            float clickNorm = evt.localPosition.x / overviewWidth;
+            float span = m_ViewportEnd - m_ViewportStart;
+
+            // Check if clicking within viewport rect -> start drag
+            if (clickNorm >= m_ViewportStart && clickNorm <= m_ViewportEnd)
+            {
+                m_OverviewDragging = true;
+                m_OverviewDragStartX = evt.localPosition.x;
+                m_OverviewDragStartVP = m_ViewportStart;
+                ((VisualElement)evt.target).CapturePointer(evt.pointerId);
+            }
+            else
+            {
+                // Click outside -> jump viewport center to click position
+                float newStart = clickNorm - span * 0.5f;
+                m_ViewportStart = newStart;
+                m_ViewportEnd = newStart + span;
+                ClampViewport();
+                RebuildGraph();
+            }
+
+            evt.StopPropagation();
+        }
+
+        void OnOverviewPointerMove(PointerMoveEvent evt)
+        {
+            if (!m_OverviewDragging) return;
+
+            float overviewWidth = m_OverviewElement.contentRect.width;
+            if (overviewWidth < 1f) return;
+
+            float dx = evt.localPosition.x - m_OverviewDragStartX;
+            float deltaNorm = dx / overviewWidth;
+            float span = m_ViewportEnd - m_ViewportStart;
+
+            m_ViewportStart = m_OverviewDragStartVP + deltaNorm;
+            m_ViewportEnd = m_ViewportStart + span;
+            ClampViewport();
+            RebuildGraph();
+
+            evt.StopPropagation();
+        }
+
+        void OnOverviewPointerUp(PointerUpEvent evt)
+        {
+            if (evt.button != 0) return;
+            if (m_OverviewDragging)
+            {
+                m_OverviewDragging = false;
+                ((VisualElement)evt.target).ReleasePointer(evt.pointerId);
+            }
+            evt.StopPropagation();
         }
 
         void ComputeAnalyzedBarRange(out int startBar, out int endBar)
@@ -894,13 +1281,12 @@ namespace GCAllocBreakdown.Editor
                 return;
             }
 
-            // Find the first and last bars that overlap with the analyzed frame range
+            // Find the first and last visible bars that overlap with the analyzed frame range
+            // After viewport clipping, m_Bars[i] already has correct StartFrame/EndFrame
             for (int i = 0; i < m_BarCount; i++)
             {
-                int barFrameStart = m_FrameStore.FullFrameStart + i * m_FramesPerBucket;
-                int barFrameEnd = m_FrameStore.FullFrameStart + Mathf.Min((i + 1) * m_FramesPerBucket, m_FrameStore.FullFrameBytes.Length) - 1;
-
-                bool overlaps = barFrameStart <= m_AnalyzedFrameEnd && barFrameEnd >= m_AnalyzedFrameStart;
+                bool overlaps = m_Bars[i].StartFrame <= m_AnalyzedFrameEnd
+                    && m_Bars[i].EndFrame >= m_AnalyzedFrameStart;
                 if (overlaps)
                 {
                     if (startBar < 0) startBar = i;
