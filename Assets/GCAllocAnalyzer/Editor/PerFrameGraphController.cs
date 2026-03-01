@@ -46,9 +46,6 @@ namespace GCAllocBreakdown.Editor
         /// <summary>Invoked when the user completes a drag-select. Args: startFrame, endFrame.</summary>
         public event Action<int, int> OnDragCompleted;
 
-        /// <summary>Invoked when the user requests re-analysis (e.g. via context menu).</summary>
-        public event Action OnAnalyzeRequested;
-
         /// <summary>Invoked when the user clicks the Reset button to restore full range.</summary>
         public event Action OnResetRequested;
 
@@ -923,12 +920,13 @@ namespace GCAllocBreakdown.Editor
                 MapBarRangeToFrameRange(selStart, selEnd, out int rangeStart, out int rangeEnd);
                 if (OnDragCompleted != null)
                     OnDragCompleted(rangeStart, rangeEnd);
-                if (OnAnalyzeRequested != null)
-                    OnAnalyzeRequested();
             },
             hasActiveSelection ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
 
             evt.menu.AppendSeparator();
+
+            evt.menu.AppendAction("Reset Zoom", _ => ResetViewport(),
+                IsZoomedIn ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
 
             evt.menu.AppendAction(
                 m_OrderByMagnitude ? "Order by Frame" : "Order by Size",

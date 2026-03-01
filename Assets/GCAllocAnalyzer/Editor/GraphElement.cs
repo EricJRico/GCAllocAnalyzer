@@ -558,6 +558,16 @@ namespace GCAllocBreakdown.Editor
                         ShrinkSelectionLeft(1);
                     handled = true;
                     break;
+
+                case KeyCode.Return:
+                case KeyCode.KeypadEnter:
+                    if (m_SelectionStart >= 0 && m_SelectionEnd >= 0)
+                    {
+                        if (DragCompleted != null)
+                            DragCompleted(m_SelectionStart, m_SelectionEnd);
+                    }
+                    handled = true;
+                    break;
             }
 
             if (handled)

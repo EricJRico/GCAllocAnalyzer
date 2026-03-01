@@ -221,6 +221,16 @@ namespace GCAllocBreakdown.Editor
             BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
             ComputeSnapshotPerFrameBytes();
 
+            // Restore frame store from snapshot if needed
+            if (!m_FrameStore.HasFullFrameData && m_Snapshot.PerFrameBytes != null)
+            {
+                m_FrameStore.FullFrameStart = m_Snapshot.FrameStart;
+                m_FrameStore.FullFrameEnd = m_Snapshot.FrameEnd;
+                int count = m_Snapshot.PerFrameBytes.Length;
+                m_FrameStore.FullFrameBytes = new long[count];
+                Array.Copy(m_Snapshot.PerFrameBytes, m_FrameStore.FullFrameBytes, count);
+            }
+
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
             BuildThreadIndex(m_ActiveGroups);
@@ -420,6 +430,17 @@ namespace GCAllocBreakdown.Editor
             BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
             ComputeSnapshotPerFrameBytes();
 
+            // Populate frame store from loaded snapshot
+            m_FrameStore.FullFrameStart = m_Snapshot.FrameStart;
+            m_FrameStore.FullFrameEnd = m_Snapshot.FrameEnd;
+            if (m_Snapshot.PerFrameBytes != null)
+            {
+                int count = m_Snapshot.PerFrameBytes.Length;
+                m_FrameStore.FullFrameBytes = new long[count];
+                Array.Copy(m_Snapshot.PerFrameBytes, m_FrameStore.FullFrameBytes, count);
+            }
+            m_FrameStore.CacheAnalysis(m_Snapshot.RawAllocations, m_Snapshot.SortedThreadNames);
+
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
             BuildThreadIndex(m_ActiveGroups);
@@ -609,7 +630,6 @@ namespace GCAllocBreakdown.Editor
         {
             m_GraphController = new PerFrameGraphController(OnGraphFrameSelected, () => m_MarkerListView?.selectedIndex ?? -1);
             m_GraphController.OnDragCompleted += OnGraphDragCompleted;
-            m_GraphController.OnAnalyzeRequested += OnAnalyze;
             m_GraphController.OnResetRequested += OnGraphResetRequested;
             m_GraphController.SetData(m_FrameStore, m_Snapshot, m_FilteredGroups);
             return m_GraphController.Root;
