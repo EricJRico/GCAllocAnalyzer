@@ -329,12 +329,13 @@ namespace GCAllocBreakdown.Editor
                 return;
             }
 
-            // Recompute X/W for visible bars to fill the graph width
+            // Recompute X/W for visible bars to fill the graph width.
+            // Forward copy is safe: i <= srcIdx always, so no data is overwritten before it is read.
             float visibleBarWidth = areaWidth / visibleCount;
             for (int i = 0; i < visibleCount; i++)
             {
                 int srcIdx = visibleStart + i;
-                m_Bars[i] = m_Bars[srcIdx]; // shift to front of array
+                m_Bars[i] = m_Bars[srcIdx];
                 m_Bars[i].X = i * visibleBarWidth;
                 m_Bars[i].W = Mathf.Max(visibleBarWidth, 1f);
                 // Recalculate height against global max (unchanged)
@@ -562,7 +563,8 @@ namespace GCAllocBreakdown.Editor
 
             // Make focusable for keyboard input; auto-focus on hover
             m_GraphElement.focusable = true;
-            m_GraphElement.RegisterCallback<PointerEnterEvent>(_ => m_GraphElement.Focus());
+            m_GraphElement.RegisterCallback<PointerEnterEvent, GraphElement>(
+                OnGraphPointerEnter, m_GraphElement);
             m_GraphElement.RegisterCallback<KeyDownEvent>(OnGraphKeyDown);
             m_GraphElement.RegisterCallback<WheelEvent>(OnGraphWheel);
 
@@ -821,6 +823,8 @@ namespace GCAllocBreakdown.Editor
             OnDragCompleted(startFrame, endFrame);
         }
 
+        static void OnGraphPointerEnter(PointerEnterEvent evt, GraphElement graph) => graph.Focus();
+
         void OnGraphPointerMove(PointerMoveEvent evt)
         {
             if (m_BarCount == 0 || m_FrameStore == null)
@@ -886,57 +890,68 @@ namespace GCAllocBreakdown.Editor
         void OnGraphContextMenu(ContextualMenuPopulateEvent evt)
         {
             bool hasData = m_GraphElement != null && m_BarCount > 0;
+            bool hasActiveSelection = m_LastSelectionStartBar >= 0 && m_LastSelectionEndBar >= 0;
 
-            int selStart = m_LastSelectionStartBar;
-            int selEnd = m_LastSelectionEndBar;
-            bool hasActiveSelection = selStart >= 0 && selEnd >= 0;
-
-            evt.menu.AppendAction("Select All", _ =>
-            {
-                m_GraphElement.SetSelection(0, m_BarCount - 1);
-                m_LastSelectionStartBar = 0;
-                m_LastSelectionEndBar = m_BarCount - 1;
-                NotifySelectionChanged(0, m_BarCount - 1);
-            },
-            hasData ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
-
-            evt.menu.AppendAction("Clear Selection", _ =>
-            {
-                m_GraphElement.SetSelection(-1, -1);
-                m_GraphElement.SetHighlightedBar(-1);
-                m_LastSelectionStartBar = -1;
-                m_LastSelectionEndBar = -1;
-            },
-            hasActiveSelection ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
-
-            evt.menu.AppendSeparator();
-
-            evt.menu.AppendAction("Select Frame with Max GC", _ => SelectExtremeFrame(true),
+            evt.menu.AppendAction("Select All", OnContextSelectAll,
                 hasData ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
 
-            evt.menu.AppendAction("Analyze Selection", _ =>
-            {
-                if (!hasActiveSelection) return;
-                MapBarRangeToFrameRange(selStart, selEnd, out int rangeStart, out int rangeEnd);
-                if (OnDragCompleted != null)
-                    OnDragCompleted(rangeStart, rangeEnd);
-            },
-            hasActiveSelection ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+            evt.menu.AppendAction("Clear Selection", OnContextClearSelection,
+                hasActiveSelection ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
 
             evt.menu.AppendSeparator();
 
-            evt.menu.AppendAction("Reset Zoom", _ => ResetViewport(),
+            evt.menu.AppendAction("Select Frame with Max GC", OnContextSelectMaxGC,
+                hasData ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+
+            evt.menu.AppendAction("Analyze Selection", OnContextAnalyzeSelection,
+                hasActiveSelection ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+
+            evt.menu.AppendSeparator();
+
+            evt.menu.AppendAction("Reset Zoom", OnContextResetZoom,
                 IsZoomedIn ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
 
             evt.menu.AppendAction(
                 m_OrderByMagnitude ? "Order by Frame" : "Order by Size",
-                _ => OnSortToggleClicked(),
+                OnContextToggleSort,
                 hasData ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
         }
+
+        void OnContextSelectAll(DropdownMenuAction _)
+        {
+            m_GraphElement.SetSelection(0, m_BarCount - 1);
+            m_LastSelectionStartBar = 0;
+            m_LastSelectionEndBar = m_BarCount - 1;
+            NotifySelectionChanged(0, m_BarCount - 1);
+        }
+
+        void OnContextClearSelection(DropdownMenuAction _)
+        {
+            m_GraphElement.SetSelection(-1, -1);
+            m_GraphElement.SetHighlightedBar(-1);
+            m_LastSelectionStartBar = -1;
+            m_LastSelectionEndBar = -1;
+        }
+
+        void OnContextSelectMaxGC(DropdownMenuAction _) => SelectExtremeFrame(true);
+
+        void OnContextAnalyzeSelection(DropdownMenuAction _)
+        {
+            if (m_LastSelectionStartBar < 0 || m_LastSelectionEndBar < 0) return;
+            MapBarRangeToFrameRange(m_LastSelectionStartBar, m_LastSelectionEndBar,
+                out int rangeStart, out int rangeEnd);
+            if (OnDragCompleted != null)
+                OnDragCompleted(rangeStart, rangeEnd);
+        }
+
+        void OnContextResetZoom(DropdownMenuAction _) => ResetViewport();
+
+        void OnContextToggleSort(DropdownMenuAction _) => OnSortToggleClicked();
 
         void SelectExtremeFrame(bool selectMax)
         {
             if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
+            if (m_FramesPerBucket <= 0) return;
 
             var perFrame = m_FrameStore.FullFrameBytes;
             int extremeIdx = 0;
@@ -951,16 +966,37 @@ namespace GCAllocBreakdown.Editor
                 }
             }
 
-            // Find which bar contains this frame
-            int barIdx = extremeIdx / m_FramesPerBucket;
+            // Global bucket index for the extreme frame
+            int globalBucketIdx = extremeIdx / m_FramesPerBucket;
+            if (globalBucketIdx >= m_TotalBucketCount)
+                globalBucketIdx = m_TotalBucketCount - 1;
+
+            // If the target bucket is outside the current viewport, pan to include it
+            if (!m_OrderByMagnitude && IsZoomedIn)
+            {
+                float bucketNorm = (float)globalBucketIdx / m_TotalBucketCount;
+                float vpSpan = m_ViewportEnd - m_ViewportStart;
+                if (bucketNorm < m_ViewportStart || bucketNorm >= m_ViewportEnd)
+                {
+                    // Center the viewport on the target bucket
+                    m_ViewportStart = bucketNorm - vpSpan * 0.5f;
+                    m_ViewportEnd = m_ViewportStart + vpSpan;
+                    ClampViewport();
+                    RebuildGraph();
+                }
+            }
+
+            // Convert global bucket to display-local bar index
+            int barIdx = globalBucketIdx - m_ViewportStartBucket;
+            if (barIdx < 0) barIdx = 0;
             if (barIdx >= m_BarCount) barIdx = m_BarCount - 1;
 
-            // If sorted, we need the display position, not the original bar index
+            // If sorted, find the display position of the original bucket
             if (m_SortedBarIndices != null)
             {
                 for (int i = 0; i < m_BarCount; i++)
                 {
-                    if (m_SortedBarIndices[i] == barIdx)
+                    if (m_SortedBarIndices[i] == globalBucketIdx)
                     {
                         barIdx = i;
                         break;
@@ -1042,6 +1078,13 @@ namespace GCAllocBreakdown.Editor
         //  SORTING
         // ═══════════════════════════════════════════════════
 
+        // Non-allocating struct comparer for Array.Sort — sorts bar indices by value descending
+        struct BarValueDescComparer : IComparer<int>
+        {
+            public BarData[] Bars;
+            public int Compare(int a, int b) => Bars[b].Value.CompareTo(Bars[a].Value);
+        }
+
         void ApplySortedOrder(float barWidth)
         {
             // Build index array: maps display position -> original bucket index
@@ -1051,19 +1094,9 @@ namespace GCAllocBreakdown.Editor
             for (int i = 0; i < m_BarCount; i++)
                 m_SortedBarIndices[i] = i;
 
-            // Sort descending by value (simple insertion sort to avoid LINQ/allocations)
-            for (int i = 1; i < m_BarCount; i++)
-            {
-                int key = m_SortedBarIndices[i];
-                long keyVal = m_Bars[key].Value;
-                int j = i - 1;
-                while (j >= 0 && m_Bars[m_SortedBarIndices[j]].Value < keyVal)
-                {
-                    m_SortedBarIndices[j + 1] = m_SortedBarIndices[j];
-                    j--;
-                }
-                m_SortedBarIndices[j + 1] = key;
-            }
+            // Sort descending by value — O(n log n) via Array.Sort with struct comparer (no allocations)
+            var comparer = new BarValueDescComparer { Bars = m_Bars };
+            Array.Sort(m_SortedBarIndices, 0, m_BarCount, comparer);
 
             // Rearrange bars into display order so array index == display position.
             // This ensures GraphElement's selection (which uses display indices) lines up.
@@ -1154,6 +1187,7 @@ namespace GCAllocBreakdown.Editor
 
             m_OverviewElement.YAxisMax = maxValue;
             m_OverviewElement.SetBarData(m_OverviewBars, m_OverviewBarCount);
+            // Overview intentionally does not show overlay bars — too small to be useful.
 
             // Apply analyzed-range dimming to overview too
             if (m_AnalyzedFrameStart >= 0 && m_AnalyzedFrameEnd >= 0)
@@ -1260,22 +1294,13 @@ namespace GCAllocBreakdown.Editor
             if (m_FrameStore == null || m_BarCount == 0) return;
             if (m_AnalyzedFrameStart < 0 || m_AnalyzedFrameEnd < 0) return;
 
-            // In sorted mode, analyzed bars may not be contiguous.
-            // For simplicity, in sorted mode we mark all as analyzed when it's the full range,
-            // otherwise mark all as analyzed (dimming refinement deferred to Task 12).
+            // In sorted mode, analyzed bars are non-contiguous so a contiguous
+            // start/end range cannot correctly express per-bar dimming.
+            // Known limitation: all bars show at full brightness in sorted view.
             if (m_SortedBarIndices != null)
             {
-                if (m_AnalyzedFrameStart == m_FrameStore.FullFrameStart &&
-                    m_AnalyzedFrameEnd == m_FrameStore.FullFrameEnd)
-                {
-                    startBar = 0;
-                    endBar = m_BarCount - 1;
-                }
-                else
-                {
-                    startBar = 0;
-                    endBar = m_BarCount - 1;
-                }
+                startBar = 0;
+                endBar = m_BarCount - 1;
                 return;
             }
 

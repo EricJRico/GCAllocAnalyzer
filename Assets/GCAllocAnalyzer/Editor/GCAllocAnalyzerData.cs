@@ -261,7 +261,8 @@ namespace GCAllocBreakdown.Editor
 
         public void CacheAnalysis(List<RawAllocation> rawAllocations, List<string> sortedThreadNames)
         {
-            // Deep copy so the cache is independent of the snapshot
+            // Copy the list so the cache is independent of the snapshot.
+            // RawAllocation references are shared but immutable after creation.
             CachedRawAllocations = new List<RawAllocation>(rawAllocations.Count);
             for (int i = 0; i < rawAllocations.Count; i++)
                 CachedRawAllocations.Add(rawAllocations[i]);
@@ -271,10 +272,7 @@ namespace GCAllocBreakdown.Editor
                 CachedSortedThreadNames.Add(sortedThreadNames[i]);
         }
 
-        public void EnsureNonSerializedLists()
-        {
-            // After domain reload, non-serialized fields are null.
-            // We don't try to restore them — a fresh Analyze is needed.
-        }
+        // Non-serialized fields (CachedRawAllocations, CachedSortedThreadNames) are
+        // intentionally not restored after domain reload — a fresh Analyze is needed.
     }
 }
