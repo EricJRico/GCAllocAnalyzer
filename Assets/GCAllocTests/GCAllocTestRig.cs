@@ -44,6 +44,13 @@ namespace GCAllocTest
             go.AddComponent<InitAndPeriodicAllocs>();
             go.AddComponent<GCAllocTest.Systems.EventDriven.EventAllocGenerator>();
 
+            // New expanded-coverage test components
+            go.AddComponent<GCAllocTest.DeepStacks.DeepCallstackAllocator>();
+            go.AddComponent<GCAllocTest.Threading.ThreadedAllocator>();
+            go.AddComponent<GCAllocTest.LINQPatterns.LINQAllocPatterns>();
+            go.AddComponent<GCAllocTest.UnityAPIs.UnityAPIAllocPatterns>();
+            go.AddComponent<GCAllocTest.EdgeCases.ParamsAndBoxingEdgeCases>();
+
             UnityEditor.Selection.activeGameObject = go;
             Debug.Log("Created GC Alloc Test Rig with all test components.");
         }

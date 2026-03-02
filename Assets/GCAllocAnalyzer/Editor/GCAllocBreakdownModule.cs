@@ -213,7 +213,7 @@ namespace GCAllocBreakdown.Editor
             long totalBytes = 0;
             int totalCount = 0;
 
-            for (int threadIdx = 0; threadIdx < 64; threadIdx++)
+            for (int threadIdx = 0; threadIdx < 256; threadIdx++)
             {
                 using var raw = ProfilerDriver.GetRawFrameDataView(frameIndex, threadIdx);
                 if (!raw.valid) break;

@@ -31,6 +31,26 @@
 
 **Scope:** `ExportMarkerTableCSV`, `ExportAllocationsCSV`, Save/Load snapshot handlers.
 
+## Performance: BuildGrouping (~1,000ms for 500K allocations)
+
+`BuildGrouping` iterates all `RawAllocations` twice (once for full-callstack grouping, once for top-frame grouping) with `Dictionary<string, CallsiteGroup>` lookups per allocation. At 500K+ allocations this takes ~1s. Potential optimizations:
+
+- **Integer-keyed grouping** — assign each unique call stack a sequential integer ID during extraction (the call stack cache already identifies them). Use `Dictionary<int, CallsiteGroup>` instead of string dictionary lookups.
+- **Pre-sized `Allocations` lists** — groups currently start with `new List<RawAllocation>(16)`, causing many resizes for groups with thousands of allocations. A two-pass approach (count first, then allocate) or a rough size estimate would reduce array copies.
+- **Single-pass grouping** — build both groupings simultaneously in one pass over `RawAllocations` instead of two separate passes.
+
+## Performance: Unaccounted Extraction Overhead (~940ms)
+
+Within the frame extraction loop, ~940ms is not attributed to any timed phase. This includes:
+
+- **`GetSampleCallstack`** native interop — called for every GC.Alloc sample (500K+ calls), fills a `List<ulong>` from the native side. This is a Unity API cost that may not be reducible.
+- **Address hash computation** — the call stack cache key hash runs for every GC.Alloc sample. Already fast (integer multiply-accumulate), unlikely to improve further.
+- **`EditorUtility.DisplayCancelableProgressBar`** — called every 20 frames. Could reduce frequency or remove entirely for small frame ranges.
+
+## Performance: Sample Iteration (~745ms)
+
+The per-sample loop calls `GetSampleMarkerId(i)` and `GetSampleChildrenCount(i)` for every sample on every GC-carrying thread. With many threads and high sample counts, this is ~745ms of Unity API calls. Hard to optimize without a different profiler API (e.g., a bulk/batch sample query if Unity ever provides one).
+
 ## Performance: Minor Allocation Hotspots
 
 Low-priority items flagged during code review. Not urgent — each allocates once per user action or once per analysis, not per frame.
