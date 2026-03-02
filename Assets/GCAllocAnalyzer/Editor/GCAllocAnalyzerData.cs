@@ -111,6 +111,7 @@ namespace GCAllocBreakdown.Editor
     internal class DepthEntry
     {
         public string Name;
+        public int MarkerId;
         public int Remaining;
     }
 
