@@ -6,9 +6,8 @@
 .idea/
 *.DotSettings.user
 
-# Claude Code local config (except CLAUDE.md which is project instructions)
-.claude/*
-!.claude/CLAUDE.md
+# Claude Code
+.claude/
 
 # Build artifacts
 /[Oo]bj/
