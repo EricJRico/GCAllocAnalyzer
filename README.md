@@ -3,10 +3,17 @@
 [![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-blue.svg)](https://unity.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A Unity Editor tool for profiling and analyzing garbage collection allocations. Integrates with Unity's Profiler as both a standalone Editor Window (multi-frame analysis) and a Profiler Module (per-frame breakdown). Includes a runtime helper for capturing profiler data on-device.
+A Unity Editor tool for profiling and analyzing garbage collection allocations. Integrates with Unity's Profiler as both a standalone Editor Window (multi-frame analysis) and a Profiler Module (per-frame breakdown).
 
-<!-- TODO: Replace with actual screenshot/GIF of the main analyzer window -->
-<!-- ![GC Alloc Analyzer](Documentation~/images/analyzer-overview.png) -->
+## GC Alloc Breakdown
+<p align="center">
+  <img src="Documentation~/images/gc-alloc-breakdown.png" width="80%" alt="GC Alloc Breakdown"/>
+</p>
+
+## GC Alloc Analyzer
+<p align="center">
+  <img src="Documentation~/images/analyzer-overview.png" alt="GC Alloc Analyzer"/>
+</p>
 
 ## Quick Install
 
@@ -34,7 +41,12 @@ Multi-frame analysis across any range of profiled frames. Pull lightweight per-f
 - **Filtering** — filter by name, exclude patterns, or specific threads
 - **Sortable columns** — total bytes, count, average, percentage, per-frame statistics (median, mean, min, max, range)
 - **Top offenders** — ranked views of the worst allocation sites and largest individual allocations
-- **Color-coded severity** — red (10 KB+), yellow (1 KB+), gray (< 1 KB)
+- **Color-coded severity** — red (10 KB+), yellow (1 KB+), gray (< 1 KB) — colors and thresholds customizable via **Preferences > Analysis > GC Alloc Analyzer**
+
+<p align="center">
+  <img src="Documentation~/images/preferences.png" width="60%" alt="GC Alloc Breakdown"/>
+</p>
+
 - **Source navigation** — click to open the allocating method in your IDE at the exact line
 
 ### Per-Frame Graph
@@ -64,19 +76,6 @@ A dedicated **GC Alloc Breakdown** module inside Unity's Profiler window for per
 - **Expandable call stacks** — click to expand full call stack inline
 - **LRU cache** — results for up to 512 frames are cached for instant scrubbing
 - **Sortable columns** — bytes, count, average, and allocation site name
-
-### Runtime Capture
-
-The `GCAllocCaptureHelper` MonoBehaviour enables on-device profiler capture for analyzing GC allocations on target hardware.
-
-- **Managed call stacks** — automatically enables `Profiler.enableAllocationCallstacks` at startup
-- **Raw file capture** — writes `.raw` profiler data to `Application.persistentDataPath`
-- **Toggle key** — start/stop capture with a configurable key (default: F9)
-- **Configurable memory** — set `Profiler.maxUsedMemory` to prevent truncation on long sessions
-
-Retrieve captured data via:
-- **Android**: `adb pull /sdcard/Android/data/{bundleId}/files/profiler_capture.raw`
-- **iOS**: Xcode Devices > Download Container > `AppData/Documents/`
 
 ### Save, Load & Export
 

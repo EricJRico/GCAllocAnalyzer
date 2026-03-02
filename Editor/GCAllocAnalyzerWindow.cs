@@ -64,9 +64,6 @@ namespace GCAllocBreakdown.Editor
         static readonly Func<VisualElement> k_HeaderAllocFrame  = () => new Label("Frame")   { tooltip = "Profiler frame number where this allocation occurred" };
         static readonly Func<VisualElement> k_HeaderAllocThread = () => new Label("Thread")  { tooltip = "Thread where this allocation occurred" };
 
-        static readonly Color k_Red = new(1f, 0.3f, 0.3f);
-        static readonly Color k_Yellow = new(1f, 0.85f, 0.2f);
-        static readonly Color k_DimGray = new(0.7f, 0.7f, 0.7f);
         static readonly Color k_TopFrame = new(0.9f, 0.9f, 0.6f);
         static readonly Color k_CallerFrame = new(0.55f, 0.55f, 0.55f);
         static readonly Color k_SubtleText = new(0.5f, 0.5f, 0.5f);
@@ -234,8 +231,22 @@ namespace GCAllocBreakdown.Editor
             root.Add(BuildStatusBar());
             ShowNoDataState(true);
 
+            GCAllocSettings.SettingsChanged += OnSettingsChanged;
+
             // Restore state after domain reload (e.g. script save)
             TryRestoreAfterReload();
+        }
+
+        void OnDisable()
+        {
+            GCAllocSettings.SettingsChanged -= OnSettingsChanged;
+        }
+
+        void OnSettingsChanged()
+        {
+            m_MarkerListView?.RefreshItems();
+            if (m_Snapshot != null && m_Snapshot.HasData)
+                PopulateTopOffendersUI();
         }
 
         /// <summary>
@@ -2222,8 +2233,7 @@ namespace GCAllocBreakdown.Editor
             var g = m_FilteredGroups[index];
             var lbl = (Label)cell;
             lbl.text = g.FormattedBytes;
-            lbl.style.color = g.TotalBytes >= 10240 ? k_Red
-                : g.TotalBytes >= 1024 ? k_Yellow : k_DimGray;
+            lbl.style.color = GCAllocSettings.ColorForBytes(g.TotalBytes);
             lbl.style.unityFontStyleAndWeight = FontStyle.Bold;
             lbl.userData = g;
         }
@@ -2282,8 +2292,7 @@ namespace GCAllocBreakdown.Editor
             var g = m_FilteredGroups[index];
             var lbl = (Label)cell;
             lbl.text = g.FormattedMax;
-            lbl.style.color = g.MaxBytesPerFrame >= 10240 ? k_Red
-                : g.MaxBytesPerFrame >= 1024 ? k_Yellow : k_DimGray;
+            lbl.style.color = GCAllocSettings.ColorForBytes(g.MaxBytesPerFrame);
             lbl.userData = g;
         }
 
@@ -2461,7 +2470,7 @@ namespace GCAllocBreakdown.Editor
             row.Add(new Label(bytes)
             {
                 style = { width = 70, fontSize = 10, unityFontStyleAndWeight = FontStyle.Bold,
-                    color = k_Yellow },
+                    color = GCAllocSettings.MediumColor },
                 pickingMode = PickingMode.Ignore
             });
             row.Add(new Label(pct)
@@ -2500,7 +2509,7 @@ namespace GCAllocBreakdown.Editor
             row.Add(new Label(info)
             {
                 style = { width = 110, fontSize = 10, unityFontStyleAndWeight = FontStyle.Bold,
-                    color = k_Red },
+                    color = GCAllocSettings.HighColor },
                 pickingMode = PickingMode.Ignore
             });
 

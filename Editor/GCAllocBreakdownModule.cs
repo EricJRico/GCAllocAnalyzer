@@ -46,8 +46,6 @@ namespace GCAllocBreakdown.Editor
         const int MAX_STACK_FRAMES = 20;
         const int MAX_CACHED_FRAMES = 512;
 
-        static readonly Color k_Red = new(1f, 0.3f, 0.3f);
-        static readonly Color k_Yellow = new(1f, 0.85f, 0.2f);
         static readonly Color k_DimGray = new(0.7f, 0.7f, 0.7f);
         static readonly Color k_TopFrame = new(0.9f, 0.9f, 0.6f);
         static readonly Color k_CallerFrame = new(0.55f, 0.55f, 0.55f);
@@ -144,6 +142,7 @@ namespace GCAllocBreakdown.Editor
             root.Add(m_ListView);
 
             ProfilerWindow.SelectedFrameIndexChanged += OnFrameChanged;
+            GCAllocSettings.SettingsChanged += OnSettingsChanged;
             LoadFrame();
 
             return root;
@@ -152,8 +151,16 @@ namespace GCAllocBreakdown.Editor
         protected override void Dispose(bool disposing)
         {
             if (disposing)
+            {
                 ProfilerWindow.SelectedFrameIndexChanged -= OnFrameChanged;
+                GCAllocSettings.SettingsChanged -= OnSettingsChanged;
+            }
             base.Dispose(disposing);
+        }
+
+        void OnSettingsChanged()
+        {
+            m_ListView?.RefreshItems();
         }
 
         static void OnOpenAnalyzer() => GCAllocAnalyzerWindow.ShowWindow();
@@ -606,8 +613,7 @@ namespace GCAllocBreakdown.Editor
                 toggleLbl.style.color = StyleKeyword.Null;
 
                 bytesLbl.text = g.FormattedBytes;
-                bytesLbl.style.color = g.TotalBytes >= 10240 ? k_Red
-                    : g.TotalBytes >= 1024 ? k_Yellow : k_DimGray;
+                bytesLbl.style.color = GCAllocSettings.ColorForBytes(g.TotalBytes);
                 bytesLbl.style.unityFontStyleAndWeight = FontStyle.Bold;
                 bytesLbl.style.display = DisplayStyle.Flex;
 
