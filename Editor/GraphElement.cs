@@ -538,48 +538,6 @@ namespace GCAllocBreakdown.Editor
                     MoveSelection(step);
                     handled = true;
                     break;
-
-                case KeyCode.Plus:
-                case KeyCode.Equals:
-                case KeyCode.KeypadPlus:
-                    GrowSelection(step);
-                    handled = true;
-                    break;
-
-                case KeyCode.Minus:
-                case KeyCode.KeypadMinus:
-                    ShrinkSelection(step);
-                    handled = true;
-                    break;
-
-                // Edge-independent selection adjustment:
-                //   Shift+, (<) = grow left edge outward    Shift+. (>) = grow right edge outward
-                //   ,           = shrink right edge inward   .           = shrink left edge inward
-                case KeyCode.Comma:
-                    if (evt.shiftKey)
-                        GrowSelectionLeft(1);
-                    else
-                        ShrinkSelectionRight(1);
-                    handled = true;
-                    break;
-
-                case KeyCode.Period:
-                    if (evt.shiftKey)
-                        GrowSelectionRight(1);
-                    else
-                        ShrinkSelectionLeft(1);
-                    handled = true;
-                    break;
-
-                case KeyCode.Return:
-                case KeyCode.KeypadEnter:
-                    if (m_SelectionStart >= 0 && m_SelectionEnd >= 0)
-                    {
-                        if (DragCompleted != null)
-                            DragCompleted(m_SelectionStart, m_SelectionEnd);
-                    }
-                    handled = true;
-                    break;
             }
 
             if (handled)
@@ -625,61 +583,5 @@ namespace GCAllocBreakdown.Editor
             m_HighlightedBar = -1;
         }
 
-        void GrowSelection(int delta)
-        {
-            if (m_SelectionStart < 0 || m_SelectionEnd < 0) return;
-
-            int newStart = m_SelectionStart - delta;
-            int newEnd = m_SelectionEnd + delta;
-            if (newStart < 0) newStart = 0;
-            if (newEnd >= m_BarCount) newEnd = m_BarCount - 1;
-
-            m_SelectionStart = newStart;
-            m_SelectionEnd = newEnd;
-        }
-
-        void ShrinkSelection(int delta)
-        {
-            if (m_SelectionStart < 0 || m_SelectionEnd < 0) return;
-
-            int mid = (m_SelectionStart + m_SelectionEnd) / 2;
-            int newStart = m_SelectionStart + delta;
-            int newEnd = m_SelectionEnd - delta;
-
-            // Don't shrink past midpoint
-            if (newStart > mid) newStart = mid;
-            if (newEnd < mid) newEnd = mid;
-
-            m_SelectionStart = newStart;
-            m_SelectionEnd = newEnd;
-        }
-
-        void GrowSelectionLeft(int delta)
-        {
-            if (m_SelectionStart < 0 || m_SelectionEnd < 0) return;
-            m_SelectionStart -= delta;
-            if (m_SelectionStart < 0) m_SelectionStart = 0;
-        }
-
-        void GrowSelectionRight(int delta)
-        {
-            if (m_SelectionStart < 0 || m_SelectionEnd < 0) return;
-            m_SelectionEnd += delta;
-            if (m_SelectionEnd >= m_BarCount) m_SelectionEnd = m_BarCount - 1;
-        }
-
-        void ShrinkSelectionLeft(int delta)
-        {
-            if (m_SelectionStart < 0 || m_SelectionEnd < 0) return;
-            m_SelectionStart += delta;
-            if (m_SelectionStart > m_SelectionEnd) m_SelectionStart = m_SelectionEnd;
-        }
-
-        void ShrinkSelectionRight(int delta)
-        {
-            if (m_SelectionStart < 0 || m_SelectionEnd < 0) return;
-            m_SelectionEnd -= delta;
-            if (m_SelectionEnd < m_SelectionStart) m_SelectionEnd = m_SelectionStart;
-        }
     }
 }
