@@ -1,9 +1,7 @@
 {
     "name": "GCAllocBreakdown.Editor",
     "rootNamespace": "GCAllocBreakdown.Editor",
-    "references": [
-        "GCAllocBreakdown"
-    ],
+    "references": [],
     "includePlatforms": [
         "Editor"
     ],

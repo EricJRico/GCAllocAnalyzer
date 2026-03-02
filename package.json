@@ -2,7 +2,7 @@
     "name": "com.ericjrico.gcalloc-analyzer",
     "version": "1.0.0",
     "displayName": "GC Alloc Analyzer",
-    "description": "Unity Editor tool for profiling and analyzing garbage collection allocations. Integrates with Unity's Profiler as both a standalone Editor Window (multi-frame analysis) and a Profiler Module (per-frame analysis). Includes a runtime helper for on-device profiler capture.",
+    "description": "Unity Editor tool for profiling and analyzing garbage collection allocations. Integrates with Unity's Profiler as both a standalone Editor Window (multi-frame analysis) and a Profiler Module (per-frame analysis).",
     "unity": "6000.0",
     "license": "MIT",
     "author": {
