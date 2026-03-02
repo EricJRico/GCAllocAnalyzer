@@ -530,12 +530,12 @@ namespace GCAllocBreakdown.Editor
             switch (evt.keyCode)
             {
                 case KeyCode.LeftArrow:
-                    MoveSelection(-step);
+                    MoveHighlightedBar(-step);
                     handled = true;
                     break;
 
                 case KeyCode.RightArrow:
-                    MoveSelection(step);
+                    MoveHighlightedBar(step);
                     handled = true;
                     break;
             }
@@ -543,44 +543,28 @@ namespace GCAllocBreakdown.Editor
             if (handled)
             {
                 MarkDirtyRepaint();
-                if (SelectionChanged != null && m_SelectionStart >= 0 && m_SelectionEnd >= 0)
-                    SelectionChanged(m_SelectionStart, m_SelectionEnd);
+                if (BarClicked != null && m_HighlightedBar >= 0)
+                    BarClicked(m_HighlightedBar);
                 evt.StopPropagation();
             }
         }
 
-        void MoveSelection(int delta)
+        void MoveHighlightedBar(int delta)
         {
-            if (m_SelectionStart < 0 || m_SelectionEnd < 0)
+            if (m_HighlightedBar < 0)
             {
-                // No selection — select first or last bar
-                int start = delta > 0 ? 0 : m_BarCount - 1;
-                m_SelectionStart = start;
-                m_SelectionEnd = start;
-                m_HighlightedBar = start;
+                // No bar highlighted — start from center of analyzed range, or center of visible bars
+                if (m_AnalyzedStartBar >= 0 && m_AnalyzedEndBar >= 0)
+                    m_HighlightedBar = (m_AnalyzedStartBar + m_AnalyzedEndBar) / 2;
+                else
+                    m_HighlightedBar = m_BarCount / 2;
                 return;
             }
 
-            int width = m_SelectionEnd - m_SelectionStart;
-            int newStart = m_SelectionStart + delta;
-            int newEnd = newStart + width;
-
-            // Clamp
-            if (newStart < 0)
-            {
-                newStart = 0;
-                newEnd = width;
-            }
-            if (newEnd >= m_BarCount)
-            {
-                newEnd = m_BarCount - 1;
-                newStart = newEnd - width;
-                if (newStart < 0) newStart = 0;
-            }
-
-            m_SelectionStart = newStart;
-            m_SelectionEnd = newEnd;
-            m_HighlightedBar = -1;
+            int newBar = m_HighlightedBar + delta;
+            if (newBar < 0) newBar = 0;
+            if (newBar >= m_BarCount) newBar = m_BarCount - 1;
+            m_HighlightedBar = newBar;
         }
 
     }
