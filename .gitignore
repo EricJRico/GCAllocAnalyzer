@@ -6,8 +6,9 @@
 .idea/
 *.DotSettings.user
 
-# Claude Code local config
-.claude/
+# Claude Code local config (except CLAUDE.md which is project instructions)
+.claude/*
+!.claude/CLAUDE.md
 
 # Build artifacts
 /[Oo]bj/
@@ -19,6 +20,20 @@
 *.userprefs
 *.pdb
 *.mdb
+
+# Leftover Unity project directories (from before package conversion)
+/[Ll]ibrary/
+/[Tt]emp/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Pp]roject[Ss]ettings/
+/[Aa]ssets/
+/[Pp]ackages/
+/[Cc]aptures/
+/ProfileAnalyzer/
+/ProfilerCaptures/
+/[Bb]uild/
+/[Bb]uilds/
 
 # OS files
 .DS_Store
