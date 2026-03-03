@@ -2,6 +2,7 @@
 
 [![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-blue.svg)](https://unity.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CodeQL](https://github.com/EricJRico/GCAllocAnalyzer/actions/workflows/github-code-scanning/codeql/badge.svg?branch=develop)](https://github.com/EricJRico/GCAllocAnalyzer/actions/workflows/github-code-scanning/codeql)
 
 A Unity Editor tool for profiling and analyzing garbage collection allocations. Integrates with Unity's Profiler as both a Profiler Module (per-frame breakdown) and a standalone Editor Window (multi-frame analysis).
 
