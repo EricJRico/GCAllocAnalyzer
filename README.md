@@ -5,27 +5,31 @@
 
 A Unity Editor tool for profiling and analyzing garbage collection allocations. Integrates with Unity's Profiler as both a Profiler Module (per-frame breakdown) and a standalone Editor Window (multi-frame analysis).
 
+## Table of Contents
+
+- [Features](#features)
+  - [Analyzer Window](#analyzer-window)
+  - [Per-Frame Graph](#per-frame-graph)
+  - [Profiler Module](#profiler-module)
+  - [Save, Load & Export](#save-load--export)
+- [Getting Started](#getting-started)
+  - [Installation](#installation)
+  - [Usage](#usage)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
+- [Requirements](#requirements)
+- [Roadmap](#roadmap)
+
 ## GC Alloc Module
 <p align="center">
   <img src="Documentation~/images/gc-alloc-breakdown.png" width="80%" alt="GC Alloc Breakdown"/>
 </p>
 
 ## GC Alloc Analyzer
+
 <p align="center">
-  <img src="Documentation~/images/gc-alloc-analyzer.png" width="90%" alt="GC Alloc Analyzer"/>
+  <img src="Documentation~/images/graph-drag-select.gif" alt="Graph Drag Select"/>
 </p>
 
-## Quick Install
-
-In Unity's Package Manager, click **+** > **Add package from git URL** and enter:
-
-```
-https://github.com/EricJRico/GCAllocAnalyzer.git
-```
-
-> See [Installation](#installation) for local development setup.
-
----
 
 ## Features
 
@@ -132,17 +136,17 @@ A dedicated **GC Alloc** module inside Unity's Profiler window for per-frame ana
 
 ---
 
-## Installation
+## Getting Started
 
-### Via Git URL (recommended)
+### Installation
 
-1. Open Unity's **Package Manager** (Window > Package Manager)
-2. Click **+** > **Add package from git URL**
-3. Enter: `https://github.com/EricJRico/GCAllocAnalyzer.git`
+**Via Git URL (recommended)** — In Unity's Package Manager, click **+** > **Add package from git URL** and enter:
 
-### Local Development
+```
+https://github.com/EricJRico/GCAllocAnalyzer.git
+```
 
-Clone the repo and reference it from a separate Unity project's `Packages/manifest.json`:
+**Local development** — Clone the repo and reference it from a separate Unity project's `Packages/manifest.json`:
 
 ```json
 {
@@ -152,9 +156,7 @@ Clone the repo and reference it from a separate Unity project's `Packages/manife
 }
 ```
 
----
-
-## Quick Start
+### Usage
 
 1. **Record profiler data** — Enter Play Mode and let your scene run. Open the Profiler (`Ctrl+7`) and enable **Call Stacks > GC.Alloc** in the Profiler toolbar for detailed call-stack resolution.
 2. **Open the analyzer** — Go to **Window > Analysis > GC Alloc Analyzer**.
