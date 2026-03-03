@@ -51,6 +51,29 @@ Within the frame extraction loop, ~940ms is not attributed to any timed phase. T
 
 The per-sample loop calls `GetSampleMarkerId(i)` and `GetSampleChildrenCount(i)` for every sample on every GC-carrying thread. With many threads and high sample counts, this is ~745ms of Unity API calls. Hard to optimize without a different profiler API (e.g., a bulk/batch sample query if Unity ever provides one).
 
+## Project Auditor Integration: Runtime-Driven Rules
+
+**Goal:** Allow users to push hot allocation sites identified by the analyzer directly into Project Auditor as actionable rules to resolve.
+
+**Workflow:**
+1. User profiles their game, GCAllocAnalyzer identifies top offenders (largest per-frame, biggest spikes)
+2. User right-clicks an allocation row → *"Add to Project Auditor"*
+3. The rule is created with the specific source file and line number
+
+**Line Number Resolution:**
+The profiler often provides only the method name without a line number (`SourceLine == 0`), especially with IL2CPP. To create a useful rule, the exact allocation line must be resolved:
+- **If `SourceLine` is available** from the profiler (Mono backend with call stacks enabled), use it directly
+- **If not**, scan the compiled assembly using **Mono.Cecil** (shipped with Unity) or **Roslyn** to find allocation-site IL instructions (`newobj`, `box`, `newarr`) within the identified method, reading line numbers from PDB debug symbols
+- If a single allocation site is found, use it automatically. If multiple, present a disambiguation picker listing each site with its line number and allocation type
+
+**Integration Path:**
+- Project Auditor supports both custom modules and Roslyn Analyzer diagnostics
+- A **Roslyn Analyzer** approach would surface diagnostics in both Project Auditor's UI and the IDE (VS/Rider squiggles), but rules are static
+- A **custom ProjectAuditor Module** could read a serialized report (JSON/ScriptableObject) of hot allocation sites exported by the analyzer, emitting them as Project Auditor issues with descriptors, severity, and source location
+- The runtime profiling data provides pre-triaged severity — unlike pure static analysis that flags every `new`, only allocations confirmed as hot at runtime would become rules
+
+**Key Value:** Bridges runtime profiling (what actually allocates, how much, how often) with static analysis (exact source location, trackable resolution workflow). Neither tool provides this alone.
+
 ## Performance: Minor Allocation Hotspots
 
 Low-priority items flagged during code review. Not urgent — each allocates once per user action or once per analysis, not per frame.
