@@ -3,16 +3,16 @@
 [![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-blue.svg)](https://unity.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A Unity Editor tool for profiling and analyzing garbage collection allocations. Integrates with Unity's Profiler as both a standalone Editor Window (multi-frame analysis) and a Profiler Module (per-frame breakdown).
+A Unity Editor tool for profiling and analyzing garbage collection allocations. Integrates with Unity's Profiler as both a Profiler Module (per-frame breakdown) and a standalone Editor Window (multi-frame analysis).
 
-## GC Alloc Breakdown
+## GC Alloc Module
 <p align="center">
   <img src="Documentation~/images/gc-alloc-breakdown.png" width="80%" alt="GC Alloc Breakdown"/>
 </p>
 
 ## GC Alloc Analyzer
 <p align="center">
-  <img src="Documentation~/images/analyzer-overview.png" alt="GC Alloc Analyzer"/>
+  <img src="Documentation~/images/gc-alloc-analyzer.png" width="90%" alt="GC Alloc Analyzer"/>
 </p>
 
 ## Quick Install
@@ -33,55 +33,102 @@ https://github.com/EricJRico/GCAllocAnalyzer.git
 
 Open via **Window > Analysis > GC Alloc Analyzer**.
 
-Multi-frame analysis across any range of profiled frames. Pull lightweight per-frame GC totals from the Profiler, then run a full call-stack extraction to see exactly where allocations come from.
-
-<!-- TODO: Screenshot of the analyzer window with data -->
-
-- **Call-stack grouping** — group allocations by full call stack or by top-level method
-- **Filtering** — filter by name, exclude patterns, or specific threads
-- **Sortable columns** — total bytes, count, average, percentage, per-frame statistics (median, mean, min, max, range)
-- **Top offenders** — ranked views of the worst allocation sites and largest individual allocations
-- **Color-coded severity** — red (10 KB+), yellow (1 KB+), gray (< 1 KB) — colors and thresholds customizable via **Preferences > Analysis > GC Alloc Analyzer**
+Analyze GC allocations across any range of profiled frames. Pull per-frame GC totals from the Profiler, then run a full call-stack extraction to see exactly where every allocation comes from.
 
 <p align="center">
-  <img src="Documentation~/images/preferences.png" width="60%" alt="GC Alloc Breakdown"/>
+  <img src="Documentation~/images/analyzer-overview.png" alt="GC Alloc Analyzer Window"/>
 </p>
 
-- **Source navigation** — click to open the allocating method in your IDE at the exact line
+- **Sortable, resizable columns** — Allocation Site, Bytes, Count, Avg, %, and per-frame statistics (Median, Mean, Min, Max, Range, First)
+- **Call-stack grouping** — group by full call stack (default) or by top-level allocation method
+- **Filtering** — filter by name, exclude patterns, select specific threads, or toggle assembly prefixes on method names
+- **Color-coded severity** — allocation sizes are colored by threshold (red, yellow, gray) to highlight the worst offenders at a glance
+
+#### Top Offenders
+<p align="center">
+  <img src="Documentation~/images/top-offenders.png" width="70%" alt="Top Offenders Panel"/>
+</p>
+
+The right panel ranks the worst allocation sites in two views:
+
+
+- **By Total Bytes** — top 10 sites by cumulative allocation across all analyzed frames, showing rank, total bytes, percentage, and method name
+- **Largest Single Allocations** — top 10 individual `GC.Alloc` events by size, showing the allocation size, frame number, and method name. Click an entry to select it in the individual allocations list.
+
+#### Selected Allocation Site
+
+<p align="center">
+  <img src="Documentation~/images/sync-with-profiler.gif"  alt="Sync With Profiler"/>
+</p>
+
+Clicking any row in the allocation site table opens a detail panel on the right:
+
+- **Summary stats** — total bytes, count, average, and percentage of total for the selected site
+- **Call Stack** — full resolved call stack from the allocating method (highlighted in yellow) through each caller (gray), with source file and line number
+- **Open in IDE** — click the page icon next to any call stack frame to open the source file in your IDE at the exact line
+
+<p align="center">
+  <img src="Documentation~/images/script-open.png" width="80%" alt="GC Alloc Analyzer Preferences"/>
+</p>
+
+- **Individual Allocations** — every `GC.Alloc` event for this site with size, frame number, and thread. Right-click to jump to that frame in the Profiler.
+
+#### Customizable Severity Colors
+
+Configure allocation severity colors and byte thresholds via **Preferences > Analysis > GC Alloc Analyzer**.
+
+<p align="center">
+  <img src="Documentation~/images/preferences.png" width="50%" alt="GC Alloc Analyzer Preferences"/>
+</p>
+
+- **Severity Colors** — customize High (default red), Medium (default yellow), and Low/Normal (default gray)
+- **Severity Thresholds** — set the byte boundaries for Medium (default 1,024 B) and High (default 10,240 B)
 
 ### Per-Frame Graph
 
-Interactive bar chart showing GC allocations per frame with full zoom, pan, and selection controls.
+Interactive bar chart showing GC allocations per frame with zoom, pan, and selection.
 
-<!-- TODO: GIF showing zoom/pan with WASD + mouse wheel -->
-<!-- ![Per-Frame Graph](Documentation~/images/graph-zoom-pan.gif) -->
+<p align="center">
+  <img src="Documentation~/images/graph-drag-select.gif" alt="Graph Drag Select"/>
+</p>
 
-- **Zoom & pan** — mouse wheel to zoom, WASD keys or drag the overview strip to navigate
-- **Drag-select** — drag across bars to instantly re-analyze a sub-range (cached, no re-read from Profiler)
-- **Overlay mode** — select an allocation site to see its per-frame contribution overlaid on the graph
-- **Overview strip** — miniature full-range view with viewport indicator for quick navigation
-- **Sort toggle** — switch between chronological frame order and size-descending order
-- **Keyboard-driven selection** — arrow keys to move, +/- to grow/shrink selection, Enter to analyze
 
-<!-- TODO: GIF showing drag-select sub-range analysis -->
-<!-- ![Drag Select](Documentation~/images/graph-drag-select.gif) -->
+- **Zoom & pan** — mouse wheel to zoom (anchored at cursor), WASD keys to navigate, or drag the overview strip
+
+<p align="center">
+  <img src="Documentation~/images/graph-zoom-pan.gif" width="70%" alt="Graph Zoom and Pan"/>
+</p>
+
+- **Drag-select** — drag across bars to instantly re-analyze a sub-range from cache, no re-extraction needed
+- **Overlay mode** — select an allocation site in the table to see its per-frame contribution overlaid on the graph in a separate color
+- **Overview strip** — miniature full-range view with a viewport indicator, visible when zoomed in. Click or drag to navigate.
+- **Order by Size** — toggle between chronological frame order and size-descending order to spot the largest spikes
+
+<p align="center">
+  <img src="Documentation~/images/order-by-size.gif" width="70%" alt="Order By Size"/>
+</p>
+
+- **Keyboard navigation** — arrow keys to step through bars one at a time (Shift for 10 at a time)
 
 ### Profiler Module
 
-A dedicated **GC Alloc Breakdown** module inside Unity's Profiler window for per-frame analysis.
+A dedicated **GC Alloc** module inside Unity's Profiler window for per-frame analysis.
 
-<!-- TODO: Screenshot of the Profiler module view -->
+<p align="center">
+  <img src="Documentation~/images/gc-alloc-module.gif" alt="GC Alloc Module"/>
+</p>
 
-- **Per-frame breakdown** — see allocation sites for the currently selected Profiler frame
-- **Expandable call stacks** — click to expand full call stack inline
-- **LRU cache** — results for up to 512 frames are cached for instant scrubbing
-- **Sortable columns** — bytes, count, average, and allocation site name
+- **Per-frame breakdown** — shows allocation sites for the currently selected Profiler frame
+- **Resizable columns** — Allocation Site, Bytes, Count, and Avg with built-in sort indicators, matching the Analyzer's column order
+- **Expandable call stacks** — click the arrow to expand the full call stack inline
+- **LRU cache** — results for up to 512 frames are cached so scrubbing back and forth is instant
+- **Open GC Alloc Analyzer** — button to jump straight to the multi-frame Analyzer window
 
 ### Save, Load & Export
 
-- **Save/Load snapshots** — save analysis results as `.json` files for sharing or later review. Load snapshots without needing the original Profiler data.
-- **Export Marker Table CSV** — export the filtered/sorted allocation site table with all statistics
-- **Export Individual Allocations CSV** — export every raw `GC.Alloc` event with full call stacks
+- **Save/Load snapshots** — save analysis results as `.json` for sharing or later review. Load snapshots without needing the original Profiler data.
+- **Export Marker Table CSV** — export the filtered allocation site table with all statistics (Bytes, Count, Avg, %, Median, Mean, Min, Max, Range, First)
+- **Export Individual Allocations CSV** — export every raw `GC.Alloc` event with size, frame, thread, and full call stack
 
 ---
 
@@ -139,6 +186,17 @@ Graph shortcuts are active when the graph is focused (automatic on hover).
 - **Profiler data** — requires an active or loaded Profiler session
 - **Call stacks** — enable **Call Stacks > GC.Alloc** in the Profiler toolbar for full call-stack resolution (otherwise falls back to hierarchy paths)
 
+## Roadmap
+
+- **Compare mode** — side-by-side analysis of two profiling sessions with delta columns and paired per-frame graphs
+- **Persistent thread filter dropdown** — multi-select panel that stays open instead of closing after each click
+- **Progress indicators** — visual feedback during save/load/export operations
+- **Performance optimizations** — faster grouping and extraction for large datasets (500K+ allocations)
+
+See [CHANGELOG](CHANGELOG.md) for release history.
+
+---
+
 ## License
 
-[MIT](LICENSE) — Copyright (c) 2025 Eric J Rico
+[MIT](LICENSE) — Copyright (c) 2025-2026 Eric J Rico

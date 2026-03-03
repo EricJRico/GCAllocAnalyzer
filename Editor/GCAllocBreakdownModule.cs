@@ -13,7 +13,7 @@ using UnityEngine.UIElements;
 namespace GCAllocBreakdown.Editor
 {
     [Serializable]
-    [ProfilerModuleMetadata("GC Alloc Breakdown")]
+    [ProfilerModuleMetadata("GC Alloc")]
     public class GCAllocBreakdownModule : ProfilerModule
     {
         static readonly ProfilerCounterDescriptor[] k_ChartCounters =
@@ -33,7 +33,7 @@ namespace GCAllocBreakdown.Editor
 
     /// <summary>
     /// Per-frame allocation breakdown in the Profiler module details area.
-    /// Virtualized ListView with flattened group + callstack rows.
+    /// MultiColumnListView with flattened group + callstack rows.
     /// Per-frame results are cached so scrubbing back to visited frames is instant.
     /// </summary>
     public class GCAllocModuleDetailsView : ProfilerModuleViewController
@@ -46,16 +46,19 @@ namespace GCAllocBreakdown.Editor
         const int MAX_STACK_FRAMES = 20;
         const int MAX_CACHED_FRAMES = 512;
 
+        const string k_ColSite = "site";
+        const string k_ColBytes = "bytes";
+        const string k_ColCount = "count";
+        const string k_ColAvg = "avg";
+
         static readonly Color k_DimGray = new(0.7f, 0.7f, 0.7f);
         static readonly Color k_TopFrame = new(0.9f, 0.9f, 0.6f);
         static readonly Color k_CallerFrame = new(0.55f, 0.55f, 0.55f);
-        static readonly Color k_LinkBlue = new(0.4f, 0.7f, 1f);
 
         // ── UI ──
         Label m_SummaryLabel;
         Label m_WarningLabel;
-        VisualElement m_HeaderRow;
-        ListView m_ListView;
+        MultiColumnListView m_ListView;
 
         // ── Sort ──
         enum SortCol { Bytes, Count, Avg, Name }
@@ -102,7 +105,7 @@ namespace GCAllocBreakdown.Editor
             };
             toolbar.Add(new Button(OnOpenAnalyzer)
             {
-                text = "Open Analyzer",
+                text = "Open GC Alloc Analyzer",
                 tooltip = "Open the GC Alloc Analyzer window for multi-frame analysis."
             });
             root.Add(toolbar);
@@ -123,22 +126,38 @@ namespace GCAllocBreakdown.Editor
             };
             root.Add(m_SummaryLabel);
 
-            // Column headers
-            m_HeaderRow = BuildHeaderRow();
-            root.Add(m_HeaderRow);
-
-            // Virtualized list
-            m_ListView = new ListView
+            // MultiColumnListView
+            m_ListView = new MultiColumnListView
             {
                 virtualizationMethod = CollectionVirtualizationMethod.FixedHeight,
                 fixedItemHeight = ROW_HEIGHT,
                 selectionType = SelectionType.None,
                 showBorder = true,
+                sortingMode = ColumnSortingMode.Custom,
                 style = { flexGrow = 1 }
             };
-            m_ListView.makeItem = MakeRow;
-            m_ListView.bindItem = BindRow;
+
+            m_ListView.columns.Add(new Column { name = k_ColSite, title = "Allocation Site",
+                stretchable = true, minWidth = 120, sortable = true,
+                makeCell = MakeSiteCell, bindCell = BindSiteCell });
+            m_ListView.columns.Add(new Column { name = k_ColBytes, title = "Bytes",
+                width = COL_BYTES, sortable = true, resizable = true,
+                makeCell = MakeDataCell, bindCell = BindBytesCell,
+                unbindCell = UnbindStyledCell });
+            m_ListView.columns.Add(new Column { name = k_ColCount, title = "Count",
+                width = COL_COUNT, sortable = true, resizable = true,
+                makeCell = MakeDataCell, bindCell = BindCountCell });
+            m_ListView.columns.Add(new Column { name = k_ColAvg, title = "Avg",
+                width = COL_AVG, sortable = true, resizable = true,
+                makeCell = MakeDataCell, bindCell = BindAvgCell });
+
             m_ListView.itemsSource = m_DisplayRows;
+
+            // Set initial sort indicator to Bytes descending
+            m_ListView.sortColumnDescriptions.Add(
+                new SortColumnDescription { columnName = k_ColBytes, direction = SortDirection.Descending });
+            m_ListView.columnSortingChanged += OnColumnSortingChanged;
+
             root.Add(m_ListView);
 
             ProfilerWindow.SelectedFrameIndexChanged += OnFrameChanged;
@@ -416,74 +435,26 @@ namespace GCAllocBreakdown.Editor
             }
         }
 
-        void OnSortChanged()
+        void OnColumnSortingChanged()
         {
+            using var e = m_ListView.sortedColumns.GetEnumerator();
+            if (!e.MoveNext()) return;
+            var desc = e.Current;
+
+            m_SortCol = desc.columnName switch
+            {
+                k_ColSite  => SortCol.Name,
+                k_ColBytes => SortCol.Bytes,
+                k_ColCount => SortCol.Count,
+                k_ColAvg   => SortCol.Avg,
+                _          => m_SortCol
+            };
+            m_SortAsc = desc.direction == SortDirection.Ascending;
+
             if (m_ActiveFrame != null)
                 SortGroups(m_ActiveFrame.Groups);
-            ReplaceHeaders();
             m_PoolHighWater = 0;
             FlattenAndRefresh();
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  HEADERS — userData, no closures
-        // ═══════════════════════════════════════════════════
-
-        VisualElement BuildHeaderRow()
-        {
-            var row = new VisualElement
-            {
-                style = { flexDirection = FlexDirection.Row, alignItems = Align.Center,
-                    borderBottomWidth = 2, borderBottomColor = new Color(0.5f, 0.5f, 0.5f),
-                    paddingBottom = 3, paddingTop = 2, flexShrink = 0 }
-            };
-
-            row.Add(new VisualElement { style = { width = 18 } });
-            row.Add(MakeSortHeader("Bytes", COL_BYTES, SortCol.Bytes));
-            row.Add(MakeSortHeader("Count", COL_COUNT, SortCol.Count));
-            row.Add(MakeSortHeader("Avg", COL_AVG, SortCol.Avg));
-            row.Add(MakeSortHeader("Allocation Site", 0, SortCol.Name, 1));
-
-            return row;
-        }
-
-        Label MakeSortHeader(string text, float width, SortCol col, float grow = 0)
-        {
-            string arrow = m_SortCol == col ? (m_SortAsc ? " ▲" : " ▼") : "";
-            var lbl = new Label(string.Concat(text, arrow))
-            {
-                style = { unityFontStyleAndWeight = FontStyle.Bold, fontSize = 11 },
-                userData = col
-            };
-            if (width > 0) lbl.style.width = width;
-            if (grow > 0) lbl.style.flexGrow = grow;
-
-            lbl.RegisterCallback<MouseEnterEvent>(OnHeaderEnter);
-            lbl.RegisterCallback<MouseLeaveEvent>(OnHeaderLeave);
-            lbl.RegisterCallback<ClickEvent>(OnHeaderClicked);
-            return lbl;
-        }
-
-        static void OnHeaderEnter(MouseEnterEvent evt) =>
-            ((VisualElement)evt.target).style.color = k_LinkBlue;
-        static void OnHeaderLeave(MouseLeaveEvent evt) =>
-            ((VisualElement)evt.target).style.color = StyleKeyword.Null;
-
-        void OnHeaderClicked(ClickEvent evt)
-        {
-            var col = (SortCol)((VisualElement)evt.target).userData;
-            if (m_SortCol == col) m_SortAsc = !m_SortAsc;
-            else { m_SortCol = col; m_SortAsc = false; }
-            OnSortChanged();
-        }
-
-        void ReplaceHeaders()
-        {
-            var parent = m_HeaderRow.parent;
-            int idx = parent.IndexOf(m_HeaderRow);
-            parent.Remove(m_HeaderRow);
-            m_HeaderRow = BuildHeaderRow();
-            parent.Insert(idx, m_HeaderRow);
         }
 
         // ═══════════════════════════════════════════════════
@@ -563,65 +534,47 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
-        //  VIRTUALIZED ROW — toggle registered ONCE in MakeRow
+        //  MULTI-COLUMN CELLS — per-column make/bind
         // ═══════════════════════════════════════════════════
 
-        VisualElement MakeRow()
+        VisualElement MakeSiteCell()
         {
-            var row = new VisualElement
+            var container = new VisualElement
             {
-                style = { flexDirection = FlexDirection.Row, alignItems = Align.Center,
-                    paddingLeft = 2, paddingRight = 2 }
+                style = { flexDirection = FlexDirection.Row, alignItems = Align.Center }
             };
 
             var toggle = new Label
             {
                 name = "toggle",
-                style = { width = 18, fontSize = 10, unityTextAlign = TextAnchor.MiddleCenter }
+                style = { width = 18, fontSize = 10, unityTextAlign = TextAnchor.MiddleCenter,
+                    flexShrink = 0 }
             };
-            // Registered ONCE per row element — handler reads userData for the key
             toggle.RegisterCallback<ClickEvent>(OnToggleClicked);
-            row.Add(toggle);
+            container.Add(toggle);
 
-            row.Add(new Label { name = "bytes", style = { width = COL_BYTES, fontSize = 11 } });
-            row.Add(new Label { name = "count", style = { width = COL_COUNT, fontSize = 11 } });
-            row.Add(new Label { name = "avg", style = { width = COL_AVG, fontSize = 11 } });
-            row.Add(new Label { name = "text", style = { flexGrow = 1, fontSize = 11,
-                overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } });
+            container.Add(new Label { name = "text", style = { fontSize = 11,
+                overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis,
+                flexGrow = 1 } });
 
-            return row;
+            return container;
         }
 
-        void BindRow(VisualElement el, int index)
+        static VisualElement MakeDataCell() => new Label { style = { fontSize = 11 } };
+
+        void BindSiteCell(VisualElement cell, int index)
         {
             if (index < 0 || index >= m_DisplayRows.Count) return;
             var dr = m_DisplayRows[index];
-
-            var toggleLbl = el.Q<Label>("toggle");
-            var bytesLbl = el.Q<Label>("bytes");
-            var countLbl = el.Q<Label>("count");
-            var avgLbl = el.Q<Label>("avg");
-            var textLbl = el.Q<Label>("text");
+            var toggleLbl = cell.Q<Label>("toggle");
+            var textLbl = cell.Q<Label>("text");
 
             if (dr.Type == RowType.GroupHeader)
             {
                 var g = dr.Group;
-
-                // userData drives the toggle click handler — null means not clickable
                 toggleLbl.userData = dr.IsExpandable ? g.Key : null;
                 toggleLbl.text = dr.IsExpandable ? (dr.IsExpanded ? "▼" : "▶") : " ";
                 toggleLbl.style.color = StyleKeyword.Null;
-
-                bytesLbl.text = g.FormattedBytes;
-                bytesLbl.style.color = GCAllocSettings.ColorForBytes(g.TotalBytes);
-                bytesLbl.style.unityFontStyleAndWeight = FontStyle.Bold;
-                bytesLbl.style.display = DisplayStyle.Flex;
-
-                countLbl.text = g.FormattedCount;
-                countLbl.style.display = DisplayStyle.Flex;
-
-                avgLbl.text = g.FormattedAvg;
-                avgLbl.style.display = DisplayStyle.Flex;
 
                 textLbl.text = g.DisplayName;
                 textLbl.tooltip = g.DisplayName;
@@ -632,18 +585,50 @@ namespace GCAllocBreakdown.Editor
                 toggleLbl.userData = null;
                 toggleLbl.text = "";
 
-                bytesLbl.text = "";
-                bytesLbl.style.display = DisplayStyle.None;
-                countLbl.text = "";
-                countLbl.style.display = DisplayStyle.None;
-                avgLbl.text = "";
-                avgLbl.style.display = DisplayStyle.None;
-
                 textLbl.text = dr.DisplayText ?? "";
                 textLbl.tooltip = dr.Frame.RawMethodName ?? "";
                 textLbl.style.color = dr.FrameDepth == 0 ? k_TopFrame
                     : dr.FrameDepth > 0 ? k_CallerFrame : k_DimGray;
             }
+        }
+
+        void BindBytesCell(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_DisplayRows.Count) return;
+            var dr = m_DisplayRows[index];
+            var lbl = (Label)cell;
+
+            if (dr.Type == RowType.GroupHeader)
+            {
+                var g = dr.Group;
+                lbl.text = g.FormattedBytes;
+                lbl.style.color = GCAllocSettings.ColorForBytes(g.TotalBytes);
+                lbl.style.unityFontStyleAndWeight = FontStyle.Bold;
+            }
+            else
+            {
+                lbl.text = "";
+            }
+        }
+
+        void BindCountCell(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_DisplayRows.Count) return;
+            var dr = m_DisplayRows[index];
+            ((Label)cell).text = dr.Type == RowType.GroupHeader ? dr.Group.FormattedCount : "";
+        }
+
+        void BindAvgCell(VisualElement cell, int index)
+        {
+            if (index < 0 || index >= m_DisplayRows.Count) return;
+            var dr = m_DisplayRows[index];
+            ((Label)cell).text = dr.Type == RowType.GroupHeader ? dr.Group.FormattedAvg : "";
+        }
+
+        static void UnbindStyledCell(VisualElement cell, int index)
+        {
+            cell.style.color = StyleKeyword.Null;
+            cell.style.unityFontStyleAndWeight = StyleKeyword.Null;
         }
 
         void OnToggleClicked(ClickEvent evt)
