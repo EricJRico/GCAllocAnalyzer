@@ -622,6 +622,7 @@ namespace GCAllocBreakdown.Editor
                 fixedItemHeight = MARKER_ROW_HEIGHT,
                 selectionType = SelectionType.Single,
                 showBorder = true,
+                showAlternatingRowBackgrounds = AlternatingRowBackground.ContentOnly,
                 sortingMode = ColumnSortingMode.Custom,
                 style = { flexGrow = 1 }
             };
@@ -1074,6 +1075,7 @@ namespace GCAllocBreakdown.Editor
                 fixedItemHeight = ALLOC_ROW_HEIGHT,
                 selectionType = SelectionType.Single,
                 showBorder = true,
+                showAlternatingRowBackgrounds = AlternatingRowBackground.ContentOnly,
                 sortingMode = ColumnSortingMode.Custom,
                 style = { flexGrow = 1, minHeight = 80 }
             };
@@ -2204,15 +2206,15 @@ namespace GCAllocBreakdown.Editor
 
         VisualElement MakeMarkerSiteCell()
         {
-            var lbl = new Label { style = { fontSize = 11, overflow = Overflow.Hidden,
-                textOverflow = TextOverflow.Ellipsis } };
+            var lbl = new Label { style = { fontSize = 11, flexGrow = 1, unityTextAlign = TextAnchor.MiddleLeft,
+                overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } };
             lbl.AddManipulator(new ContextualMenuManipulator(OnMarkerRowContextMenu));
             return lbl;
         }
 
         VisualElement MakeMarkerCellWithMenu()
         {
-            var lbl = new Label { style = { fontSize = 11 } };
+            var lbl = new Label { style = { fontSize = 11, flexGrow = 1, unityTextAlign = TextAnchor.MiddleLeft } };
             lbl.AddManipulator(new ContextualMenuManipulator(OnMarkerRowContextMenu));
             return lbl;
         }
@@ -2749,15 +2751,15 @@ namespace GCAllocBreakdown.Editor
 
         VisualElement MakeAllocCellWithMenu()
         {
-            var lbl = new Label { style = { fontSize = 11 } };
+            var lbl = new Label { style = { fontSize = 11, flexGrow = 1, unityTextAlign = TextAnchor.MiddleLeft } };
             lbl.AddManipulator(new ContextualMenuManipulator(OnAllocRowContextMenu));
             return lbl;
         }
 
         VisualElement MakeAllocThreadCell()
         {
-            var lbl = new Label { style = { fontSize = 11, overflow = Overflow.Hidden,
-                textOverflow = TextOverflow.Ellipsis } };
+            var lbl = new Label { style = { fontSize = 11, flexGrow = 1, unityTextAlign = TextAnchor.MiddleLeft,
+                overflow = Overflow.Hidden, textOverflow = TextOverflow.Ellipsis } };
             lbl.AddManipulator(new ContextualMenuManipulator(OnAllocRowContextMenu));
             return lbl;
         }

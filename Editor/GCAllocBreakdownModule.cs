@@ -133,6 +133,7 @@ namespace GCAllocBreakdown.Editor
                 fixedItemHeight = ROW_HEIGHT,
                 selectionType = SelectionType.None,
                 showBorder = true,
+                showAlternatingRowBackgrounds = AlternatingRowBackground.ContentOnly,
                 sortingMode = ColumnSortingMode.Custom,
                 style = { flexGrow = 1 }
             };
@@ -541,7 +542,7 @@ namespace GCAllocBreakdown.Editor
         {
             var container = new VisualElement
             {
-                style = { flexDirection = FlexDirection.Row, alignItems = Align.Center }
+                style = { flexDirection = FlexDirection.Row, flexGrow = 1, alignItems = Align.Center }
             };
 
             var toggle = new Label
@@ -560,7 +561,7 @@ namespace GCAllocBreakdown.Editor
             return container;
         }
 
-        static VisualElement MakeDataCell() => new Label { style = { fontSize = 11 } };
+        static VisualElement MakeDataCell() => new Label { style = { fontSize = 11, flexGrow = 1, unityTextAlign = TextAnchor.MiddleLeft } };
 
         void BindSiteCell(VisualElement cell, int index)
         {
