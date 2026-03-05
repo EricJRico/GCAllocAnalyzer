@@ -79,6 +79,7 @@ namespace GCAllocBreakdown.Editor
 
         int m_AnalyzedStartBar = -1;
         int m_AnalyzedEndBar   = -1;
+        bool[] m_AnalyzedBarMask; // per-bar mask for non-contiguous analyzed ranges
 
         // ═══════════════════════════════════════════════════
         //  DRAG STATE
@@ -188,6 +189,17 @@ namespace GCAllocBreakdown.Editor
             if (m_AnalyzedStartBar == startBar && m_AnalyzedEndBar == endBar) return;
             m_AnalyzedStartBar = startBar;
             m_AnalyzedEndBar = endBar;
+            MarkDirtyRepaint();
+        }
+
+        /// <summary>
+        /// Set a per-bar mask for analyzed dimming. When set, mask[i] == true means
+        /// bar i is in the analyzed range (full brightness); false means dimmed.
+        /// Pass null to clear and fall back to the contiguous start/end range.
+        /// </summary>
+        public void SetAnalyzedMask(bool[] mask)
+        {
+            m_AnalyzedBarMask = mask;
             MarkDirtyRepaint();
         }
 
@@ -307,10 +319,15 @@ namespace GCAllocBreakdown.Editor
                 if (barHeight <= 0f) continue;
 
                 // Determine bar color — dimming for bars outside analyzed range.
-                // m_AnalyzedStartBar == -1 means no analysis active (no dimming).
-                // m_AnalyzedStartBar == -2 means analysis active but off-screen (dim all).
-                bool inAnalyzed = m_AnalyzedStartBar == -1
-                    || (m_AnalyzedStartBar >= 0 && i >= m_AnalyzedStartBar && i <= m_AnalyzedEndBar);
+                // Prefer per-bar mask (supports non-contiguous analyzed bars in sorted mode).
+                // Fallback: m_AnalyzedStartBar == -1 means no analysis (no dimming),
+                //           m_AnalyzedStartBar == -2 means analysis off-screen (dim all).
+                bool inAnalyzed;
+                if (m_AnalyzedBarMask != null)
+                    inAnalyzed = i < m_AnalyzedBarMask.Length && m_AnalyzedBarMask[i];
+                else
+                    inAnalyzed = m_AnalyzedStartBar == -1
+                        || (m_AnalyzedStartBar >= 0 && i >= m_AnalyzedStartBar && i <= m_AnalyzedEndBar);
                 Color color;
                 if (i == m_HighlightedBar)
                     color = k_BarHighlighted;
@@ -356,7 +373,11 @@ namespace GCAllocBreakdown.Editor
                 if (barHeight <= 0f) continue;
 
                 // Skip overlay for bars outside analyzed range
-                if (m_AnalyzedStartBar >= 0 && (i < m_AnalyzedStartBar || i > m_AnalyzedEndBar))
+                if (m_AnalyzedBarMask != null)
+                {
+                    if (i >= m_AnalyzedBarMask.Length || !m_AnalyzedBarMask[i]) continue;
+                }
+                else if (m_AnalyzedStartBar >= 0 && (i < m_AnalyzedStartBar || i > m_AnalyzedEndBar))
                     continue;
 
                 float x = m_OverlayBars[i].X;
@@ -554,7 +575,21 @@ namespace GCAllocBreakdown.Editor
             if (m_HighlightedBar < 0)
             {
                 // No bar highlighted — start from center of analyzed range, or center of visible bars
-                if (m_AnalyzedStartBar >= 0 && m_AnalyzedEndBar >= 0)
+                if (m_AnalyzedBarMask != null)
+                {
+                    // Find first and last analyzed bar from mask
+                    int first = -1, last = -1;
+                    for (int i = 0; i < m_BarCount; i++)
+                    {
+                        if (i < m_AnalyzedBarMask.Length && m_AnalyzedBarMask[i])
+                        {
+                            if (first < 0) first = i;
+                            last = i;
+                        }
+                    }
+                    m_HighlightedBar = first >= 0 ? (first + last) / 2 : m_BarCount / 2;
+                }
+                else if (m_AnalyzedStartBar >= 0 && m_AnalyzedEndBar >= 0)
                     m_HighlightedBar = (m_AnalyzedStartBar + m_AnalyzedEndBar) / 2;
                 else
                     m_HighlightedBar = m_BarCount / 2;

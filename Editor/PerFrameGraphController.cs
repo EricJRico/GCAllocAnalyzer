@@ -91,6 +91,20 @@ namespace GCAllocBreakdown.Editor
         int m_SelectionFrameEnd = -1;
         int m_HighlightedFrame = -1;
 
+        // Reusable buffer marking which frames are in the drag selection
+        bool[] m_SelectedFrameBuffer;
+        bool m_HasFrameSelection;
+        int m_SelectedFrameBaseFrame;
+
+        /// <summary>
+        /// After a drag-completed event, contains a boolean buffer where
+        /// buffer[frameIndex - SelectedFrameBaseFrame] == true for selected frames.
+        /// Check HasFrameSelection before accessing.
+        /// </summary>
+        public bool[] SelectedFrameBuffer => m_HasFrameSelection ? m_SelectedFrameBuffer : null;
+        public bool HasFrameSelection => m_HasFrameSelection;
+        public int SelectedFrameBaseFrame => m_SelectedFrameBaseFrame;
+
         // Cached tooltip bar index to avoid per-move string allocations
         int m_LastTooltipBar = -1;
 
@@ -99,6 +113,9 @@ namespace GCAllocBreakdown.Editor
 
         // Per-frame scratch buffer
         long[] m_PerFrameBuffer;
+
+        // Per-bar analyzed mask (reusable, sized to bar count)
+        bool[] m_AnalyzedBarMask;
 
         // Overview strip
         const float k_OverviewHeight = 24f;
@@ -319,8 +336,7 @@ namespace GCAllocBreakdown.Editor
             // ── Sorted view (order by magnitude) ──
             if (m_OrderByMagnitude)
                 ApplySortedOrder(bucketCount, fullBarWidth);
-            else
-                m_SortedBarIndices = null;
+            // (when !m_OrderByMagnitude the sorted indices are simply not used)
 
             // ── Viewport clipping — only layout visible bars ──
             int visibleStart = Mathf.FloorToInt(m_ViewportStart * bucketCount);
@@ -356,27 +372,14 @@ namespace GCAllocBreakdown.Editor
             // ── Grid lines ──
             ComputeGridLines(maxValue, k_GraphHeight);
 
-            // ── Compute analyzed bar range for dimming ──
-            int analyzedStartBar = -1, analyzedEndBar = -1;
-            if (m_AnalyzedFrameStart >= 0 && m_AnalyzedFrameEnd >= 0)
-            {
-                ComputeAnalyzedBarRange(out analyzedStartBar, out analyzedEndBar);
-
-                // If analyzed range exists but no visible bars overlap, dim everything.
-                // Use a range that excludes all bars (e.g. -2,-2) so the GraphElement
-                // knows dimming is active but no bar falls within the range.
-                if (analyzedStartBar < 0)
-                {
-                    analyzedStartBar = -2;
-                    analyzedEndBar = -2;
-                }
-            }
+            // ── Build per-bar analyzed mask for dimming ──
+            BuildAnalyzedBarMask();
 
             // ── Push data to GraphElement ──
             m_GraphElement.YAxisMax = maxValue;
             m_GraphElement.SetBarData(m_Bars, m_BarCount);
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
-            m_GraphElement.SetAnalyzedRange(analyzedStartBar, analyzedEndBar);
+            m_GraphElement.SetAnalyzedMask(m_AnalyzedBarMask);
             m_GraphElement.HasData = true;
 
             // ── Update axis labels ──
@@ -455,7 +458,7 @@ namespace GCAllocBreakdown.Editor
 
             for (int b = 0; b < m_BarCount; b++)
             {
-                int origBucket = m_SortedBarIndices != null
+                int origBucket = m_OrderByMagnitude
                     ? m_SortedBarIndices[b + m_ViewportStartBucket]
                     : b + m_ViewportStartBucket;
                 int startIdx = origBucket * m_FramesPerBucket;
@@ -495,6 +498,7 @@ namespace GCAllocBreakdown.Editor
 
         /// <summary>
         /// Clear the visual selection and highlighted bar.
+        /// The frame buffer is preserved so dimming stays correct across mode switches.
         /// </summary>
         public void ClearSelection()
         {
@@ -505,6 +509,15 @@ namespace GCAllocBreakdown.Editor
             m_SelectionFrameStart = -1;
             m_SelectionFrameEnd = -1;
             m_HighlightedFrame = -1;
+        }
+
+        /// <summary>
+        /// Clear the frame selection buffer used for per-bar dimming.
+        /// Call when resetting to full range or starting a fresh analysis.
+        /// </summary>
+        public void ClearFrameSelection()
+        {
+            m_HasFrameSelection = false;
         }
 
         /// <summary>
@@ -864,7 +877,7 @@ namespace GCAllocBreakdown.Editor
             if (barIndex < 0 || barIndex >= m_BarCount) return;
 
             // Resolve the actual bar index, accounting for viewport offset and sorting
-            int resolvedIndex = m_SortedBarIndices != null
+            int resolvedIndex = m_OrderByMagnitude
                 ? m_SortedBarIndices[barIndex + m_ViewportStartBucket]
                 : barIndex + m_ViewportStartBucket;
 
@@ -904,6 +917,7 @@ namespace GCAllocBreakdown.Editor
             MapBarRangeToFrameRange(startBar, endBar, out int startFrame, out int endFrame);
             m_SelectionFrameStart = startFrame;
             m_SelectionFrameEnd = endFrame;
+            BuildSelectedFrameBuffer(startBar, endBar);
             if (OnDragCompleted != null)
                 OnDragCompleted(startFrame, endFrame);
         }
@@ -1032,6 +1046,7 @@ namespace GCAllocBreakdown.Editor
             if (m_LastSelectionStartBar < 0 || m_LastSelectionEndBar < 0) return;
             MapBarRangeToFrameRange(m_LastSelectionStartBar, m_LastSelectionEndBar,
                 out int rangeStart, out int rangeEnd);
+            BuildSelectedFrameBuffer(m_LastSelectionStartBar, m_LastSelectionEndBar);
             if (OnDragCompleted != null)
                 OnDragCompleted(rangeStart, rangeEnd);
         }
@@ -1084,7 +1099,7 @@ namespace GCAllocBreakdown.Editor
             if (barIdx >= m_BarCount) barIdx = m_BarCount - 1;
 
             // If sorted, find the display position of the original bucket
-            if (m_SortedBarIndices != null)
+            if (m_OrderByMagnitude)
             {
                 for (int i = 0; i < m_BarCount; i++)
                 {
@@ -1392,34 +1407,61 @@ namespace GCAllocBreakdown.Editor
             evt.StopPropagation();
         }
 
-        void ComputeAnalyzedBarRange(out int startBar, out int endBar)
+        /// <summary>
+        /// Build a per-bar boolean mask indicating which bars are in the analyzed
+        /// range. Works for both contiguous (frame-order) and non-contiguous
+        /// (sorted) views. mask[i] == true means bar i is at full brightness.
+        /// </summary>
+        void BuildAnalyzedBarMask()
         {
-            startBar = -1;
-            endBar = -1;
-            if (m_FrameStore == null || m_BarCount == 0) return;
-            if (m_AnalyzedFrameStart < 0 || m_AnalyzedFrameEnd < 0) return;
+            // Ensure capacity
+            if (m_AnalyzedBarMask == null || m_AnalyzedBarMask.Length < m_BarCount)
+                m_AnalyzedBarMask = new bool[Mathf.Max(m_BarCount, 64)];
+            else
+                Array.Clear(m_AnalyzedBarMask, 0, m_BarCount);
 
-            // In sorted mode, analyzed bars are non-contiguous so a contiguous
-            // start/end range cannot correctly express per-bar dimming.
-            // Known limitation: all bars show at full brightness in sorted view.
-            if (m_SortedBarIndices != null)
+            if (m_FrameStore == null || m_BarCount == 0) return;
+
+            // No analysis active, or full range is analyzed — all bars at full brightness
+            if (m_AnalyzedFrameStart < 0 || m_AnalyzedFrameEnd < 0
+                || (m_AnalyzedFrameStart == m_FrameStore.FullFrameStart
+                    && m_AnalyzedFrameEnd == m_FrameStore.FullFrameEnd))
             {
-                startBar = 0;
-                endBar = m_BarCount - 1;
+                for (int i = 0; i < m_BarCount; i++)
+                    m_AnalyzedBarMask[i] = true;
                 return;
             }
 
-            // Find the first and last visible bars that overlap with the analyzed frame range
-            // After viewport clipping, m_Bars[i] already has correct StartFrame/EndFrame
+            // With a frame buffer, check each bar's frames against the buffer
+            // for precise per-bar dimming. Works in both sorted and frame-order modes.
+            if (m_HasFrameSelection)
+            {
+                int baseFrame = m_SelectedFrameBaseFrame;
+                int bufLen = m_SelectedFrameBuffer.Length;
+                for (int i = 0; i < m_BarCount; i++)
+                {
+                    int sf = m_Bars[i].StartFrame;
+                    int ef = m_Bars[i].EndFrame;
+                    bool any = false;
+                    for (int f = sf; f <= ef; f++)
+                    {
+                        int idx = f - baseFrame;
+                        if (idx >= 0 && idx < bufLen && m_SelectedFrameBuffer[idx])
+                        {
+                            any = true;
+                            break;
+                        }
+                    }
+                    m_AnalyzedBarMask[i] = any;
+                }
+                return;
+            }
+
+            // Frame-order mode — bar overlaps analyzed frame range
             for (int i = 0; i < m_BarCount; i++)
             {
-                bool overlaps = m_Bars[i].StartFrame <= m_AnalyzedFrameEnd
+                m_AnalyzedBarMask[i] = m_Bars[i].StartFrame <= m_AnalyzedFrameEnd
                     && m_Bars[i].EndFrame >= m_AnalyzedFrameStart;
-                if (overlaps)
-                {
-                    if (startBar < 0) startBar = i;
-                    endBar = i;
-                }
             }
         }
 
@@ -1514,7 +1556,7 @@ namespace GCAllocBreakdown.Editor
 
             // Bars are always in display order. In sorted mode, a range of
             // display positions may span non-contiguous frames, so find min/max.
-            if (m_SortedBarIndices != null)
+            if (m_OrderByMagnitude)
             {
                 int minFrame = int.MaxValue;
                 int maxFrame = int.MinValue;
@@ -1531,6 +1573,46 @@ namespace GCAllocBreakdown.Editor
                 startFrame = m_Bars[startBar].StartFrame;
                 endFrame = m_Bars[endBar].EndFrame;
             }
+        }
+
+        /// <summary>
+        /// Populate the reusable bool[] buffer with the frames covered by the
+        /// selected display bars. Works for both contiguous and sorted views.
+        /// </summary>
+        void BuildSelectedFrameBuffer(int startBar, int endBar)
+        {
+            if (startBar > endBar)
+            {
+                int tmp = startBar;
+                startBar = endBar;
+                endBar = tmp;
+            }
+            if (startBar < 0) startBar = 0;
+            if (endBar >= m_BarCount) endBar = m_BarCount - 1;
+
+            int fullFrameCount = m_FrameStore.FullFrameBytes.Length;
+            m_SelectedFrameBaseFrame = m_FrameStore.FullFrameStart;
+
+            // Ensure capacity, then clear
+            if (m_SelectedFrameBuffer == null || m_SelectedFrameBuffer.Length < fullFrameCount)
+                m_SelectedFrameBuffer = new bool[fullFrameCount];
+            else
+                System.Array.Clear(m_SelectedFrameBuffer, 0, fullFrameCount);
+
+            // Mark frames covered by each selected bar
+            for (int i = startBar; i <= endBar; i++)
+            {
+                int sf = m_Bars[i].StartFrame;
+                int ef = m_Bars[i].EndFrame;
+                for (int f = sf; f <= ef; f++)
+                {
+                    int idx = f - m_SelectedFrameBaseFrame;
+                    if (idx >= 0 && idx < fullFrameCount)
+                        m_SelectedFrameBuffer[idx] = true;
+                }
+            }
+
+            m_HasFrameSelection = true;
         }
 
         // ═══════════════════════════════════════════════════

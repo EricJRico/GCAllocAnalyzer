@@ -692,8 +692,14 @@ namespace GCAllocBreakdown.Editor
         {
             if (m_FrameStore.HasCachedAnalysis)
             {
-                // Auto-analyze from cache — instant
-                RebuildFromCache(startFrame, endFrame);
+                // Use the frame buffer for precise filtering (handles both
+                // contiguous frame-order and non-contiguous sorted selections)
+                var buffer = m_GraphController?.SelectedFrameBuffer;
+                if (buffer != null)
+                    RebuildFromCacheWithBuffer(buffer, m_GraphController.SelectedFrameBaseFrame,
+                        startFrame, endFrame);
+                else
+                    RebuildFromCache(startFrame, endFrame);
 
                 // Clear visual selection (the selection "became" the analyzed range)
                 m_GraphController?.ClearSelection();
@@ -712,6 +718,7 @@ namespace GCAllocBreakdown.Editor
         void OnGraphResetRequested()
         {
             if (!m_FrameStore.HasCachedAnalysis) return;
+            m_GraphController?.ClearFrameSelection();
             RebuildFromCache(m_FrameStore.FullFrameStart, m_FrameStore.FullFrameEnd);
             m_GraphController?.ClearSelection();
         }
@@ -1777,6 +1784,128 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append('–');
             m_SharedSB.Append(GCAllocUtils.DisplayFrame(endFrame));
             m_SharedSB.Append(") | ");
+            m_SharedSB.Append(GCAllocUtils.FormatBytes(totalBytes));
+            m_SharedSB.Append(", ");
+            m_SharedSB.Append(m_Snapshot.TotalCount);
+            m_SharedSB.Append(" allocs (from cache)");
+            m_StatusLabel.text = m_SharedSB.ToString();
+
+            if (m_FilteredGroups.Count > 0)
+                m_MarkerListView.selectedIndex = 0;
+        }
+
+        /// <summary>
+        /// Rebuild analysis from cached data using a boolean frame buffer for filtering.
+        /// Handles both contiguous (frame-order) and non-contiguous (sorted) selections.
+        /// </summary>
+        void RebuildFromCacheWithBuffer(bool[] frameBuffer, int baseFrame, int startFrame, int endFrame)
+        {
+            if (!m_FrameStore.HasCachedAnalysis)
+            {
+                m_StatusLabel.text = "No cached analysis. Run Analyze first.";
+                return;
+            }
+
+            m_Snapshot.RawAllocations.Clear();
+            m_SelectedThreads.Clear();
+            m_ThreadAllocCounts.Clear();
+            long totalBytes = 0;
+            bool anyCallStacks = false;
+            int selectedFrameCount = 0;
+
+            // Count selected frames
+            int bufferLen = frameBuffer.Length;
+            for (int i = 0; i < bufferLen; i++)
+            {
+                if (frameBuffer[i]) selectedFrameCount++;
+            }
+
+            // Filter cached allocations by frame buffer membership
+            var cached = m_FrameStore.CachedRawAllocations;
+            for (int i = 0; i < cached.Count; i++)
+            {
+                var alloc = cached[i];
+                int idx = alloc.FrameIndex - baseFrame;
+                if (idx < 0 || idx >= bufferLen || !frameBuffer[idx])
+                    continue;
+
+                m_Snapshot.RawAllocations.Add(alloc);
+                totalBytes += alloc.Bytes;
+                if (alloc.ResolvedCallStack != null && alloc.ResolvedCallStack.Count > 0)
+                    anyCallStacks = true;
+
+                // Track per-thread counts
+                string td = alloc.ThreadDisplayName;
+                if (m_ThreadAllocCounts.TryGetValue(td, out int prev))
+                    m_ThreadAllocCounts[td] = prev + 1;
+                else
+                    m_ThreadAllocCounts[td] = 1;
+            }
+
+            // Restore full thread set from cache
+            m_AllThreadNames.Clear();
+            var cachedThreads = m_FrameStore.CachedSortedThreadNames;
+            if (cachedThreads != null)
+            {
+                for (int i = 0; i < cachedThreads.Count; i++)
+                    m_AllThreadNames.Add(cachedThreads[i]);
+            }
+
+            m_Snapshot.TotalBytes = totalBytes;
+            m_Snapshot.TotalCount = m_Snapshot.RawAllocations.Count;
+            m_Snapshot.FrameStart = startFrame;
+            m_Snapshot.FrameEnd = endFrame;
+            m_Snapshot.HadCallStacks = anyCallStacks;
+
+            // Rebuild thread names
+            m_Snapshot.SortedThreadNames.Clear();
+            foreach (string t in m_AllThreadNames)
+                m_Snapshot.SortedThreadNames.Add(t);
+            m_Snapshot.SortedThreadNames.Sort(StringComparer.Ordinal);
+            UpdateThreadButtonLabel();
+
+            // Rebuild groupings and stats
+            BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
+            BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
+            ComputeSnapshotPerFrameBytes();
+
+            m_ActiveGroups = m_GroupByCallsite.value
+                ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
+            BuildThreadIndex(m_ActiveGroups);
+            BuildTopOffenders();
+            ApplyFilters();
+            UpdateDataSummary();
+            ShowNoDataState(m_ActiveGroups.Count == 0);
+            RebuildGraph();
+            m_SaveBtn?.SetEnabled(m_Snapshot.HasData);
+            m_ExportBtn?.SetEnabled(m_Snapshot.HasData);
+
+            // Update frame range fields
+            m_StartFrameField.SetValueWithoutNotify(GCAllocUtils.DisplayFrame(startFrame));
+            m_EndFrameField.SetValueWithoutNotify(GCAllocUtils.DisplayFrame(endFrame));
+            UpdateFrameRangeInfo();
+
+            // Status
+            int totalFrames = endFrame - startFrame + 1;
+            m_SharedSB.Clear();
+            if (selectedFrameCount < totalFrames)
+            {
+                // Non-contiguous selection (sorted mode)
+                m_SharedSB.Append("Selected ");
+                m_SharedSB.Append(selectedFrameCount);
+                m_SharedSB.Append(" frames (non-contiguous) | ");
+            }
+            else
+            {
+                // Contiguous selection (frame-order mode)
+                m_SharedSB.Append("Sub-range: ");
+                m_SharedSB.Append(totalFrames);
+                m_SharedSB.Append(" frames (");
+                m_SharedSB.Append(GCAllocUtils.DisplayFrame(startFrame));
+                m_SharedSB.Append('\u2013');
+                m_SharedSB.Append(GCAllocUtils.DisplayFrame(endFrame));
+                m_SharedSB.Append(") | ");
+            }
             m_SharedSB.Append(GCAllocUtils.FormatBytes(totalBytes));
             m_SharedSB.Append(", ");
             m_SharedSB.Append(m_Snapshot.TotalCount);
