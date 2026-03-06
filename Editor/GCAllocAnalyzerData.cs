@@ -243,8 +243,8 @@ namespace GCAllocBreakdown.Editor
         public int FullFrameEnd;
         public long[] FullFrameBytes;              // per-frame GC totals for entire profiler range
 
-        [NonSerialized] public List<RawAllocation> CachedRawAllocations;
-        [NonSerialized] public List<string> CachedSortedThreadNames;
+        public List<RawAllocation> CachedRawAllocations;
+        public List<string> CachedSortedThreadNames;
 
         public bool HasFullFrameData => FullFrameBytes != null && FullFrameBytes.Length > 0;
         public bool HasCachedAnalysis => CachedRawAllocations != null && CachedRawAllocations.Count > 0;
@@ -273,7 +273,38 @@ namespace GCAllocBreakdown.Editor
                 CachedSortedThreadNames.Add(sortedThreadNames[i]);
         }
 
-        // Non-serialized fields (CachedRawAllocations, CachedSortedThreadNames) are
-        // intentionally not restored after domain reload — a fresh Analyze is needed.
+        // CachedRawAllocations and CachedSortedThreadNames are now serialized
+        // so that drag-select and Reset continue to work after domain reload.
+    }
+
+    // ═══════════════════════════════════════════════════
+    //  GRAPH CONTROLLER STATE — serializable subset of
+    //  PerFrameGraphController state that must survive
+    //  domain reload.
+    // ═══════════════════════════════════════════════════
+
+    [Serializable]
+    internal struct GraphControllerState
+    {
+        public bool OrderByMagnitude;
+        public float ViewportStart;
+        public float ViewportEnd;
+        public bool HasFrameSelection;
+        public bool[] SelectedFrameBuffer;
+        public int SelectedFrameBaseFrame;
+        public int SelectionFrameStart;
+        public int SelectionFrameEnd;
+        public int HighlightedFrame;
+
+        public static GraphControllerState Default => new GraphControllerState
+        {
+            OrderByMagnitude = false,
+            ViewportStart = 0f,
+            ViewportEnd = 1f,
+            HasFrameSelection = false,
+            SelectionFrameStart = -1,
+            SelectionFrameEnd = -1,
+            HighlightedFrame = -1
+        };
     }
 }

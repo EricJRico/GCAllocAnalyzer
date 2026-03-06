@@ -133,6 +133,12 @@ namespace GCAllocBreakdown.Editor
         [SerializeField] SortCol m_SortCol = SortCol.Bytes;
         [SerializeField] bool m_SortAsc;
         [SerializeField] bool m_ShowAssembly;
+        [SerializeField] GraphControllerState m_GraphState = GraphControllerState.Default;
+        [SerializeField] string m_NameFilterText = "";
+        [SerializeField] string m_ExcludeFilterText = "";
+        [SerializeField] bool m_GroupByCallsiteValue = true;
+        [SerializeField] string[] m_SerializedSelectedThreads = Array.Empty<string>();
+        [SerializeField] int m_SelectedMarkerIndex = -1;
 
         // Points to m_Snapshot.GroupsByFullCallstack or GroupsByTopFrame
         List<CallsiteGroup> m_ActiveGroups;
@@ -240,6 +246,26 @@ namespace GCAllocBreakdown.Editor
         void OnDisable()
         {
             GCAllocSettings.SettingsChanged -= OnSettingsChanged;
+
+            m_GraphState = m_GraphController.CaptureState();
+            m_NameFilterText = m_NameFilter.value;
+            m_ExcludeFilterText = m_ExcludeFilter.value;
+            m_GroupByCallsiteValue = m_GroupByCallsite.value;
+            m_SelectedMarkerIndex = m_MarkerListView.selectedIndex;
+
+            // Serialize thread selection (HashSet is not serializable).
+            // Empty array = "all threads" (no filtering active).
+            if (m_SelectedThreads.Count > 0 && m_SelectedThreads.Count < m_AllThreadNames.Count)
+            {
+                m_SerializedSelectedThreads = new string[m_SelectedThreads.Count];
+                int idx = 0;
+                foreach (string t in m_SelectedThreads)
+                    m_SerializedSelectedThreads[idx++] = t;
+            }
+            else
+            {
+                m_SerializedSelectedThreads = Array.Empty<string>();
+            }
         }
 
         void OnSettingsChanged()
@@ -263,6 +289,15 @@ namespace GCAllocBreakdown.Editor
             m_ThreadAllocCounts.Clear();
             for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
                 m_AllThreadNames.Add(m_Snapshot.SortedThreadNames[i]);
+
+            // Restore thread selection from serialized array
+            m_SelectedThreads.Clear();
+            for (int i = 0; i < m_SerializedSelectedThreads.Length; i++)
+            {
+                if (m_AllThreadNames.Contains(m_SerializedSelectedThreads[i]))
+                    m_SelectedThreads.Add(m_SerializedSelectedThreads[i]);
+            }
+
             RebuildThreadAllocCounts();
             UpdateThreadButtonLabel();
 
@@ -288,6 +323,11 @@ namespace GCAllocBreakdown.Editor
             ApplyFilters();
             UpdateDataSummary();
             ShowNoDataState(m_ActiveGroups.Count == 0);
+
+            // Restore selected marker (ApplyFilters defaults to index 0)
+            if (m_SelectedMarkerIndex >= 0 && m_SelectedMarkerIndex < m_FilteredGroups.Count)
+                m_MarkerListView.selectedIndex = m_SelectedMarkerIndex;
+
             RebuildGraph();
 
             // Restore frame range in UI (fields display 1-based)
@@ -568,6 +608,7 @@ namespace GCAllocBreakdown.Editor
             {
                 style = { minWidth = 150, flexGrow = 1, marginRight = 12 }
             };
+            m_NameFilter.SetValueWithoutNotify(m_NameFilterText);
             m_NameFilter.RegisterValueChangedCallback(OnNameFilterChanged);
             filterRow1.Add(m_NameFilter);
 
@@ -575,6 +616,7 @@ namespace GCAllocBreakdown.Editor
             {
                 style = { minWidth = 150, flexGrow = 1, marginRight = 12 }
             };
+            m_ExcludeFilter.SetValueWithoutNotify(m_ExcludeFilterText);
             m_ExcludeFilter.RegisterValueChangedCallback(OnExcludeFilterChanged);
             filterRow1.Add(m_ExcludeFilter);
 
@@ -595,9 +637,9 @@ namespace GCAllocBreakdown.Editor
             var filterRow2 = new VisualElement { style = { flexDirection = FlexDirection.Row, flexWrap = Wrap.Wrap } };
             m_GroupByCallsite = new Toggle("Group By Full Callsite")
             {
-                value = true,
                 tooltip = "ON: group by full call stack.\nOFF: group by top frame only."
             };
+            m_GroupByCallsite.SetValueWithoutNotify(m_GroupByCallsiteValue);
             m_GroupByCallsite.RegisterValueChangedCallback(OnGroupByChanged);
             filterRow2.Add(m_GroupByCallsite);
 
@@ -685,6 +727,7 @@ namespace GCAllocBreakdown.Editor
             m_GraphController.OnDragCompleted += OnGraphDragCompleted;
             m_GraphController.OnResetRequested += OnGraphResetRequested;
             m_GraphController.SetData(m_FrameStore, m_Snapshot, m_FilteredGroups);
+            m_GraphController.RestoreState(m_GraphState);
             return m_GraphController.Root;
         }
 

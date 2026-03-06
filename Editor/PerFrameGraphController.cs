@@ -265,6 +265,36 @@ namespace GCAllocBreakdown.Editor
             }
         }
 
+        public GraphControllerState CaptureState()
+        {
+            return new GraphControllerState
+            {
+                OrderByMagnitude = m_OrderByMagnitude,
+                ViewportStart = m_ViewportStart,
+                ViewportEnd = m_ViewportEnd,
+                HasFrameSelection = m_HasFrameSelection,
+                SelectedFrameBuffer = m_HasFrameSelection ? m_SelectedFrameBuffer : null,
+                SelectedFrameBaseFrame = m_SelectedFrameBaseFrame,
+                SelectionFrameStart = m_SelectionFrameStart,
+                SelectionFrameEnd = m_SelectionFrameEnd,
+                HighlightedFrame = m_HighlightedFrame
+            };
+        }
+
+        public void RestoreState(GraphControllerState state)
+        {
+            m_OrderByMagnitude = state.OrderByMagnitude;
+            m_ViewportStart = state.ViewportStart;
+            m_ViewportEnd = state.ViewportEnd;
+            m_HasFrameSelection = state.HasFrameSelection;
+            m_SelectedFrameBuffer = state.SelectedFrameBuffer;
+            m_SelectedFrameBaseFrame = state.SelectedFrameBaseFrame;
+            m_SelectionFrameStart = state.SelectionFrameStart;
+            m_SelectionFrameEnd = state.SelectionFrameEnd;
+            m_HighlightedFrame = state.HighlightedFrame;
+            UpdateSortToggleLabel();
+        }
+
         /// <summary>
         /// Rebuild the entire graph from current frame store data.
         /// </summary>
