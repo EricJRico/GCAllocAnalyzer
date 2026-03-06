@@ -98,7 +98,6 @@ namespace GCAllocBreakdown.Editor
         public event Action<int> BarClicked;
         public event Action<int, int> SelectionChanged;
         public event Action<int, int> DragCompleted;
-
         // ═══════════════════════════════════════════════════
         //  PROPERTIES
         // ═══════════════════════════════════════════════════
@@ -559,6 +558,7 @@ namespace GCAllocBreakdown.Editor
                     MoveHighlightedBar(step);
                     handled = true;
                     break;
+
             }
 
             if (handled)

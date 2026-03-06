@@ -784,10 +784,11 @@ namespace GCAllocBreakdown.Editor
 
         void SelectTopAllocatorForFrame(int frameIndex)
         {
-            if (m_FilteredGroups == null || m_FilteredGroups.Count == 0) return;
+            if (m_FilteredGroups.Count == 0) return;
 
             int bestIdx = -1;
             long bestBytes = 0;
+
             for (int g = 0; g < m_FilteredGroups.Count; g++)
             {
                 var group = m_FilteredGroups[g];

@@ -314,10 +314,11 @@ namespace GCAllocBreakdown.Editor
             float areaWidth = m_GraphElement.contentRect.width;
             if (float.IsNaN(areaWidth) || areaWidth < 1f) areaWidth = 400f;
 
-            // ── Bucketing ──
+            // ── Bucketing (based on visible frame count so zoom gives finer resolution) ──
+            int visibleFrameCount = Mathf.Max(1, Mathf.RoundToInt((m_ViewportEnd - m_ViewportStart) * frameCount));
             m_FramesPerBucket = 1;
-            if (frameCount > (int)areaWidth)
-                m_FramesPerBucket = Mathf.CeilToInt((float)frameCount / Mathf.Max(1f, areaWidth));
+            if (visibleFrameCount > (int)areaWidth)
+                m_FramesPerBucket = Mathf.CeilToInt((float)visibleFrameCount / Mathf.Max(1f, areaWidth));
 
             int bucketCount = Mathf.CeilToInt((float)frameCount / m_FramesPerBucket);
             m_TotalBucketCount = bucketCount;
@@ -695,7 +696,6 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.BarClicked += OnBarClicked;
             m_GraphElement.SelectionChanged += OnSelectionChangedInternal;
             m_GraphElement.DragCompleted += OnDragCompletedInternal;
-
             // ── Overview strip (miniature full-range view) ──
             var overviewContainer = new VisualElement
             {
