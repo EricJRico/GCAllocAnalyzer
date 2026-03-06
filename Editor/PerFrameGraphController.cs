@@ -1250,13 +1250,18 @@ namespace GCAllocBreakdown.Editor
                 return;
             }
 
+            bool wasHidden = m_HScroller.resolvedStyle.display == DisplayStyle.None;
             m_HScroller.style.display = DisplayStyle.Flex;
             float span = m_ViewportEnd - m_ViewportStart;
             m_HScroller.lowValue = 0;
             m_HScroller.highValue = Mathf.Max(0, 1f - span);
             m_HScroller.slider.pageSize = span;
-            m_HScroller.Adjust(span);
             m_HScroller.slider.SetValueWithoutNotify(m_ViewportStart);
+
+            if (wasHidden)
+                m_HScroller.schedule.Execute(() => m_HScroller.Adjust(span));
+            else
+                m_HScroller.Adjust(span);
         }
 
         void UpdateResetButtonVisibility()
