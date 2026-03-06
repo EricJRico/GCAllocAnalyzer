@@ -10,9 +10,6 @@ namespace GCAllocBreakdown.Editor
 
     internal struct BarData
     {
-        public float X;          // left edge in pixels
-        public float W;          // width in pixels
-        public float Height;     // height in pixels (0 to maxHeight)
         public int StartFrame;   // first frame index in this bar
         public int EndFrame;     // last frame index in this bar
         public long Value;       // max bytes in this bar's frame range
@@ -58,6 +55,7 @@ namespace GCAllocBreakdown.Editor
         // ═══════════════════════════════════════════════════
 
         BarData[] m_Bars;
+        int m_BarOffset;
         int m_BarCount;
 
         BarData[] m_OverlayBars;
@@ -147,9 +145,10 @@ namespace GCAllocBreakdown.Editor
         //  PUBLIC DATA SETTERS
         // ═══════════════════════════════════════════════════
 
-        public void SetBarData(BarData[] bars, int count)
+        public void SetBarData(BarData[] bars, int offset, int count)
         {
             m_Bars = bars;
+            m_BarOffset = offset;
             m_BarCount = bars != null ? count : 0;
             MarkDirtyRepaint();
         }
@@ -278,8 +277,9 @@ namespace GCAllocBreakdown.Editor
             if (sStart >= m_BarCount) return;
             if (sEnd >= m_BarCount) sEnd = m_BarCount - 1;
 
-            float left  = m_Bars[sStart].X;
-            float right = m_Bars[sEnd].X + m_Bars[sEnd].W;
+            float barWidth = rect.width / m_BarCount;
+            float left  = sStart * barWidth;
+            float right = (sEnd + 1) * barWidth;
 
             painter.fillColor = k_SelectionBg;
             painter.BeginPath();
@@ -307,13 +307,17 @@ namespace GCAllocBreakdown.Editor
                 sEnd   = m_SelectionStart < m_SelectionEnd ? m_SelectionEnd   : m_SelectionStart;
             }
 
+            float areaWidth = rect.width;
             float areaHeight = rect.height;
+            float barWidth = areaWidth / m_BarCount;
 
             for (int i = 0; i < m_BarCount; i++)
             {
-                // Scale bar height to actual content rect (was computed against k_GraphHeight)
+                int srcIdx = m_BarOffset + i;
+
+                // Scale bar height to actual content rect
                 float barHeight = m_YAxisMax > 0
-                    ? (float)m_Bars[i].Value / m_YAxisMax * areaHeight
+                    ? (float)m_Bars[srcIdx].Value / m_YAxisMax * areaHeight
                     : 0f;
                 if (barHeight <= 0f) continue;
 
@@ -323,7 +327,7 @@ namespace GCAllocBreakdown.Editor
                 //           m_AnalyzedStartBar == -2 means analysis off-screen (dim all).
                 bool inAnalyzed;
                 if (m_AnalyzedBarMask != null)
-                    inAnalyzed = i < m_AnalyzedBarMask.Length && m_AnalyzedBarMask[i];
+                    inAnalyzed = srcIdx < m_AnalyzedBarMask.Length && m_AnalyzedBarMask[srcIdx];
                 else
                     inAnalyzed = m_AnalyzedStartBar == -1
                         || (m_AnalyzedStartBar >= 0 && i >= m_AnalyzedStartBar && i <= m_AnalyzedEndBar);
@@ -337,8 +341,8 @@ namespace GCAllocBreakdown.Editor
                 else
                     color = k_BarNormal;
 
-                float x = m_Bars[i].X;
-                float w = m_Bars[i].W;
+                float x = i * barWidth;
+                float w = Mathf.Max(barWidth, 1f);
                 float top = areaHeight - barHeight;
 
                 painter.fillColor = color;
@@ -360,7 +364,9 @@ namespace GCAllocBreakdown.Editor
         {
             if (m_OverlayBars == null || m_OverlayBarCount <= 0) return;
 
+            float areaWidth = rect.width;
             float areaHeight = rect.height;
+            float barWidth = areaWidth / m_BarCount;
             painter.fillColor = k_OverlayColor;
 
             for (int i = 0; i < m_OverlayBarCount; i++)
@@ -372,15 +378,16 @@ namespace GCAllocBreakdown.Editor
                 if (barHeight <= 0f) continue;
 
                 // Skip overlay for bars outside analyzed range
+                int maskIdx = m_BarOffset + i;
                 if (m_AnalyzedBarMask != null)
                 {
-                    if (i >= m_AnalyzedBarMask.Length || !m_AnalyzedBarMask[i]) continue;
+                    if (maskIdx >= m_AnalyzedBarMask.Length || !m_AnalyzedBarMask[maskIdx]) continue;
                 }
                 else if (m_AnalyzedStartBar >= 0 && (i < m_AnalyzedStartBar || i > m_AnalyzedEndBar))
                     continue;
 
-                float x = m_OverlayBars[i].X;
-                float w = m_OverlayBars[i].W;
+                float x = i * barWidth;
+                float w = Mathf.Max(barWidth, 1f);
                 float top = areaHeight - barHeight;
 
                 painter.BeginPath();
@@ -453,9 +460,9 @@ namespace GCAllocBreakdown.Editor
                 // Clamp to nearest edge
                 if (m_Bars != null && m_BarCount > 0)
                 {
-                    if (pos.x <= m_Bars[0].X)
+                    if (pos.x <= 0)
                         currentBar = 0;
-                    else if (pos.x >= m_Bars[m_BarCount - 1].X + m_Bars[m_BarCount - 1].W)
+                    else if (pos.x >= contentRect.width)
                         currentBar = m_BarCount - 1;
                 }
             }
@@ -581,7 +588,8 @@ namespace GCAllocBreakdown.Editor
                     int first = -1, last = -1;
                     for (int i = 0; i < m_BarCount; i++)
                     {
-                        if (i < m_AnalyzedBarMask.Length && m_AnalyzedBarMask[i])
+                        int maskIdx = m_BarOffset + i;
+                        if (maskIdx < m_AnalyzedBarMask.Length && m_AnalyzedBarMask[maskIdx])
                         {
                             if (first < 0) first = i;
                             last = i;
