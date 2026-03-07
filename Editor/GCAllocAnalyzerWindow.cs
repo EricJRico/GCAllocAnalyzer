@@ -779,7 +779,7 @@ namespace GCAllocBreakdown.Editor
             m_GraphController?.ClearSelection();
         }
 
-        void OnGraphFrameSelected(int frameIndex)
+        void OnGraphFrameSelected(int frameIndex, string methodName)
         {
             EnsureProfilerRef();
             if (m_ProfilerWindow != null)
@@ -791,8 +791,10 @@ namespace GCAllocBreakdown.Editor
                 }
             }
 
-            // Select the allocation site with the most bytes in this frame
-            SelectTopAllocatorForFrame(frameIndex);
+            if (methodName != null)
+                SelectAllocatorByMethodForFrame(frameIndex, methodName);
+            else
+                SelectTopAllocatorForFrame(frameIndex);
         }
 
         void SelectTopAllocatorForFrame(int frameIndex)
@@ -822,6 +824,42 @@ namespace GCAllocBreakdown.Editor
             {
                 m_MarkerListView.selectedIndex = bestIdx;
                 m_MarkerListView.ScrollToItem(bestIdx);
+            }
+        }
+
+        void SelectAllocatorByMethodForFrame(int frameIndex, string methodName)
+        {
+            if (m_FilteredGroups.Count == 0) return;
+
+            int bestIdx = -1;
+            long bestBytes = 0;
+
+            for (int g = 0; g < m_FilteredGroups.Count; g++)
+            {
+                var group = m_FilteredGroups[g];
+                long groupBytes = 0;
+                for (int a = 0; a < group.Allocations.Count; a++)
+                {
+                    var alloc = group.Allocations[a];
+                    if (alloc.FrameIndex == frameIndex && alloc.DisplayName == methodName)
+                        groupBytes += alloc.Bytes;
+                }
+                if (groupBytes > bestBytes)
+                {
+                    bestBytes = groupBytes;
+                    bestIdx = g;
+                }
+            }
+
+            if (bestIdx >= 0 && bestIdx != m_MarkerListView.selectedIndex)
+            {
+                m_MarkerListView.selectedIndex = bestIdx;
+                m_MarkerListView.ScrollToItem(bestIdx);
+            }
+            else if (bestIdx < 0)
+            {
+                // Grouping mode mismatch — fall back to top allocator
+                SelectTopAllocatorForFrame(frameIndex);
             }
         }
 

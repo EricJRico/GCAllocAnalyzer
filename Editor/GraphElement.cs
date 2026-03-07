@@ -46,7 +46,7 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_BarNormal         = new Color(0.27f, 0.67f, 0.6f);
         static readonly Color k_SelectionAreaBarColor      = new Color(0.4f, 0.8f, 0.73f);
         static readonly Color k_SelectionAreaBgColor = new Color(0.25f, 0.35f, 0.55f, 0.3f);
-        static readonly Color k_BarSelectedOverlayColor  = new Color(1f, 1f, 1f, 0.5f);
+        static readonly Color k_BarSelectedOverlayColor  = new Color(1f, 1f, 1f, 0.7f);
         static readonly Color k_BarDimmed         = new Color(0.27f, 0.67f, 0.6f, 0.3f);
         static readonly Color k_HoverOverlay      = new Color(1f, 1f, 1f, 0.12f);
 
@@ -86,6 +86,7 @@ namespace GCAllocBreakdown.Editor
         bool m_HasSegmentData;
         MethodColorPalette m_MethodPalette;
         int[] m_SegmentIndexMap; // display index → original index for segment lookup (null = identity)
+        int m_OverlayMethodIndex = -1; // method index for segment-aligned overlay (-1 = bottom-aligned)
 
         // ═══════════════════════════════════════════════════
         //  DRAG STATE
@@ -101,7 +102,7 @@ namespace GCAllocBreakdown.Editor
         //  EVENTS
         // ═══════════════════════════════════════════════════
 
-        public event Action<int> BarClicked;
+        public event Action<int, float> BarClicked;
         public event Action<int, int> SelectionChanged;
         public event Action<int, int> DragCompleted;
         // ═══════════════════════════════════════════════════
@@ -161,10 +162,11 @@ namespace GCAllocBreakdown.Editor
             MarkDirtyRepaint();
         }
 
-        public void SetOverlayData(BarData[] overlayBars, int count)
+        public void SetOverlayData(BarData[] overlayBars, int count, int methodIndex = -1)
         {
             m_OverlayBars = overlayBars;
             m_OverlayBarCount = overlayBars != null ? count : 0;
+            m_OverlayMethodIndex = methodIndex;
             MarkDirtyRepaint();
         }
 
@@ -469,15 +471,44 @@ namespace GCAllocBreakdown.Editor
 
                 float x = i * barWidth;
                 float w = Mathf.Max(barWidth, 1f);
-                float top = areaHeight - barHeight;
 
-                painter.BeginPath();
-                painter.MoveTo(new Vector2(x, top));
-                painter.LineTo(new Vector2(x + w, top));
-                painter.LineTo(new Vector2(x + w, areaHeight));
-                painter.LineTo(new Vector2(x, areaHeight));
-                painter.ClosePath();
-                painter.Fill();
+                // When a method index is set, draw overlay at the matching segment's
+                // Y position instead of from the bottom of the chart.
+                if (m_OverlayMethodIndex >= 0 && m_HasSegmentData && m_SegmentOffsets != null)
+                {
+                    int srcIdx = m_BarOffset + i;
+                    int segLookup = m_SegmentIndexMap != null ? m_SegmentIndexMap[srcIdx] : srcIdx;
+                    if (segLookup + 1 < m_SegmentOffsets.Length)
+                    {
+                        int segStart = m_SegmentOffsets[segLookup];
+                        int segEnd = m_SegmentOffsets[segLookup + 1];
+
+                        float currentY = areaHeight;
+                        for (int s = segStart; s < segEnd; s++)
+                        {
+                            float segH = m_YAxisMax > 0
+                                ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
+                                : 0f;
+                            float segTop = currentY - segH;
+
+                            if (m_Segments[s].MethodIndex == m_OverlayMethodIndex)
+                            {
+                                // Draw overlay at this segment's position, clamped to segment bounds
+                                float overlayTop = currentY - barHeight;
+                                if (overlayTop < segTop) overlayTop = segTop;
+                                DrawFilledRect(painter, x, overlayTop, w, currentY - overlayTop,
+                                    k_BarSelectedOverlayColor);
+                                break;
+                            }
+                            currentY = segTop;
+                        }
+                        continue;
+                    }
+                }
+
+                // Default: draw overlay from the bottom of the chart
+                float top = areaHeight - barHeight;
+                DrawFilledRect(painter, x, top, w, barHeight, k_BarSelectedOverlayColor);
             }
         }
 
@@ -600,7 +631,7 @@ namespace GCAllocBreakdown.Editor
                     MarkDirtyRepaint();
 
                     if (BarClicked != null)
-                        BarClicked(bar);
+                        BarClicked(bar, evt.localPosition.y);
                 }
             }
 
@@ -653,7 +684,7 @@ namespace GCAllocBreakdown.Editor
             {
                 MarkDirtyRepaint();
                 if (BarClicked != null && m_HighlightedBar >= 0)
-                    BarClicked(m_HighlightedBar);
+                    BarClicked(m_HighlightedBar, -1f);
                 evt.StopPropagation();
             }
         }

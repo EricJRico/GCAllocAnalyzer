@@ -39,7 +39,7 @@ namespace GCAllocBreakdown.Editor
         //  CALLBACKS
         // ═══════════════════════════════════════════════════
 
-        readonly Action<int> m_OnFrameSelected;
+        readonly Action<int, string> m_OnFrameSelected;
         readonly Func<int> m_GetSelectedMarkerIndex;
 
         /// <summary>Invoked when the user drag-selects a range of bars. Args: startFrame, endFrame.</summary>
@@ -246,7 +246,7 @@ namespace GCAllocBreakdown.Editor
         /// </summary>
         public VisualElement TooltipElement => m_FloatingTooltip;
 
-        public PerFrameGraphController(Action<int> onFrameSelected, Func<int> getSelectedMarkerIndex)
+        public PerFrameGraphController(Action<int, string> onFrameSelected, Func<int> getSelectedMarkerIndex)
         {
             m_OnFrameSelected = onFrameSelected;
             m_GetSelectedMarkerIndex = getSelectedMarkerIndex;
@@ -521,8 +521,18 @@ namespace GCAllocBreakdown.Editor
                 m_OverlayBars[b] = new BarData { Value = bucketMax };
             }
 
+            // ── Resolve method index for segment-aligned overlay ──
+            int methodIdx = -1;
+            if (m_HasSegmentData && m_FramesPerBucket == 1 && group.Allocations.Count > 0)
+            {
+                string key = group.Allocations[0].DisplayName;
+                if (string.IsNullOrEmpty(key))
+                    key = group.Allocations[0].ParentMethod;
+                methodIdx = m_MethodPalette.GetIndex(key);
+            }
+
             // ── Push overlay to GraphElement ──
-            m_GraphElement.SetOverlayData(m_OverlayBars, m_OverlayBarCount);
+            m_GraphElement.SetOverlayData(m_OverlayBars, m_OverlayBarCount, methodIdx);
 
             // ── Update overlay label ──
             m_GraphOverlayLabel.text = group.DisplayName;
@@ -786,14 +796,14 @@ namespace GCAllocBreakdown.Editor
                     backgroundColor = k_TooltipBg,
                     color = Color.white,
                     fontSize = 11,
-                    paddingLeft = 6,
-                    paddingRight = 6,
-                    paddingTop = 4,
-                    paddingBottom = 4,
-                    borderTopLeftRadius = 3,
-                    borderTopRightRadius = 3,
-                    borderBottomLeftRadius = 3,
-                    borderBottomRightRadius = 3,
+                    paddingLeft = 4,
+                    paddingRight = 4,
+                    paddingTop = 2,
+                    paddingBottom = 2,
+                    borderTopLeftRadius = 2,
+                    borderTopRightRadius = 2,
+                    borderBottomLeftRadius = 2,
+                    borderBottomRightRadius = 2,
                     borderTopWidth = 1,
                     borderBottomWidth = 1,
                     borderLeftWidth = 1,
@@ -947,16 +957,18 @@ namespace GCAllocBreakdown.Editor
             evt.StopPropagation();
         }
 
-        void OnBarClicked(int barIndex)
+        void OnBarClicked(int barIndex, float localY)
         {
             if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
             var perFrame = m_FrameStore.FullFrameBytes;
             if (barIndex < 0 || barIndex >= m_BarCount) return;
 
+            int srcIdx = barIndex + m_ViewportStartBucket;
+
             // Resolve the actual bar index, accounting for viewport offset and sorting
             int resolvedIndex = m_OrderByMagnitude
-                ? m_SortedBarIndices[barIndex + m_ViewportStartBucket]
-                : barIndex + m_ViewportStartBucket;
+                ? m_SortedBarIndices[srcIdx]
+                : srcIdx;
 
             // Find the frame with max allocation in this bucket
             int startIdx = resolvedIndex * m_FramesPerBucket;
@@ -972,8 +984,17 @@ namespace GCAllocBreakdown.Editor
             int frameIndex = m_FrameStore.FullFrameStart + maxIdx;
             m_HighlightedFrame = frameIndex;
 
+            // Segment hit-test: determine which method was clicked (1:1 zoom only)
+            string methodName = null;
+            if (localY >= 0f)
+            {
+                int segIdx = HitTestSegment(srcIdx, localY);
+                if (segIdx >= 0)
+                    methodName = m_MethodPalette.GetMethodName(m_Segments[segIdx].MethodIndex);
+            }
+
             if (m_OnFrameSelected != null)
-                m_OnFrameSelected(frameIndex);
+                m_OnFrameSelected(frameIndex, methodName);
         }
 
         void OnSelectionChangedInternal(int startBar, int endBar)
@@ -1063,61 +1084,22 @@ namespace GCAllocBreakdown.Editor
             int srcIdx = m_ViewportStartBucket + barIndex;
 
             // Segment tooltip: hit-test Y position within stacked bar.
-            // Must match the rendering logic: only show segment tooltip when
-            // the bar has 2+ named segments (otherwise it renders as solid teal).
-            int segLookup = m_OrderByMagnitude ? m_SortedBarIndices[srcIdx] : srcIdx;
-            if (m_HasSegmentData && m_FramesPerBucket == 1
-                && m_SegmentOffsets != null && segLookup + 1 < m_SegmentOffsets.Length)
+            int segIdx = HitTestSegment(srcIdx, localY);
+            if (segIdx >= 0)
             {
-                int segStart = m_SegmentOffsets[segLookup];
-                int segEnd = m_SegmentOffsets[segLookup + 1];
-
-                // Check if bar has enough named segments for stacked rendering
-                int namedCount = 0;
-                for (int s = segStart; s < segEnd && namedCount < 2; s++)
-                {
-                    if (m_Segments[s].MethodIndex != MethodColorPalette.k_OthersIndex)
-                        namedCount++;
-                }
-
-                if (namedCount >= 2)
-                {
-                    m_LastTooltipBar = barIndex;
-                    m_LastTooltipY = localY;
-
-                    float areaHeight = m_GraphElement.contentRect.height;
-                    float currentY = areaHeight;
-
-                    for (int s = segStart; s < segEnd; s++)
-                    {
-                        float segH = m_YAxisMax > 0
-                            ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
-                            : 0f;
-                        float segTop = currentY - segH;
-
-                        if (localY >= segTop && localY <= currentY)
-                        {
-                            m_GraphElement.SetHighlightedBar(barIndex, s);
-                            string methodName = m_MethodPalette.GetMethodName(m_Segments[s].MethodIndex);
-                            long totalForFrame = m_Bars[srcIdx].Value;
-                            int pct = totalForFrame > 0
-                                ? (int)(m_Segments[s].Bytes * 100 / totalForFrame)
-                                : 0;
-                            ShowFloatingTooltip(string.Concat(
-                                methodName, ": ", GCAllocUtils.FormatBytes(m_Segments[s].Bytes),
-                                " (", pct.ToString(), "%)"), localX, localY);
-                            return;
-                        }
-                        currentY = segTop;
-                    }
-
-                    // Fallback: above all segments (rounding gaps)
-                    m_GraphElement.SetHighlightedBar(barIndex);
-                    ShowFloatingTooltip(string.Concat(
-                        "Frame ", GCAllocUtils.DisplayFrame(m_Bars[srcIdx].StartFrame).ToString(),
-                        ": ", GCAllocUtils.FormatBytes(m_Bars[srcIdx].Value)), localX, localY);
-                    return;
-                }
+                m_LastTooltipBar = barIndex;
+                m_LastTooltipY = localY;
+                m_GraphElement.SetHighlightedBar(barIndex, segIdx);
+                string methodName = m_MethodPalette.GetMethodName(m_Segments[segIdx].MethodIndex);
+                long totalForFrame = m_Bars[srcIdx].Value;
+                int pct = totalForFrame > 0
+                    ? (int)(m_Segments[segIdx].Bytes * 100 / totalForFrame)
+                    : 0;
+                ShowFloatingTooltip(string.Concat(
+                    methodName.Replace("  —  ", "\n— "),
+                    ": ", GCAllocUtils.FormatBytes(m_Segments[segIdx].Bytes),
+                    " (", pct.ToString(), "%)"), localX, localY);
+                return;
             }
 
             // Standard tooltip (non-segment mode)
@@ -1294,7 +1276,7 @@ namespace GCAllocBreakdown.Editor
             m_HighlightedFrame = frameIndex;
 
             if (m_OnFrameSelected != null)
-                m_OnFrameSelected(frameIndex);
+                m_OnFrameSelected(frameIndex, null);
         }
 
         void NotifySelectionChanged(int startBar, int endBar)
@@ -1797,6 +1779,48 @@ namespace GCAllocBreakdown.Editor
             if (index < 0) return -1;
             if (index >= m_BarCount) return -1;
             return index;
+        }
+
+        /// <summary>
+        /// Hit-test a Y position against the stacked segments of a bar.
+        /// Returns the absolute segment index into m_Segments, or -1 if no segment hit.
+        /// srcIdx is the bar index including viewport offset (barIndex + m_ViewportStartBucket).
+        /// </summary>
+        int HitTestSegment(int srcIdx, float localY)
+        {
+            if (!m_HasSegmentData || m_FramesPerBucket != 1) return -1;
+
+            int segLookup = m_OrderByMagnitude ? m_SortedBarIndices[srcIdx] : srcIdx;
+            if (m_SegmentOffsets == null || segLookup + 1 >= m_SegmentOffsets.Length) return -1;
+
+            int segStart = m_SegmentOffsets[segLookup];
+            int segEnd = m_SegmentOffsets[segLookup + 1];
+
+            // Only hit-test when 2+ named segments (matches stacked rendering threshold)
+            int namedCount = 0;
+            for (int s = segStart; s < segEnd && namedCount < 2; s++)
+            {
+                if (m_Segments[s].MethodIndex != MethodColorPalette.k_OthersIndex)
+                    namedCount++;
+            }
+            if (namedCount < 2) return -1;
+
+            float areaHeight = m_GraphElement.contentRect.height;
+            float currentY = areaHeight;
+
+            for (int s = segStart; s < segEnd; s++)
+            {
+                float segH = m_YAxisMax > 0
+                    ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
+                    : 0f;
+                float segTop = currentY - segH;
+
+                if (localY >= segTop && localY <= currentY)
+                    return s;
+                currentY = segTop;
+            }
+
+            return -1;
         }
 
         void MapBarRangeToFrameRange(int startBar, int endBar, out int startFrame, out int endFrame)
