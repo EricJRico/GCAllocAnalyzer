@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using UnityEngine;
 
 namespace GCAllocBreakdown.Editor
 {
@@ -227,6 +228,110 @@ namespace GCAllocBreakdown.Editor
                 field.IndexOf('\n') < 0 && field.IndexOf('\r') < 0)
                 return field;
             return string.Concat("\"", field.Replace("\"", "\"\""), "\"");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════
+    //  STACKED BAR SEGMENT DATA
+    // ═══════════════════════════════════════════════════
+
+    internal struct BarSegment
+    {
+        public int MethodIndex;   // index into MethodColorPalette (k_OthersIndex = "Others")
+        public long Bytes;
+    }
+
+    internal class MethodColorPalette
+    {
+        public const int k_OthersIndex = -1;
+
+        static readonly Color[] k_Palette =
+        {
+            new(0.88f, 0.38f, 0.38f), // Red
+            new(0.88f, 0.56f, 0.25f), // Orange
+            new(0.82f, 0.69f, 0.25f), // Gold
+            new(0.50f, 0.75f, 0.31f), // Lime
+            new(0.31f, 0.69f, 0.44f), // Green
+            new(0.25f, 0.69f, 0.63f), // Teal-green
+            new(0.25f, 0.56f, 0.75f), // Sky blue
+            new(0.31f, 0.44f, 0.82f), // Blue
+            new(0.44f, 0.38f, 0.82f), // Indigo
+            new(0.56f, 0.31f, 0.75f), // Purple
+            new(0.69f, 0.31f, 0.63f), // Magenta
+            new(0.82f, 0.31f, 0.50f), // Pink
+            new(0.75f, 0.44f, 0.38f), // Salmon
+            new(0.50f, 0.63f, 0.38f), // Olive
+            new(0.38f, 0.56f, 0.63f), // Slate
+            new(0.63f, 0.50f, 0.38f), // Tan
+        };
+
+        static readonly Color k_OthersColor = new(0.45f, 0.45f, 0.45f);
+
+        readonly Dictionary<string, int> m_MethodToIndex = new(64);
+        readonly List<string> m_IndexToMethod = new(64);
+
+        public int Count => m_IndexToMethod.Count;
+
+        readonly Dictionary<string, long> m_BytesPerMethod = new(64);
+        readonly List<KeyValuePair<string, long>> m_SortedForBuild = new(64);
+
+        public void Build(List<RawAllocation> allocs)
+        {
+            m_MethodToIndex.Clear();
+            m_IndexToMethod.Clear();
+            m_BytesPerMethod.Clear();
+            m_SortedForBuild.Clear();
+
+            // Sum bytes per display name (human-readable top-frame method).
+            // DisplayName when call stacks are enabled, ParentMethod otherwise.
+            for (int i = 0; i < allocs.Count; i++)
+            {
+                string key = allocs[i].DisplayName;
+                if (string.IsNullOrEmpty(key))
+                    key = allocs[i].ParentMethod;
+                if (string.IsNullOrEmpty(key))
+                    key = "(unknown)";
+                if (m_BytesPerMethod.TryGetValue(key, out long existing))
+                    m_BytesPerMethod[key] = existing + allocs[i].Bytes;
+                else
+                    m_BytesPerMethod[key] = allocs[i].Bytes;
+            }
+
+            // Sort descending by total bytes
+            foreach (var kvp in m_BytesPerMethod)
+                m_SortedForBuild.Add(kvp);
+            m_SortedForBuild.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+            // Assign palette indices in rank order
+            for (int i = 0; i < m_SortedForBuild.Count; i++)
+            {
+                m_MethodToIndex[m_SortedForBuild[i].Key] = i;
+                m_IndexToMethod.Add(m_SortedForBuild[i].Key);
+            }
+        }
+
+        public int GetIndex(string method)
+        {
+            return m_MethodToIndex.TryGetValue(method, out int idx) ? idx : k_OthersIndex;
+        }
+
+        public Color GetColor(int methodIndex)
+        {
+            if (methodIndex == k_OthersIndex) return k_OthersColor;
+            return k_Palette[methodIndex % k_Palette.Length];
+        }
+
+        public string GetMethodName(int methodIndex)
+        {
+            if (methodIndex == k_OthersIndex || methodIndex < 0 || methodIndex >= m_IndexToMethod.Count)
+                return "Others";
+            return m_IndexToMethod[methodIndex];
+        }
+
+        public void Clear()
+        {
+            m_MethodToIndex.Clear();
+            m_IndexToMethod.Clear();
         }
     }
 

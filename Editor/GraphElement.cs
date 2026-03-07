@@ -45,10 +45,11 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_GridLineColor     = new Color(0.3f, 0.3f, 0.3f, 0.6f);
         static readonly Color k_BarNormal         = new Color(0.27f, 0.67f, 0.6f);
         static readonly Color k_BarSelected       = new Color(0.4f, 0.8f, 0.73f);
-        static readonly Color k_BarHighlighted    = new Color(0.9f, 0.75f, 0.3f);
+
         static readonly Color k_SelectionBg       = new Color(0.25f, 0.35f, 0.55f, 0.3f);
         static readonly Color k_OverlayColor      = new Color(1f, 1f, 1f, 0.85f);
         static readonly Color k_BarDimmed         = new Color(0.27f, 0.67f, 0.6f, 0.3f);
+        static readonly Color k_HoverOverlay      = new Color(1f, 1f, 1f, 0.12f);
 
         // ═══════════════════════════════════════════════════
         //  BAR DATA
@@ -74,10 +75,18 @@ namespace GCAllocBreakdown.Editor
         int m_SelectionStart = -1;
         int m_SelectionEnd   = -1;
         int m_HighlightedBar = -1;
+        int m_HighlightedSegment = -1; // index into m_Segments; -1 = whole bar
 
         int m_AnalyzedStartBar = -1;
         int m_AnalyzedEndBar   = -1;
         bool[] m_AnalyzedBarMask; // per-bar mask for non-contiguous analyzed ranges
+
+        // Stacked bar segment data
+        BarSegment[] m_Segments;
+        int[] m_SegmentOffsets;
+        bool m_HasSegmentData;
+        MethodColorPalette m_MethodPalette;
+        int[] m_SegmentIndexMap; // display index → original index for segment lookup (null = identity)
 
         // ═══════════════════════════════════════════════════
         //  DRAG STATE
@@ -175,10 +184,11 @@ namespace GCAllocBreakdown.Editor
             MarkDirtyRepaint();
         }
 
-        public void SetHighlightedBar(int barIndex)
+        public void SetHighlightedBar(int barIndex, int segmentIndex = -1)
         {
-            if (m_HighlightedBar == barIndex) return;
+            if (m_HighlightedBar == barIndex && m_HighlightedSegment == segmentIndex) return;
             m_HighlightedBar = barIndex;
+            m_HighlightedSegment = segmentIndex;
             MarkDirtyRepaint();
         }
 
@@ -198,6 +208,16 @@ namespace GCAllocBreakdown.Editor
         public void SetAnalyzedMask(bool[] mask)
         {
             m_AnalyzedBarMask = mask;
+            MarkDirtyRepaint();
+        }
+
+        public void SetSegmentData(BarSegment[] segments, int[] offsets, bool hasData, MethodColorPalette palette, int[] indexMap = null)
+        {
+            m_Segments = segments;
+            m_SegmentOffsets = offsets;
+            m_SegmentIndexMap = indexMap;
+            m_HasSegmentData = hasData;
+            m_MethodPalette = palette;
             MarkDirtyRepaint();
         }
 
@@ -321,39 +341,101 @@ namespace GCAllocBreakdown.Editor
                     : 0f;
                 if (barHeight <= 0f) continue;
 
-                // Determine bar color — dimming for bars outside analyzed range.
-                // Prefer per-bar mask (supports non-contiguous analyzed bars in sorted mode).
-                // Fallback: m_AnalyzedStartBar == -1 means no analysis (no dimming),
-                //           m_AnalyzedStartBar == -2 means analysis off-screen (dim all).
+                // Determine bar state flags
                 bool inAnalyzed;
                 if (m_AnalyzedBarMask != null)
                     inAnalyzed = srcIdx < m_AnalyzedBarMask.Length && m_AnalyzedBarMask[srcIdx];
                 else
                     inAnalyzed = m_AnalyzedStartBar == -1
                         || (m_AnalyzedStartBar >= 0 && i >= m_AnalyzedStartBar && i <= m_AnalyzedEndBar);
-                Color color;
-                if (i == m_HighlightedBar)
-                    color = k_BarHighlighted;
-                else if (sStart >= 0 && i >= sStart && i <= sEnd)
-                    color = k_BarSelected;
-                else if (!inAnalyzed)
-                    color = k_BarDimmed;
-                else
-                    color = k_BarNormal;
+
+                bool isHighlighted = i == m_HighlightedBar;
+                bool isSelected = sStart >= 0 && i >= sStart && i <= sEnd;
 
                 float x = i * barWidth;
                 float w = Mathf.Max(barWidth, 1f);
-                float top = areaHeight - barHeight;
 
-                painter.fillColor = color;
-                painter.BeginPath();
-                painter.MoveTo(new Vector2(x, top));
-                painter.LineTo(new Vector2(x + w, top));
-                painter.LineTo(new Vector2(x + w, areaHeight));
-                painter.LineTo(new Vector2(x, areaHeight));
-                painter.ClosePath();
-                painter.Fill();
+                // Check if this bar should use stacked rendering
+                bool useStacked = false;
+                int segStart = 0, segEnd = 0;
+                int segLookup = m_SegmentIndexMap != null ? m_SegmentIndexMap[srcIdx] : srcIdx;
+                if (m_HasSegmentData && inAnalyzed && m_SegmentOffsets != null
+                    && segLookup + 1 < m_SegmentOffsets.Length)
+                {
+                    segStart = m_SegmentOffsets[segLookup];
+                    segEnd = m_SegmentOffsets[segLookup + 1];
+
+                    // Only use stacked rendering when 2+ named segments exist;
+                    // otherwise stacking adds no visual information.
+                    int namedCount = 0;
+                    for (int s = segStart; s < segEnd && namedCount < 2; s++)
+                    {
+                        if (m_Segments[s].MethodIndex != MethodColorPalette.k_OthersIndex)
+                            namedCount++;
+                    }
+                    useStacked = namedCount >= 2;
+                }
+
+                if (useStacked)
+                {
+                    // STACKED: multiple methods — draw colored segments
+                    float currentY = areaHeight;
+                    for (int s = segStart; s < segEnd; s++)
+                    {
+                        float segH = m_YAxisMax > 0
+                            ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
+                            : 0f;
+                        if (segH < 0.5f) continue;
+
+                        Color segColor = m_MethodPalette.GetColor(m_Segments[s].MethodIndex);
+                        segColor = ModulateSegmentColor(segColor, isSelected);
+
+                        float segTop = currentY - segH;
+
+                        DrawFilledRect(painter, x, segTop, w, segH, segColor);
+
+                        if (isHighlighted && s == m_HighlightedSegment)
+                            DrawFilledRect(painter, x, segTop, w, segH, k_HoverOverlay);
+
+                        currentY = segTop;
+                    }
+                }
+                else
+                {
+                    // Solid bar (bucketed, un-analyzed, single method, or no segment data)
+                    Color color;
+                    if (isSelected)
+                        color = k_BarSelected;
+                    else if (!inAnalyzed)
+                        color = k_BarDimmed;
+                    else
+                        color = k_BarNormal;
+
+                    DrawFilledRect(painter, x, areaHeight - barHeight, w, barHeight, color);
+
+                    if (isHighlighted)
+                        DrawFilledRect(painter, x, areaHeight - barHeight, w, barHeight, k_HoverOverlay);
+                }
             }
+        }
+
+        static Color ModulateSegmentColor(Color segColor, bool isSelected)
+        {
+            if (isSelected)
+                return Color.Lerp(segColor, Color.white, 0.2f);
+            return segColor;
+        }
+
+        static void DrawFilledRect(Painter2D painter, float x, float y, float w, float h, Color color)
+        {
+            painter.fillColor = color;
+            painter.BeginPath();
+            painter.MoveTo(new Vector2(x, y));
+            painter.LineTo(new Vector2(x + w, y));
+            painter.LineTo(new Vector2(x + w, y + h));
+            painter.LineTo(new Vector2(x, y + h));
+            painter.ClosePath();
+            painter.Fill();
         }
 
         // ═══════════════════════════════════════════════════

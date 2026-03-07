@@ -32,6 +32,8 @@ namespace GCAllocBreakdown.Editor
         // ═══════════════════════════════════════════════════
 
         static readonly Color k_DimGray = new(0.7f, 0.7f, 0.7f);
+        static readonly Color k_TooltipBg = new(0.12f, 0.12f, 0.12f);
+        static readonly Color k_TooltipBorder = new(0.4f, 0.4f, 0.4f);
 
         // ═══════════════════════════════════════════════════
         //  CALLBACKS
@@ -116,6 +118,15 @@ namespace GCAllocBreakdown.Editor
 
         // Per-bar analyzed mask (reusable, sized to bar count)
         bool[] m_AnalyzedBarMask;
+
+        // Stacked bar segment data
+        BarSegment[] m_Segments;
+        int[] m_SegmentOffsets;           // per-bar offset into m_Segments (length = totalBuckets + 1)
+        bool m_HasSegmentData;
+        MethodColorPalette m_MethodPalette = new();
+        Dictionary<string, long> m_MethodAccum = new(64);
+        List<KeyValuePair<string, long>> m_SortedMethods = new(64);
+        float m_LastTooltipY;
 
         // Overview strip
         const float k_OverviewHeight = 24f;
@@ -216,6 +227,7 @@ namespace GCAllocBreakdown.Editor
         Button m_SortToggleBtn;
         Button m_ResetBtn;
         Scroller m_HScroller;
+        Label m_FloatingTooltip;
 
         // Grid line labels (absolutely positioned over the graph)
         Label[] m_GridLineLabels;
@@ -227,6 +239,12 @@ namespace GCAllocBreakdown.Editor
 
         /// <summary>The root Foldout element -- add this to the parent layout.</summary>
         public VisualElement Root => m_GraphFoldout;
+
+        /// <summary>
+        /// The floating tooltip. Must be added to the window's rootVisualElement
+        /// so it renders above all other content.
+        /// </summary>
+        public VisualElement TooltipElement => m_FloatingTooltip;
 
         public PerFrameGraphController(Action<int> onFrameSelected, Func<int> getSelectedMarkerIndex)
         {
@@ -260,6 +278,19 @@ namespace GCAllocBreakdown.Editor
             {
                 m_AnalyzedFrameStart = -1;
                 m_AnalyzedFrameEnd = -1;
+            }
+
+            // Build method color palette and segment data from cached analysis
+            if (m_FrameStore != null && m_FrameStore.HasCachedAnalysis
+                && m_FrameStore.HasFullFrameData)
+            {
+                m_MethodPalette.Build(m_FrameStore.CachedRawAllocations);
+                BuildSegmentData();
+            }
+            else
+            {
+                m_MethodPalette.Clear();
+                m_HasSegmentData = false;
             }
         }
 
@@ -368,6 +399,9 @@ namespace GCAllocBreakdown.Editor
             // ── Build per-bar analyzed mask (covers all buckets, shared by both elements) ──
             BuildAnalyzedBarMask(m_Bars, 0, bucketCount, ref m_AnalyzedBarMask);
 
+            // ── Stacked bar segments: built once in SetData(), gated here by zoom level ──
+            bool showSegments = m_HasSegmentData && m_FramesPerBucket == 1;
+
             // ── Grid lines ──
             ComputeGridLines(maxValue, k_GraphHeight);
 
@@ -384,6 +418,12 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.SetBarData(m_Bars, visibleStart, visibleCount);
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
             m_GraphElement.SetAnalyzedMask(m_AnalyzedBarMask);
+            m_GraphElement.SetSegmentData(
+                showSegments ? m_Segments : null,
+                showSegments ? m_SegmentOffsets : null,
+                showSegments,
+                showSegments ? m_MethodPalette : null,
+                showSegments && m_OrderByMagnitude ? m_SortedBarIndices : null);
             m_GraphElement.HasData = true;
 
             // ── Update axis labels ──
@@ -400,6 +440,8 @@ namespace GCAllocBreakdown.Editor
 
             // ── Reset tooltip cache (stale after rebuild) ──
             m_LastTooltipBar = -1;
+            m_LastTooltipY = -1f;
+            HideFloatingTooltip();
 
             // ── Clear overlay bar count (stale data) ──
             m_OverlayBarCount = 0;
@@ -734,6 +776,38 @@ namespace GCAllocBreakdown.Editor
             };
             m_GraphElement.Add(m_ResetBtn);
 
+            // ── Floating tooltip (positioned at mouse cursor) ──
+            m_FloatingTooltip = new Label
+            {
+                pickingMode = PickingMode.Ignore,
+                style =
+                {
+                    position = Position.Absolute,
+                    backgroundColor = k_TooltipBg,
+                    color = Color.white,
+                    fontSize = 11,
+                    paddingLeft = 6,
+                    paddingRight = 6,
+                    paddingTop = 4,
+                    paddingBottom = 4,
+                    borderTopLeftRadius = 3,
+                    borderTopRightRadius = 3,
+                    borderBottomLeftRadius = 3,
+                    borderBottomRightRadius = 3,
+                    borderTopWidth = 1,
+                    borderBottomWidth = 1,
+                    borderLeftWidth = 1,
+                    borderRightWidth = 1,
+                    borderTopColor = k_TooltipBorder,
+                    borderBottomColor = k_TooltipBorder,
+                    borderLeftColor = k_TooltipBorder,
+                    borderRightColor = k_TooltipBorder,
+                    display = DisplayStyle.None
+                }
+            };
+            // Tooltip added to rootVisualElement by caller via TooltipElement property
+            m_GraphElement.RegisterCallback<PointerLeaveEvent>(OnGraphPointerLeave);
+
             // ── Horizontal scroller (visible when zoomed) ──
             m_HScroller = new Scroller(0, 1, OnScrollerChanged, SliderDirection.Horizontal)
             {
@@ -927,6 +1001,39 @@ namespace GCAllocBreakdown.Editor
 
         static void OnGraphPointerEnter(PointerEnterEvent evt, GraphElement graph) => graph.Focus();
 
+        void OnGraphPointerLeave(PointerLeaveEvent evt)
+        {
+            m_LastTooltipBar = -1;
+            m_GraphElement.SetHighlightedBar(-1);
+            HideFloatingTooltip();
+        }
+
+        void ShowFloatingTooltip(string text, float localX, float localY)
+        {
+            m_FloatingTooltip.text = text;
+            m_FloatingTooltip.style.display = DisplayStyle.Flex;
+            m_FloatingTooltip.BringToFront();
+
+            // Convert from graph-local coords to the tooltip parent's coords
+            var worldPos = m_GraphElement.LocalToWorld(new Vector2(localX, localY));
+            var tooltipParent = m_FloatingTooltip.parent;
+            var pos = tooltipParent != null ? tooltipParent.WorldToLocal(worldPos) : worldPos;
+
+            const float offsetX = 12f;
+            float x = pos.x + offsetX;
+            float y = pos.y - 28f;
+
+            if (y < 0f) y = pos.y + 16f;
+
+            m_FloatingTooltip.style.left = x;
+            m_FloatingTooltip.style.top = y;
+        }
+
+        void HideFloatingTooltip()
+        {
+            m_FloatingTooltip.style.display = DisplayStyle.None;
+        }
+
         void OnGraphPointerMove(PointerMoveEvent evt)
         {
             // Track mouse position for WASD zoom anchor
@@ -937,41 +1044,102 @@ namespace GCAllocBreakdown.Editor
             if (m_BarCount == 0 || m_FrameStore == null)
             {
                 m_LastTooltipBar = -1;
-                m_GraphElement.tooltip = "";
+                m_GraphElement.SetHighlightedBar(-1);
+                HideFloatingTooltip();
                 return;
             }
 
             float localX = evt.localPosition.x;
+            float localY = evt.localPosition.y;
             int barIndex = FindBarAtX(localX);
             if (barIndex < 0 || barIndex >= m_BarCount)
             {
                 m_LastTooltipBar = -1;
-                m_GraphElement.tooltip = "";
+                m_GraphElement.SetHighlightedBar(-1);
+                HideFloatingTooltip();
                 return;
             }
 
-            // Skip recomputing the tooltip if still hovering the same bar
-            if (barIndex == m_LastTooltipBar) return;
+            int srcIdx = m_ViewportStartBucket + barIndex;
+
+            // Segment tooltip: hit-test Y position within stacked bar.
+            // Must match the rendering logic: only show segment tooltip when
+            // the bar has 2+ named segments (otherwise it renders as solid teal).
+            int segLookup = m_OrderByMagnitude ? m_SortedBarIndices[srcIdx] : srcIdx;
+            if (m_HasSegmentData && m_FramesPerBucket == 1
+                && m_SegmentOffsets != null && segLookup + 1 < m_SegmentOffsets.Length)
+            {
+                int segStart = m_SegmentOffsets[segLookup];
+                int segEnd = m_SegmentOffsets[segLookup + 1];
+
+                // Check if bar has enough named segments for stacked rendering
+                int namedCount = 0;
+                for (int s = segStart; s < segEnd && namedCount < 2; s++)
+                {
+                    if (m_Segments[s].MethodIndex != MethodColorPalette.k_OthersIndex)
+                        namedCount++;
+                }
+
+                if (namedCount >= 2)
+                {
+                    m_LastTooltipBar = barIndex;
+                    m_LastTooltipY = localY;
+
+                    float areaHeight = m_GraphElement.contentRect.height;
+                    float currentY = areaHeight;
+
+                    for (int s = segStart; s < segEnd; s++)
+                    {
+                        float segH = m_YAxisMax > 0
+                            ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
+                            : 0f;
+                        float segTop = currentY - segH;
+
+                        if (localY >= segTop && localY <= currentY)
+                        {
+                            m_GraphElement.SetHighlightedBar(barIndex, s);
+                            string methodName = m_MethodPalette.GetMethodName(m_Segments[s].MethodIndex);
+                            long totalForFrame = m_Bars[srcIdx].Value;
+                            int pct = totalForFrame > 0
+                                ? (int)(m_Segments[s].Bytes * 100 / totalForFrame)
+                                : 0;
+                            ShowFloatingTooltip(string.Concat(
+                                methodName, ": ", GCAllocUtils.FormatBytes(m_Segments[s].Bytes),
+                                " (", pct.ToString(), "%)"), localX, localY);
+                            return;
+                        }
+                        currentY = segTop;
+                    }
+
+                    // Fallback: above all segments (rounding gaps)
+                    m_GraphElement.SetHighlightedBar(barIndex);
+                    ShowFloatingTooltip(string.Concat(
+                        "Frame ", GCAllocUtils.DisplayFrame(m_Bars[srcIdx].StartFrame).ToString(),
+                        ": ", GCAllocUtils.FormatBytes(m_Bars[srcIdx].Value)), localX, localY);
+                    return;
+                }
+            }
+
+            // Standard tooltip (non-segment mode)
+            m_GraphElement.SetHighlightedBar(barIndex);
             m_LastTooltipBar = barIndex;
 
-            // Bars are always in display order; offset by viewport start for the source array
-            int srcIdx = m_ViewportStartBucket + barIndex;
             long val = m_Bars[srcIdx].Value;
             int frameStart = m_Bars[srcIdx].StartFrame;
             int frameEnd = m_Bars[srcIdx].EndFrame;
 
             if (m_FramesPerBucket == 1)
             {
-                m_GraphElement.tooltip = string.Concat(
+                ShowFloatingTooltip(string.Concat(
                     "Frame ", GCAllocUtils.DisplayFrame(frameStart).ToString(),
-                    ": ", GCAllocUtils.FormatBytes(val));
+                    ": ", GCAllocUtils.FormatBytes(val)), localX, localY);
             }
             else
             {
-                m_GraphElement.tooltip = string.Concat(
+                ShowFloatingTooltip(string.Concat(
                     "Frames ", GCAllocUtils.DisplayFrame(frameStart).ToString(),
                     "\u2013", GCAllocUtils.DisplayFrame(frameEnd).ToString(),
-                    ": ", GCAllocUtils.FormatBytes(val), " (max)");
+                    ": ", GCAllocUtils.FormatBytes(val), " (max)"), localX, localY);
             }
         }
 
@@ -1411,6 +1579,148 @@ namespace GCAllocBreakdown.Editor
                 mask[offset + i] = bars[offset + i].StartFrame <= m_AnalyzedFrameEnd
                     && bars[offset + i].EndFrame >= m_AnalyzedFrameStart;
             }
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  STACKED BAR SEGMENT BUILDING
+        // ═══════════════════════════════════════════════════
+
+        // Reusable per-frame method dictionaries — keyed by frame index.
+        // Outer dictionary maps frame -> inner dictionary (method -> bytes).
+        // Inner dictionaries are pooled and .Clear()ed instead of re-allocated.
+        readonly Dictionary<int, Dictionary<string, long>> m_FrameToMethods = new(512);
+        readonly List<Dictionary<string, long>> m_MethodDictPool = new(512);
+        int m_MethodDictPoolUsed;
+
+        Dictionary<string, long> RentMethodDict()
+        {
+            if (m_MethodDictPoolUsed < m_MethodDictPool.Count)
+            {
+                var d = m_MethodDictPool[m_MethodDictPoolUsed++];
+                d.Clear();
+                return d;
+            }
+            var fresh = new Dictionary<string, long>(16);
+            m_MethodDictPool.Add(fresh);
+            m_MethodDictPoolUsed++;
+            return fresh;
+        }
+
+        void BuildSegmentData()
+        {
+            var allocs = m_FrameStore.CachedRawAllocations;
+            int frameCount = m_FrameStore.FullFrameBytes.Length;
+
+            // Group allocations by frame, summing bytes per DisplayName.
+            m_FrameToMethods.Clear();
+            m_MethodDictPoolUsed = 0;
+
+            for (int a = 0; a < allocs.Count; a++)
+            {
+                int frame = allocs[a].FrameIndex;
+                string method = allocs[a].DisplayName;
+                if (string.IsNullOrEmpty(method))
+                    method = allocs[a].ParentMethod;
+                if (string.IsNullOrEmpty(method))
+                    method = "(unknown)";
+                long bytes = allocs[a].Bytes;
+
+                if (!m_FrameToMethods.TryGetValue(frame, out var methods))
+                {
+                    methods = RentMethodDict();
+                    m_FrameToMethods[frame] = methods;
+                }
+                if (methods.TryGetValue(method, out long existing))
+                    methods[method] = existing + bytes;
+                else
+                    methods[method] = bytes;
+            }
+
+            // Compute max value from full frame bytes (same as m_YAxisMax at 1:1)
+            long maxValue = 0;
+            var perFrame = m_FrameStore.FullFrameBytes;
+            for (int i = 0; i < perFrame.Length; i++)
+            {
+                if (perFrame[i] > maxValue) maxValue = perFrame[i];
+            }
+
+            // Minimum visible bytes threshold (2px in graph height)
+            float minBytes = maxValue > 0 ? maxValue * 2f / k_GraphHeight : 0f;
+
+            // Estimate max segments: frameCount * ~10 methods avg
+            int estimatedSegments = frameCount * 12;
+            if (m_Segments == null || m_Segments.Length < estimatedSegments)
+                m_Segments = new BarSegment[Mathf.Max(estimatedSegments, 256)];
+            if (m_SegmentOffsets == null || m_SegmentOffsets.Length < frameCount + 1)
+                m_SegmentOffsets = new int[Mathf.Max(frameCount + 1, 64)];
+
+            int segIdx = 0;
+            int baseFrame = m_FrameStore.FullFrameStart;
+
+            for (int b = 0; b < frameCount; b++)
+            {
+                m_SegmentOffsets[b] = segIdx;
+
+                int frame = baseFrame + b;
+                if (!m_FrameToMethods.TryGetValue(frame, out var methods) || methods.Count == 0)
+                    continue;
+
+                // Sort methods descending by bytes
+                m_SortedMethods.Clear();
+                foreach (var kvp in methods)
+                    m_SortedMethods.Add(kvp);
+                m_SortedMethods.Sort((a, b2) => b2.Value.CompareTo(a.Value));
+
+                long othersBytes = 0;
+
+                for (int m = 0; m < m_SortedMethods.Count; m++)
+                {
+                    if (m_SortedMethods[m].Value < minBytes)
+                    {
+                        for (int r = m; r < m_SortedMethods.Count; r++)
+                            othersBytes += m_SortedMethods[r].Value;
+                        break;
+                    }
+
+                    if (segIdx >= m_Segments.Length)
+                    {
+                        var grown = new BarSegment[m_Segments.Length * 2];
+                        Array.Copy(m_Segments, grown, m_Segments.Length);
+                        m_Segments = grown;
+                    }
+
+                    m_Segments[segIdx++] = new BarSegment
+                    {
+                        MethodIndex = m_MethodPalette.GetIndex(m_SortedMethods[m].Key),
+                        Bytes = m_SortedMethods[m].Value
+                    };
+                }
+
+                if (othersBytes > 0)
+                {
+                    if (segIdx >= m_Segments.Length)
+                    {
+                        var grown = new BarSegment[m_Segments.Length * 2];
+                        Array.Copy(m_Segments, grown, m_Segments.Length);
+                        m_Segments = grown;
+                    }
+
+                    m_Segments[segIdx++] = new BarSegment
+                    {
+                        MethodIndex = MethodColorPalette.k_OthersIndex,
+                        Bytes = othersBytes
+                    };
+                }
+            }
+
+            m_SegmentOffsets[frameCount] = segIdx;
+            m_HasSegmentData = true;
+        }
+
+        void ClearSegmentData()
+        {
+            m_HasSegmentData = false;
+            m_GraphElement.SetSegmentData(null, null, false, null);
         }
 
         void EnsurePerFrameBuffer(int frameCount)

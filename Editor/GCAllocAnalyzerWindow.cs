@@ -235,6 +235,7 @@ namespace GCAllocBreakdown.Editor
             root.Add(splitView);
 
             root.Add(BuildStatusBar());
+            root.Add(m_GraphController.TooltipElement);
             ShowNoDataState(true);
 
             GCAllocSettings.SettingsChanged += OnSettingsChanged;
