@@ -44,10 +44,9 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_Background       = new Color(0.18f, 0.18f, 0.18f);
         static readonly Color k_GridLineColor     = new Color(0.3f, 0.3f, 0.3f, 0.6f);
         static readonly Color k_BarNormal         = new Color(0.27f, 0.67f, 0.6f);
-        static readonly Color k_BarSelected       = new Color(0.4f, 0.8f, 0.73f);
-
-        static readonly Color k_SelectionBg       = new Color(0.25f, 0.35f, 0.55f, 0.3f);
-        static readonly Color k_OverlayColor      = new Color(1f, 1f, 1f, 0.85f);
+        static readonly Color k_SelectionAreaBarColor      = new Color(0.4f, 0.8f, 0.73f);
+        static readonly Color k_SelectionAreaBgColor = new Color(0.25f, 0.35f, 0.55f, 0.3f);
+        static readonly Color k_BarSelectedOverlayColor  = new Color(1f, 1f, 1f, 0.5f);
         static readonly Color k_BarDimmed         = new Color(0.27f, 0.67f, 0.6f, 0.3f);
         static readonly Color k_HoverOverlay      = new Color(1f, 1f, 1f, 0.12f);
 
@@ -301,7 +300,7 @@ namespace GCAllocBreakdown.Editor
             float left  = sStart * barWidth;
             float right = (sEnd + 1) * barWidth;
 
-            painter.fillColor = k_SelectionBg;
+            painter.fillColor = k_SelectionAreaBgColor;
             painter.BeginPath();
             painter.MoveTo(new Vector2(left, 0f));
             painter.LineTo(new Vector2(right, 0f));
@@ -405,7 +404,7 @@ namespace GCAllocBreakdown.Editor
                     // Solid bar (bucketed, un-analyzed, single method, or no segment data)
                     Color color;
                     if (isSelected)
-                        color = k_BarSelected;
+                        color = k_SelectionAreaBarColor;
                     else if (!inAnalyzed)
                         color = k_BarDimmed;
                     else
@@ -449,7 +448,7 @@ namespace GCAllocBreakdown.Editor
             float areaWidth = rect.width;
             float areaHeight = rect.height;
             float barWidth = areaWidth / m_BarCount;
-            painter.fillColor = k_OverlayColor;
+            painter.fillColor = k_BarSelectedOverlayColor;
 
             for (int i = 0; i < m_OverlayBarCount; i++)
             {
