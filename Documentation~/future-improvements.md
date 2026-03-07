@@ -74,6 +74,18 @@ The profiler often provides only the method name without a line number (`SourceL
 
 **Key Value:** Bridges runtime profiling (what actually allocates, how much, how often) with static analysis (exact source location, trackable resolution workflow). Neither tool provides this alone.
 
+## Bucketed Segment Data: Segments at All Zoom Levels
+
+**Problem:** Stacked colored segments only render at 1:1 zoom (`m_FramesPerBucket == 1`). When zoomed out, bars become solid teal and the overlay falls back to bottom-aligned — so selecting a segment then zooming out causes the overlay to lose its position.
+
+**Root Cause:** Segment data (`m_Segments`/`m_SegmentOffsets`) is indexed per frame, but bucketed bars represent multiple frames. Three gates in `PerFrameGraphController` disable segments when `m_FramesPerBucket > 1`: the `showSegments` flag (line ~403), overlay method resolution (line ~526), and `HitTestSegment` (line ~1791).
+
+**Approaches to Investigate:**
+- **Peak frame segments** — for each bucket, find the frame with the highest total bytes and use its existing per-frame segments via an index map (`bucket → peak frame`). No new segment data, just a small `int[]` built during the bar loop. Limitation: only shows one frame's breakdown, methods exclusive to non-peak frames are invisible.
+- **Aggregated segments** — sum method bytes across all frames per bucket, scale proportionally to fit the bar's MAX value. More representative but requires rebuilding segment data on every zoom/pan. Use a fixed-size `long[17]` array (palette size) instead of dictionary for allocation-free aggregation.
+
+**Scope:** `PerFrameGraphController.cs` (build bucketed segments, remove three gates), overview element should also receive segments. `GraphElement.cs` needs no changes — it already renders any segments it receives.
+
 ## Performance: Minor Allocation Hotspots
 
 Low-priority items flagged during code review. Not urgent — each allocates once per user action or once per analysis, not per frame.

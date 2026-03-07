@@ -140,6 +140,7 @@ namespace GCAllocBreakdown.Editor
             focusable = true;
             style.flexGrow = 1;
             style.flexShrink = 1;
+            style.overflow = Overflow.Hidden;
 
             generateVisualContent += OnGenerateVisualContent;
 

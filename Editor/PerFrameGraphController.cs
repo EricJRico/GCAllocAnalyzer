@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -76,6 +78,16 @@ namespace GCAllocBreakdown.Editor
         // Bucketing state
         int m_FramesPerBucket;
         long m_YAxisMax;
+
+        // Y-axis zoom
+        long m_AutoYAxisMax;
+        long m_UserYAxisMax;
+        bool m_HasCustomYScale;
+
+        // Y-axis drag state
+        bool m_YAxisDragging;
+        float m_YAxisDragStartY;
+        long m_YAxisDragStartMax;
 
         // Viewport state: normalized range [0,1] over the full bar set
         float m_ViewportStart;
@@ -226,6 +238,8 @@ namespace GCAllocBreakdown.Editor
         Label m_GraphOverlayLabel;
         Button m_SortToggleBtn;
         Button m_ResetBtn;
+        Button m_YAxisResetBtn;
+        VisualElement m_YAxisElement;
         Scroller m_HScroller;
         Label m_FloatingTooltip;
 
@@ -268,6 +282,10 @@ namespace GCAllocBreakdown.Editor
             m_Snapshot = snapshot;
             m_FilteredGroups = filteredGroups;
 
+            // Reset Y-axis zoom on new data
+            m_HasCustomYScale = false;
+            m_UserYAxisMax = 0;
+
             // Determine analyzed range (if snapshot has data)
             if (snapshot != null && snapshot.HasData)
             {
@@ -306,7 +324,9 @@ namespace GCAllocBreakdown.Editor
                 SelectedFrameBaseFrame = m_SelectedFrameBaseFrame,
                 SelectionFrameStart = m_SelectionFrameStart,
                 SelectionFrameEnd = m_SelectionFrameEnd,
-                HighlightedFrame = m_HighlightedFrame
+                HighlightedFrame = m_HighlightedFrame,
+                UserYAxisMax = m_UserYAxisMax,
+                HasCustomYScale = m_HasCustomYScale
             };
         }
 
@@ -321,6 +341,8 @@ namespace GCAllocBreakdown.Editor
             m_SelectionFrameStart = state.SelectionFrameStart;
             m_SelectionFrameEnd = state.SelectionFrameEnd;
             m_HighlightedFrame = state.HighlightedFrame;
+            m_UserYAxisMax = state.UserYAxisMax;
+            m_HasCustomYScale = state.HasCustomYScale;
             UpdateSortToggleLabel();
         }
 
@@ -380,7 +402,17 @@ namespace GCAllocBreakdown.Editor
                 if (bucketMax > maxValue) maxValue = bucketMax;
             }
 
-            m_YAxisMax = maxValue;
+            m_AutoYAxisMax = maxValue;
+            if (m_HasCustomYScale)
+            {
+                if (m_UserYAxisMax > m_AutoYAxisMax)
+                    m_UserYAxisMax = m_AutoYAxisMax;
+                m_YAxisMax = m_UserYAxisMax;
+            }
+            else
+            {
+                m_YAxisMax = maxValue;
+            }
 
             // ── Sorted view (order by magnitude) ──
             if (m_OrderByMagnitude)
@@ -403,18 +435,18 @@ namespace GCAllocBreakdown.Editor
             bool showSegments = m_HasSegmentData && m_FramesPerBucket == 1;
 
             // ── Grid lines ──
-            ComputeGridLines(maxValue, k_GraphHeight);
+            ComputeGridLines(m_YAxisMax, k_GraphHeight);
 
             // ── Push data to overview (full range) and main graph (viewport slice) ──
 
-            m_OverviewElement.YAxisMax = maxValue;
+            m_OverviewElement.YAxisMax = m_AutoYAxisMax;
             m_OverviewElement.SetBarData(m_Bars, 0, bucketCount);
             m_OverviewElement.SetAnalyzedRange(-1, -1);
             m_OverviewElement.SetAnalyzedMask(m_AnalyzedBarMask);
             m_OverviewElement.HasData = true;
             UpdateViewportRect();
 
-            m_GraphElement.YAxisMax = maxValue;
+            m_GraphElement.YAxisMax = m_YAxisMax;
             m_GraphElement.SetBarData(m_Bars, visibleStart, visibleCount);
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
             m_GraphElement.SetAnalyzedMask(m_AnalyzedBarMask);
@@ -427,8 +459,8 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.HasData = true;
 
             // ── Update axis labels ──
-            m_GraphYMax.text = GCAllocUtils.FormatBytes(maxValue);
-            m_GraphYMid.text = GCAllocUtils.FormatBytes(maxValue / 2);
+            m_GraphYMax.text = GCAllocUtils.FormatBytes(m_YAxisMax);
+            m_GraphYMid.text = GCAllocUtils.FormatBytes(m_YAxisMax / 2);
             if (visibleCount > 0)
             {
                 m_GraphXStart.text = GCAllocUtils.DisplayFrame(m_Bars[visibleStart].StartFrame).ToString();
@@ -437,6 +469,9 @@ namespace GCAllocBreakdown.Editor
 
             // ── Position grid line labels ──
             PositionGridLineLabels();
+
+            // ── Y-axis reset button visibility ──
+            m_YAxisResetBtn.style.display = m_HasCustomYScale ? DisplayStyle.Flex : DisplayStyle.None;
 
             // ── Reset tooltip cache (stale after rebuild) ──
             m_LastTooltipBar = -1;
@@ -733,6 +768,35 @@ namespace GCAllocBreakdown.Editor
             yAxis.Add(m_GraphYMax);
             yAxis.Add(m_GraphYMid);
             yAxis.Add(yZero);
+
+            // ── Y-axis drag zone for vertical zoom ──
+            m_YAxisElement = yAxis;
+            m_YAxisElement.pickingMode = PickingMode.Position;
+            m_YAxisElement.tooltip = "Drag to scale Y-axis";
+            SetSystemCursor(m_YAxisElement, MouseCursor.ResizeVertical);
+            m_YAxisElement.RegisterCallback<PointerDownEvent>(OnYAxisPointerDown);
+            m_YAxisElement.RegisterCallback<PointerMoveEvent>(OnYAxisPointerMove);
+            m_YAxisElement.RegisterCallback<PointerUpEvent>(OnYAxisPointerUp);
+
+            m_YAxisResetBtn = new Button(ResetYAxisScale)
+            {
+                text = "Reset Y",
+                tooltip = "Reset Y-axis to auto-fit",
+                style =
+                {
+                    fontSize = 9,
+                    paddingLeft = 3,
+                    paddingRight = 3,
+                    paddingTop = 1,
+                    paddingBottom = 1,
+                    position = Position.Absolute,
+                    top = 2,
+                    left = 2,
+                    display = DisplayStyle.None
+                }
+            };
+            m_YAxisElement.Add(m_YAxisResetBtn);
+
             m_GraphRoot.Add(yAxis);
 
             // ── Chart area (right side, fills remaining width) ──
@@ -956,6 +1020,75 @@ namespace GCAllocBreakdown.Editor
             ZoomViewport(zoomFactor, anchor);
             evt.StopPropagation();
         }
+
+        // ═══════════════════════════════════════════════════
+        //  Y-AXIS ZOOM INTERACTION
+        // ═══════════════════════════════════════════════════
+
+        void OnYAxisPointerDown(PointerDownEvent evt)
+        {
+            if (evt.button != 0 || m_AutoYAxisMax <= 0) return;
+            m_YAxisDragStartY = evt.localPosition.y;
+            m_YAxisDragStartMax = m_YAxisMax;
+            m_YAxisDragging = true;
+            m_YAxisElement.CapturePointer(evt.pointerId);
+            evt.StopPropagation();
+        }
+
+        void OnYAxisPointerMove(PointerMoveEvent evt)
+        {
+            if (!m_YAxisDragging) return;
+            float deltaY = evt.localPosition.y - m_YAxisDragStartY;
+            // Drag down (positive deltaY) = zoom in (decrease max)
+            // Exponential scaling for natural feel: ~100px drag = 2x zoom
+            float factor = Mathf.Pow(2f, -deltaY * 0.01f);
+            long newMax = (long)(m_YAxisDragStartMax * factor);
+            if (newMax < 1024L) newMax = 1024L;
+            if (newMax > m_AutoYAxisMax) newMax = m_AutoYAxisMax;
+            m_UserYAxisMax = newMax;
+            m_HasCustomYScale = true;
+            ApplyYAxisScale();
+        }
+
+        void OnYAxisPointerUp(PointerUpEvent evt)
+        {
+            if (evt.button != 0) return;
+            m_YAxisElement.ReleasePointer(evt.pointerId);
+            m_YAxisDragging = false;
+        }
+
+        void ResetYAxisScale()
+        {
+            m_HasCustomYScale = false;
+            m_UserYAxisMax = 0;
+            ApplyYAxisScale();
+        }
+
+        void ApplyYAxisScale()
+        {
+            long effectiveMax = m_HasCustomYScale ? m_UserYAxisMax : m_AutoYAxisMax;
+            m_YAxisMax = effectiveMax;
+
+            ComputeGridLines(effectiveMax, k_GraphHeight);
+
+            m_GraphElement.YAxisMax = effectiveMax;
+            m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
+
+            m_GraphYMax.text = GCAllocUtils.FormatBytes(effectiveMax);
+            m_GraphYMid.text = GCAllocUtils.FormatBytes(effectiveMax / 2);
+
+            PositionGridLineLabels();
+
+            m_YAxisResetBtn.style.display = m_HasCustomYScale ? DisplayStyle.Flex : DisplayStyle.None;
+
+            m_LastTooltipBar = -1;
+            m_LastTooltipY = -1f;
+            HideFloatingTooltip();
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  BAR CLICK / PROFILER NAVIGATION
+        // ═══════════════════════════════════════════════════
 
         void OnBarClicked(int barIndex, float localY)
         {
@@ -1934,6 +2067,21 @@ namespace GCAllocBreakdown.Editor
             }
 
             return foldout;
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  CURSOR UTILITY
+        // ═══════════════════════════════════════════════════
+
+        static readonly PropertyInfo s_CursorIdProp =
+            typeof(UnityEngine.UIElements.Cursor).GetProperty(
+                "defaultCursorId", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        static void SetSystemCursor(VisualElement element, MouseCursor cursor)
+        {
+            object boxed = new UnityEngine.UIElements.Cursor();
+            s_CursorIdProp.SetValue(boxed, (int)cursor);
+            element.style.cursor = new StyleCursor((UnityEngine.UIElements.Cursor)boxed);
         }
     }
 }

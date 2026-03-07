@@ -400,6 +400,8 @@ namespace GCAllocBreakdown.Editor
         public int SelectionFrameStart;
         public int SelectionFrameEnd;
         public int HighlightedFrame;
+        public long UserYAxisMax;
+        public bool HasCustomYScale;
 
         public static GraphControllerState Default => new GraphControllerState
         {
@@ -409,7 +411,9 @@ namespace GCAllocBreakdown.Editor
             HasFrameSelection = false,
             SelectionFrameStart = -1,
             SelectionFrameEnd = -1,
-            HighlightedFrame = -1
+            HighlightedFrame = -1,
+            UserYAxisMax = 0,
+            HasCustomYScale = false
         };
     }
 }
