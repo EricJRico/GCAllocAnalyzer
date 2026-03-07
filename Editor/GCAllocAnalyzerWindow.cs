@@ -609,6 +609,9 @@ namespace GCAllocBreakdown.Editor
             {
                 style = { minWidth = 150, flexGrow = 1, marginRight = 12 }
             };
+            m_NameFilter.labelElement.style.minWidth = StyleKeyword.Auto;
+            m_NameFilter.labelElement.style.width = StyleKeyword.Auto;
+            m_NameFilter.labelElement.style.marginRight = 4;
             m_NameFilter.SetValueWithoutNotify(m_NameFilterText);
             m_NameFilter.RegisterValueChangedCallback(OnNameFilterChanged);
             filterRow1.Add(m_NameFilter);
@@ -617,6 +620,9 @@ namespace GCAllocBreakdown.Editor
             {
                 style = { minWidth = 150, flexGrow = 1, marginRight = 12 }
             };
+            m_ExcludeFilter.labelElement.style.minWidth = StyleKeyword.Auto;
+            m_ExcludeFilter.labelElement.style.width = StyleKeyword.Auto;
+            m_ExcludeFilter.labelElement.style.marginRight = 4;
             m_ExcludeFilter.SetValueWithoutNotify(m_ExcludeFilterText);
             m_ExcludeFilter.RegisterValueChangedCallback(OnExcludeFilterChanged);
             filterRow1.Add(m_ExcludeFilter);
@@ -640,6 +646,9 @@ namespace GCAllocBreakdown.Editor
             {
                 tooltip = "ON: group by full call stack.\nOFF: group by top frame only."
             };
+            m_GroupByCallsite.labelElement.style.minWidth = StyleKeyword.Auto;
+            m_GroupByCallsite.labelElement.style.width = StyleKeyword.Auto;
+            m_GroupByCallsite.labelElement.style.marginRight = 4;
             m_GroupByCallsite.SetValueWithoutNotify(m_GroupByCallsiteValue);
             m_GroupByCallsite.RegisterValueChangedCallback(OnGroupByChanged);
             filterRow2.Add(m_GroupByCallsite);
@@ -650,6 +659,9 @@ namespace GCAllocBreakdown.Editor
                 tooltip = "Show or hide the DLL/assembly prefix on method names.",
                 style = { marginLeft = 12 }
             };
+            showAsmToggle.labelElement.style.minWidth = StyleKeyword.Auto;
+            showAsmToggle.labelElement.style.width = StyleKeyword.Auto;
+            showAsmToggle.labelElement.style.marginRight = 4;
             showAsmToggle.RegisterValueChangedCallback(OnShowAssemblyChanged);
             filterRow2.Add(showAsmToggle);
 
