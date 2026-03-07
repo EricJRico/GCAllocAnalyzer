@@ -65,6 +65,7 @@ namespace GCAllocBreakdown.Editor
         int m_GridLineCount;
 
         long m_YAxisMax;
+        long m_YPanOffset;
         bool m_HasData;
 
         // ═══════════════════════════════════════════════════
@@ -116,6 +117,17 @@ namespace GCAllocBreakdown.Editor
             {
                 if (m_YAxisMax == value) return;
                 m_YAxisMax = value;
+                MarkDirtyRepaint();
+            }
+        }
+
+        public long YPanOffset
+        {
+            get => m_YPanOffset;
+            set
+            {
+                if (m_YPanOffset == value) return;
+                m_YPanOffset = value;
                 MarkDirtyRepaint();
             }
         }
@@ -272,7 +284,7 @@ namespace GCAllocBreakdown.Editor
             {
                 // Compute Y from raw value to match bar height scaling
                 float fromBottom = m_YAxisMax > 0
-                    ? (float)m_GridLines[i].Value / m_YAxisMax * rect.height
+                    ? (float)(m_GridLines[i].Value - m_YPanOffset) / m_YAxisMax * rect.height
                     : m_GridLines[i].Y;
                 float y = rect.height - fromBottom;
                 if (y < 0f || y > rect.height) continue;
@@ -337,10 +349,16 @@ namespace GCAllocBreakdown.Editor
             {
                 int srcIdx = m_BarOffset + i;
 
-                // Scale bar height to actual content rect
-                float barHeight = m_YAxisMax > 0
-                    ? (float)m_Bars[srcIdx].Value / m_YAxisMax * areaHeight
-                    : 0f;
+                long barValue = m_Bars[srcIdx].Value;
+                if (barValue <= m_YPanOffset) continue;
+
+                float barTop = m_YAxisMax > 0
+                    ? areaHeight - (float)(barValue - m_YPanOffset) / m_YAxisMax * areaHeight
+                    : areaHeight;
+                float barBottom = m_YAxisMax > 0
+                    ? areaHeight + (float)m_YPanOffset / m_YAxisMax * areaHeight
+                    : areaHeight;
+                float barHeight = barBottom - barTop;
                 if (barHeight <= 0f) continue;
 
                 // Determine bar state flags
@@ -367,37 +385,43 @@ namespace GCAllocBreakdown.Editor
                     segStart = m_SegmentOffsets[segLookup];
                     segEnd = m_SegmentOffsets[segLookup + 1];
 
-                    // Only use stacked rendering when 2+ named segments exist;
-                    // otherwise stacking adds no visual information.
-                    int namedCount = 0;
-                    for (int s = segStart; s < segEnd && namedCount < 2; s++)
+                    // Only use stacked rendering when 2+ segments are visually
+                    // distinguishable at the current zoom level.
+                    int visibleCount = 0;
+                    for (int s = segStart; s < segEnd && visibleCount < 2; s++)
                     {
-                        if (m_Segments[s].MethodIndex != MethodColorPalette.k_OthersIndex)
-                            namedCount++;
+                        float segH = m_YAxisMax > 0
+                            ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
+                            : 0f;
+                        if (segH >= 0.5f)
+                            visibleCount++;
                     }
-                    useStacked = namedCount >= 2;
+                    useStacked = visibleCount >= 2;
                 }
 
                 if (useStacked)
                 {
                     // STACKED: multiple methods — draw colored segments
-                    float currentY = areaHeight;
+                    float currentY = m_YAxisMax > 0
+                        ? areaHeight + (float)m_YPanOffset / m_YAxisMax * areaHeight
+                        : areaHeight;
                     for (int s = segStart; s < segEnd; s++)
                     {
                         float segH = m_YAxisMax > 0
                             ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
                             : 0f;
-                        if (segH < 0.5f) continue;
-
-                        Color segColor = m_MethodPalette.GetColor(m_Segments[s].MethodIndex);
-                        segColor = ModulateSegmentColor(segColor, isSelected);
-
                         float segTop = currentY - segH;
 
-                        DrawFilledRect(painter, x, segTop, w, segH, segColor);
+                        if (segH >= 0.5f)
+                        {
+                            Color segColor = m_MethodPalette.GetColor(m_Segments[s].MethodIndex);
+                            segColor = ModulateSegmentColor(segColor, isSelected);
 
-                        if (isHighlighted && s == m_HighlightedSegment)
-                            DrawFilledRect(painter, x, segTop, w, segH, k_HoverOverlay);
+                            DrawFilledRect(painter, x, segTop, w, segH, segColor);
+
+                            if (isHighlighted && s == m_HighlightedSegment)
+                                DrawFilledRect(painter, x, segTop, w, segH, k_HoverOverlay);
+                        }
 
                         currentY = segTop;
                     }
@@ -413,10 +437,10 @@ namespace GCAllocBreakdown.Editor
                     else
                         color = k_BarNormal;
 
-                    DrawFilledRect(painter, x, areaHeight - barHeight, w, barHeight, color);
+                    DrawFilledRect(painter, x, barTop, w, barHeight, color);
 
                     if (isHighlighted)
-                        DrawFilledRect(painter, x, areaHeight - barHeight, w, barHeight, k_HoverOverlay);
+                        DrawFilledRect(painter, x, barTop, w, barHeight, k_HoverOverlay);
                 }
             }
         }
@@ -484,7 +508,9 @@ namespace GCAllocBreakdown.Editor
                         int segStart = m_SegmentOffsets[segLookup];
                         int segEnd = m_SegmentOffsets[segLookup + 1];
 
-                        float currentY = areaHeight;
+                        float currentY = m_YAxisMax > 0
+                            ? areaHeight + (float)m_YPanOffset / m_YAxisMax * areaHeight
+                            : areaHeight;
                         for (int s = segStart; s < segEnd; s++)
                         {
                             float segH = m_YAxisMax > 0
@@ -495,9 +521,9 @@ namespace GCAllocBreakdown.Editor
                             if (m_Segments[s].MethodIndex == m_OverlayMethodIndex)
                             {
                                 // Draw overlay at this segment's position, clamped to segment bounds
-                                float overlayTop = currentY - barHeight;
-                                if (overlayTop < segTop) overlayTop = segTop;
-                                DrawFilledRect(painter, x, overlayTop, w, currentY - overlayTop,
+                                float segOverlayTop = currentY - barHeight;
+                                if (segOverlayTop < segTop) segOverlayTop = segTop;
+                                DrawFilledRect(painter, x, segOverlayTop, w, currentY - segOverlayTop,
                                     k_BarSelectedOverlayColor);
                                 break;
                             }
@@ -508,8 +534,11 @@ namespace GCAllocBreakdown.Editor
                 }
 
                 // Default: draw overlay from the bottom of the chart
-                float top = areaHeight - barHeight;
-                DrawFilledRect(painter, x, top, w, barHeight, k_BarSelectedOverlayColor);
+                float overlayBottom = m_YAxisMax > 0
+                    ? areaHeight + (float)m_YPanOffset / m_YAxisMax * areaHeight
+                    : areaHeight;
+                float overlayTop = overlayBottom - barHeight;
+                DrawFilledRect(painter, x, overlayTop, w, barHeight, k_BarSelectedOverlayColor);
             }
         }
 

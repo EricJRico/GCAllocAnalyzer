@@ -89,6 +89,12 @@ namespace GCAllocBreakdown.Editor
         float m_YAxisDragStartY;
         long m_YAxisDragStartMax;
 
+        // Y-axis pan state (middle-mouse drag)
+        long m_YPanOffset;
+        bool m_YPanning;
+        float m_YPanStartMouseY;
+        long m_YPanStartOffset;
+
         // Viewport state: normalized range [0,1] over the full bar set
         float m_ViewportStart;
         float m_ViewportEnd = 1f;
@@ -233,7 +239,7 @@ namespace GCAllocBreakdown.Editor
         Foldout m_GraphFoldout;
         VisualElement m_GraphRoot;
         GraphElement m_GraphElement;
-        Label m_GraphYMax, m_GraphYMid;
+        Label m_GraphYMax, m_GraphYMid, m_GraphYMin;
         Label m_GraphXStart, m_GraphXEnd;
         Label m_GraphOverlayLabel;
         Button m_SortToggleBtn;
@@ -285,6 +291,7 @@ namespace GCAllocBreakdown.Editor
             // Reset Y-axis zoom on new data
             m_HasCustomYScale = false;
             m_UserYAxisMax = 0;
+            m_YPanOffset = 0;
 
             // Determine analyzed range (if snapshot has data)
             if (snapshot != null && snapshot.HasData)
@@ -326,7 +333,8 @@ namespace GCAllocBreakdown.Editor
                 SelectionFrameEnd = m_SelectionFrameEnd,
                 HighlightedFrame = m_HighlightedFrame,
                 UserYAxisMax = m_UserYAxisMax,
-                HasCustomYScale = m_HasCustomYScale
+                HasCustomYScale = m_HasCustomYScale,
+                YPanOffset = m_YPanOffset
             };
         }
 
@@ -343,6 +351,7 @@ namespace GCAllocBreakdown.Editor
             m_HighlightedFrame = state.HighlightedFrame;
             m_UserYAxisMax = state.UserYAxisMax;
             m_HasCustomYScale = state.HasCustomYScale;
+            m_YPanOffset = state.YPanOffset;
             UpdateSortToggleLabel();
         }
 
@@ -414,6 +423,12 @@ namespace GCAllocBreakdown.Editor
                 m_YAxisMax = maxValue;
             }
 
+            // Clamp pan offset for current zoom level
+            long maxOffset = m_AutoYAxisMax - m_YAxisMax;
+            if (maxOffset < 0) maxOffset = 0;
+            if (m_YPanOffset > maxOffset) m_YPanOffset = maxOffset;
+            if (!m_HasCustomYScale) m_YPanOffset = 0;
+
             // ── Sorted view (order by magnitude) ──
             if (m_OrderByMagnitude)
                 ApplySortedOrder(bucketCount);
@@ -435,11 +450,12 @@ namespace GCAllocBreakdown.Editor
             bool showSegments = m_HasSegmentData && m_FramesPerBucket == 1;
 
             // ── Grid lines ──
-            ComputeGridLines(m_YAxisMax, k_GraphHeight);
+            ComputeGridLines(m_YPanOffset, m_YAxisMax, k_GraphHeight);
 
             // ── Push data to overview (full range) and main graph (viewport slice) ──
 
             m_OverviewElement.YAxisMax = m_AutoYAxisMax;
+            m_OverviewElement.YPanOffset = 0;
             m_OverviewElement.SetBarData(m_Bars, 0, bucketCount);
             m_OverviewElement.SetAnalyzedRange(-1, -1);
             m_OverviewElement.SetAnalyzedMask(m_AnalyzedBarMask);
@@ -447,6 +463,7 @@ namespace GCAllocBreakdown.Editor
             UpdateViewportRect();
 
             m_GraphElement.YAxisMax = m_YAxisMax;
+            m_GraphElement.YPanOffset = m_YPanOffset;
             m_GraphElement.SetBarData(m_Bars, visibleStart, visibleCount);
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
             m_GraphElement.SetAnalyzedMask(m_AnalyzedBarMask);
@@ -459,8 +476,9 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.HasData = true;
 
             // ── Update axis labels ──
-            m_GraphYMax.text = GCAllocUtils.FormatBytes(m_YAxisMax);
-            m_GraphYMid.text = GCAllocUtils.FormatBytes(m_YAxisMax / 2);
+            m_GraphYMax.text = GCAllocUtils.FormatBytes(m_YPanOffset + m_YAxisMax);
+            m_GraphYMid.text = GCAllocUtils.FormatBytes(m_YPanOffset + m_YAxisMax / 2);
+            m_GraphYMin.text = m_YPanOffset > 0 ? GCAllocUtils.FormatBytes(m_YPanOffset) : "0";
             if (visibleCount > 0)
             {
                 m_GraphXStart.text = GCAllocUtils.DisplayFrame(m_Bars[visibleStart].StartFrame).ToString();
@@ -761,13 +779,13 @@ namespace GCAllocBreakdown.Editor
             {
                 style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight }
             };
-            var yZero = new Label("0")
+            m_GraphYMin = new Label("0")
             {
                 style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight }
             };
             yAxis.Add(m_GraphYMax);
             yAxis.Add(m_GraphYMid);
-            yAxis.Add(yZero);
+            yAxis.Add(m_GraphYMin);
 
             // ── Y-axis drag zone for vertical zoom ──
             m_YAxisElement = yAxis;
@@ -790,12 +808,11 @@ namespace GCAllocBreakdown.Editor
                     paddingTop = 1,
                     paddingBottom = 1,
                     position = Position.Absolute,
-                    top = 2,
+                    bottom = k_GraphXAxisHeight + 2,
                     left = 2,
                     display = DisplayStyle.None
                 }
             };
-            m_YAxisElement.Add(m_YAxisResetBtn);
 
             m_GraphRoot.Add(yAxis);
 
@@ -828,10 +845,15 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.SelectionChanged += OnSelectionChangedInternal;
             m_GraphElement.DragCompleted += OnDragCompletedInternal;
 
+            m_GraphElement.RegisterCallback<PointerDownEvent>(OnGraphPanPointerDown);
+            m_GraphElement.RegisterCallback<PointerMoveEvent>(OnGraphPanPointerMove);
+            m_GraphElement.RegisterCallback<PointerUpEvent>(OnGraphPanPointerUp);
+
             chartColumn.Add(m_GraphElement);
+            chartColumn.Add(m_YAxisResetBtn);
 
             // ── Reset button (inline, only visible during sub-range) ──
-            m_ResetBtn = new Button(() => OnResetRequested?.Invoke())
+            m_ResetBtn = new Button(() => { ResetYAxisScale(); ResetViewport(); OnResetRequested?.Invoke(); })
             {
                 text = "Reset to Full Range",
                 tooltip = "Restore full-range analysis from cache (instant)",
@@ -1044,9 +1066,18 @@ namespace GCAllocBreakdown.Editor
             float factor = Mathf.Pow(2f, -deltaY * 0.01f);
             long newMax = (long)(m_YAxisDragStartMax * factor);
             if (newMax < 1024L) newMax = 1024L;
-            if (newMax > m_AutoYAxisMax) newMax = m_AutoYAxisMax;
-            m_UserYAxisMax = newMax;
-            m_HasCustomYScale = true;
+            if (newMax >= m_AutoYAxisMax)
+            {
+                newMax = m_AutoYAxisMax;
+                m_HasCustomYScale = false;
+                m_UserYAxisMax = 0;
+                m_YPanOffset = 0;
+            }
+            else
+            {
+                m_UserYAxisMax = newMax;
+                m_HasCustomYScale = true;
+            }
             ApplyYAxisScale();
         }
 
@@ -1061,6 +1092,7 @@ namespace GCAllocBreakdown.Editor
         {
             m_HasCustomYScale = false;
             m_UserYAxisMax = 0;
+            m_YPanOffset = 0;
             ApplyYAxisScale();
         }
 
@@ -1069,17 +1101,91 @@ namespace GCAllocBreakdown.Editor
             long effectiveMax = m_HasCustomYScale ? m_UserYAxisMax : m_AutoYAxisMax;
             m_YAxisMax = effectiveMax;
 
-            ComputeGridLines(effectiveMax, k_GraphHeight);
+            long maxOffset = m_AutoYAxisMax - m_YAxisMax;
+            if (maxOffset < 0) maxOffset = 0;
+            if (m_YPanOffset > maxOffset) m_YPanOffset = maxOffset;
+            if (!m_HasCustomYScale) m_YPanOffset = 0;
+
+            ComputeGridLines(m_YPanOffset, effectiveMax, k_GraphHeight);
 
             m_GraphElement.YAxisMax = effectiveMax;
+            m_GraphElement.YPanOffset = m_YPanOffset;
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
 
-            m_GraphYMax.text = GCAllocUtils.FormatBytes(effectiveMax);
-            m_GraphYMid.text = GCAllocUtils.FormatBytes(effectiveMax / 2);
+            long visibleTop = m_YPanOffset + effectiveMax;
+            long visibleMid = m_YPanOffset + effectiveMax / 2;
+            m_GraphYMax.text = GCAllocUtils.FormatBytes(visibleTop);
+            m_GraphYMid.text = GCAllocUtils.FormatBytes(visibleMid);
+            m_GraphYMin.text = m_YPanOffset > 0 ? GCAllocUtils.FormatBytes(m_YPanOffset) : "0";
 
             PositionGridLineLabels();
 
             m_YAxisResetBtn.style.display = m_HasCustomYScale ? DisplayStyle.Flex : DisplayStyle.None;
+
+            m_LastTooltipBar = -1;
+            m_LastTooltipY = -1f;
+            HideFloatingTooltip();
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  Y-AXIS PAN (MIDDLE-MOUSE DRAG)
+        // ═══════════════════════════════════════════════════
+
+        void OnGraphPanPointerDown(PointerDownEvent evt)
+        {
+            if (evt.button != 2) return;
+            if (!m_HasCustomYScale) return;
+            if (m_GraphElement.HasPointerCapture(evt.pointerId)) return;
+            m_YPanStartMouseY = evt.localPosition.y;
+            m_YPanStartOffset = m_YPanOffset;
+            m_YPanning = true;
+            m_GraphElement.CapturePointer(evt.pointerId);
+            SetSystemCursor(m_GraphElement, MouseCursor.Pan);
+            evt.StopPropagation();
+        }
+
+        void OnGraphPanPointerMove(PointerMoveEvent evt)
+        {
+            if (!m_YPanning) return;
+            float deltaY = evt.localPosition.y - m_YPanStartMouseY;
+            float areaHeight = m_GraphElement.contentRect.height;
+            if (areaHeight < 1f) return;
+            long deltaByte = (long)(deltaY / areaHeight * m_YAxisMax);
+            long newOffset = m_YPanStartOffset + deltaByte;
+
+            long maxOffset = m_AutoYAxisMax - m_YAxisMax;
+            if (maxOffset < 0) maxOffset = 0;
+            if (newOffset < 0) newOffset = 0;
+            if (newOffset > maxOffset) newOffset = maxOffset;
+
+            m_YPanOffset = newOffset;
+            ApplyYPan();
+        }
+
+        void OnGraphPanPointerUp(PointerUpEvent evt)
+        {
+            if (evt.button != 2) return;
+            if (!m_YPanning) return;
+            m_GraphElement.ReleasePointer(evt.pointerId);
+            m_YPanning = false;
+            m_GraphElement.style.cursor = StyleKeyword.Null;
+            evt.StopPropagation();
+        }
+
+        void ApplyYPan()
+        {
+            m_GraphElement.YPanOffset = m_YPanOffset;
+
+            ComputeGridLines(m_YPanOffset, m_YAxisMax, k_GraphHeight);
+            m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
+
+            long visibleTop = m_YPanOffset + m_YAxisMax;
+            long visibleMid = m_YPanOffset + m_YAxisMax / 2;
+            m_GraphYMax.text = GCAllocUtils.FormatBytes(visibleTop);
+            m_GraphYMid.text = GCAllocUtils.FormatBytes(visibleMid);
+            m_GraphYMin.text = m_YPanOffset > 0 ? GCAllocUtils.FormatBytes(m_YPanOffset) : "0";
+
+            PositionGridLineLabels();
 
             m_LastTooltipBar = -1;
             m_LastTooltipY = -1f;
@@ -1423,12 +1529,12 @@ namespace GCAllocBreakdown.Editor
         //  GRID LINE COMPUTATION
         // ═══════════════════════════════════════════════════
 
-        void ComputeGridLines(long yMax, float graphHeight)
+        void ComputeGridLines(long yMin, long yMax, float graphHeight)
         {
             m_GridLineCount = 0;
             if (yMax <= 0) return;
 
-            // Find a nice step: 1 KB, 2 KB, 4 KB, 8 KB, ... up to the max
+            // Find a nice step: 1 KB, 2 KB, 4 KB, 8 KB, ... up to the visible range
             long step = k_MinGridStep; // 1 KB
             while (step * 5 < yMax && step < yMax)
                 step *= 2;
@@ -1436,10 +1542,13 @@ namespace GCAllocBreakdown.Editor
             while (yMax / step < 2 && step > k_MinGridStep)
                 step /= 2;
 
-            for (long v = step; v < yMax; v += step)
+            // Generate grid lines at world-space values within [yMin, yMin + yMax]
+            long firstLine = ((yMin / step) + 1) * step;
+            long visibleTop = yMin + yMax;
+            for (long v = firstLine; v < visibleTop; v += step)
             {
                 EnsureGridLineCapacity();
-                float y = (float)v / yMax * graphHeight;
+                float y = (float)(v - yMin) / yMax * graphHeight;
                 m_GridLines[m_GridLineCount++] = new GridLine
                 {
                     Y = y,
@@ -1471,8 +1580,13 @@ namespace GCAllocBreakdown.Editor
                 // Position from bottom, scaling the grid line value to actual height
                 label.style.position = Position.Absolute;
                 float bottomPos = m_YAxisMax > 0
-                    ? (float)m_GridLines[i].Value / m_YAxisMax * actualHeight
+                    ? (float)(m_GridLines[i].Value - m_YPanOffset) / m_YAxisMax * actualHeight
                     : m_GridLines[i].Y;
+                if (bottomPos < -6f || bottomPos > actualHeight + 6f)
+                {
+                    label.style.display = DisplayStyle.None;
+                    continue;
+                }
                 label.style.bottom = bottomPos - 6; // center the 12px label on the line
                 label.style.right = 4;
             }
@@ -1751,17 +1865,6 @@ namespace GCAllocBreakdown.Editor
                     methods[method] = bytes;
             }
 
-            // Compute max value from full frame bytes (same as m_YAxisMax at 1:1)
-            long maxValue = 0;
-            var perFrame = m_FrameStore.FullFrameBytes;
-            for (int i = 0; i < perFrame.Length; i++)
-            {
-                if (perFrame[i] > maxValue) maxValue = perFrame[i];
-            }
-
-            // Minimum visible bytes threshold (2px in graph height)
-            float minBytes = maxValue > 0 ? maxValue * 2f / k_GraphHeight : 0f;
-
             // Estimate max segments: frameCount * ~10 methods avg
             int estimatedSegments = frameCount * 12;
             if (m_Segments == null || m_Segments.Length < estimatedSegments)
@@ -1780,23 +1883,15 @@ namespace GCAllocBreakdown.Editor
                 if (!m_FrameToMethods.TryGetValue(frame, out var methods) || methods.Count == 0)
                     continue;
 
-                // Sort methods descending by bytes
+                // Sort methods ascending by bytes so smallest segments are at
+                // the bottom of the stacked bar and largest are at the top.
                 m_SortedMethods.Clear();
                 foreach (var kvp in methods)
                     m_SortedMethods.Add(kvp);
-                m_SortedMethods.Sort((a, b2) => b2.Value.CompareTo(a.Value));
-
-                long othersBytes = 0;
+                m_SortedMethods.Sort((a, b2) => a.Value.CompareTo(b2.Value));
 
                 for (int m = 0; m < m_SortedMethods.Count; m++)
                 {
-                    if (m_SortedMethods[m].Value < minBytes)
-                    {
-                        for (int r = m; r < m_SortedMethods.Count; r++)
-                            othersBytes += m_SortedMethods[r].Value;
-                        break;
-                    }
-
                     if (segIdx >= m_Segments.Length)
                     {
                         var grown = new BarSegment[m_Segments.Length * 2];
@@ -1808,22 +1903,6 @@ namespace GCAllocBreakdown.Editor
                     {
                         MethodIndex = m_MethodPalette.GetIndex(m_SortedMethods[m].Key),
                         Bytes = m_SortedMethods[m].Value
-                    };
-                }
-
-                if (othersBytes > 0)
-                {
-                    if (segIdx >= m_Segments.Length)
-                    {
-                        var grown = new BarSegment[m_Segments.Length * 2];
-                        Array.Copy(m_Segments, grown, m_Segments.Length);
-                        m_Segments = grown;
-                    }
-
-                    m_Segments[segIdx++] = new BarSegment
-                    {
-                        MethodIndex = MethodColorPalette.k_OthersIndex,
-                        Bytes = othersBytes
                     };
                 }
             }
@@ -1929,17 +2008,21 @@ namespace GCAllocBreakdown.Editor
             int segStart = m_SegmentOffsets[segLookup];
             int segEnd = m_SegmentOffsets[segLookup + 1];
 
-            // Only hit-test when 2+ named segments (matches stacked rendering threshold)
-            int namedCount = 0;
-            for (int s = segStart; s < segEnd && namedCount < 2; s++)
-            {
-                if (m_Segments[s].MethodIndex != MethodColorPalette.k_OthersIndex)
-                    namedCount++;
-            }
-            if (namedCount < 2) return -1;
-
+            // Only hit-test when 2+ segments are visually distinguishable
             float areaHeight = m_GraphElement.contentRect.height;
-            float currentY = areaHeight;
+            int visibleCount = 0;
+            for (int s = segStart; s < segEnd && visibleCount < 2; s++)
+            {
+                float segH = m_YAxisMax > 0
+                    ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
+                    : 0f;
+                if (segH >= 0.5f)
+                    visibleCount++;
+            }
+            if (visibleCount < 2) return -1;
+            float currentY = m_YAxisMax > 0
+                ? areaHeight + (float)m_YPanOffset / m_YAxisMax * areaHeight
+                : areaHeight;
 
             for (int s = segStart; s < segEnd; s++)
             {
