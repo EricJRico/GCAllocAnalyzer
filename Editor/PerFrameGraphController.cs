@@ -239,7 +239,6 @@ namespace GCAllocBreakdown.Editor
         VisualElement m_GraphSection;
         VisualElement m_GraphRoot;
         GraphElement m_GraphElement;
-        Label m_GraphYMax, m_GraphYMid, m_GraphYMin;
         Label m_GraphXStart, m_GraphXEnd;
         Label m_GraphOverlayLabel;
         Button m_SortToggleBtn;
@@ -485,9 +484,6 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.HasData = true;
 
             // ── Update axis labels ──
-            m_GraphYMax.text = GCAllocUtils.FormatBytes(m_YPanOffset + m_YAxisMax);
-            m_GraphYMid.text = GCAllocUtils.FormatBytes(m_YPanOffset + m_YAxisMax / 2);
-            m_GraphYMin.text = m_YPanOffset > 0 ? GCAllocUtils.FormatBytes(m_YPanOffset) : "0";
             if (visibleCount > 0)
             {
                 m_GraphXStart.text = GCAllocUtils.DisplayFrame(m_Bars[visibleStart].StartFrame).ToString();
@@ -858,26 +854,9 @@ namespace GCAllocBreakdown.Editor
                 style =
                 {
                     width = k_GraphYAxisWidth,
-                    justifyContent = Justify.SpaceBetween,
-                    alignItems = Align.FlexEnd,
-                    paddingRight = 4
+                    overflow = Overflow.Hidden
                 }
             };
-            m_GraphYMax = new Label("\u2014")
-            {
-                style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight }
-            };
-            m_GraphYMid = new Label("\u2014")
-            {
-                style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight }
-            };
-            m_GraphYMin = new Label("0")
-            {
-                style = { fontSize = 10, color = k_DimGray, unityTextAlign = TextAnchor.MiddleRight }
-            };
-            yAxis.Add(m_GraphYMax);
-            yAxis.Add(m_GraphYMid);
-            yAxis.Add(m_GraphYMin);
 
             // ── Y-axis drag zone for vertical zoom ──
             m_YAxisElement = yAxis;
@@ -1158,12 +1137,6 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.YPanOffset = m_YPanOffset;
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
 
-            long visibleTop = m_YPanOffset + effectiveMax;
-            long visibleMid = m_YPanOffset + effectiveMax / 2;
-            m_GraphYMax.text = GCAllocUtils.FormatBytes(visibleTop);
-            m_GraphYMid.text = GCAllocUtils.FormatBytes(visibleMid);
-            m_GraphYMin.text = m_YPanOffset > 0 ? GCAllocUtils.FormatBytes(m_YPanOffset) : "0";
-
             PositionGridLineLabels();
 
             m_YAxisResetBtn.SetEnabled(m_HasCustomYScale);
@@ -1224,12 +1197,6 @@ namespace GCAllocBreakdown.Editor
 
             ComputeGridLines(m_YPanOffset, m_YAxisMax, ActualGraphHeight);
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
-
-            long visibleTop = m_YPanOffset + m_YAxisMax;
-            long visibleMid = m_YPanOffset + m_YAxisMax / 2;
-            m_GraphYMax.text = GCAllocUtils.FormatBytes(visibleTop);
-            m_GraphYMid.text = GCAllocUtils.FormatBytes(visibleMid);
-            m_GraphYMin.text = m_YPanOffset > 0 ? GCAllocUtils.FormatBytes(m_YPanOffset) : "0";
 
             PositionGridLineLabels();
 
@@ -1580,12 +1547,15 @@ namespace GCAllocBreakdown.Editor
             m_GridLineCount = 0;
             if (yMax <= 0) return;
 
-            // Find a nice step: 1 KB, 2 KB, 4 KB, 8 KB, ... up to the visible range
+            // Target ~1 grid line per 45px, minimum 2 lines
+            int targetLines = Mathf.Max(2, Mathf.FloorToInt(graphHeight / 45f));
+
+            // Find a nice step: 1 KB, 2 KB, 4 KB, 8 KB, ... that yields close to targetLines
             long step = k_MinGridStep; // 1 KB
-            while (step * 5 < yMax && step < yMax)
+            while (yMax / step > targetLines && step < yMax)
                 step *= 2;
-            // If step is too large (only 1-2 lines), halve it
-            while (yMax / step < 2 && step > k_MinGridStep)
+            // If step is too large (fewer lines than target), halve it
+            while (yMax / step < targetLines && step > k_MinGridStep)
                 step /= 2;
 
             // Generate grid lines at world-space values within [yMin, yMin + yMax]
@@ -1613,8 +1583,8 @@ namespace GCAllocBreakdown.Editor
                     m_GridLineLabels[i].style.display = DisplayStyle.None;
             }
 
-            // Use actual content rect height for positioning (may differ from k_GraphHeight)
-            float actualHeight = m_GraphElement.contentRect.height;
+            // Use Y-axis element height (matches graph height in the Row layout)
+            float actualHeight = m_YAxisElement.contentRect.height;
             if (float.IsNaN(actualHeight) || actualHeight < 1f) actualHeight = k_GraphHeight;
 
             // Position labels for current grid lines
@@ -1623,8 +1593,6 @@ namespace GCAllocBreakdown.Editor
                 Label label = EnsureGridLineLabel(i);
                 label.text = m_GridLines[i].Label;
                 label.style.display = DisplayStyle.Flex;
-                // Position from bottom, scaling the grid line value to actual height
-                label.style.position = Position.Absolute;
                 float bottomPos = m_YAxisMax > 0
                     ? (float)(m_GridLines[i].Value - m_YPanOffset) / m_YAxisMax * actualHeight
                     : m_GridLines[i].Y;
@@ -1634,7 +1602,6 @@ namespace GCAllocBreakdown.Editor
                     continue;
                 }
                 label.style.bottom = bottomPos - 6; // center the 12px label on the line
-                label.style.right = 4;
             }
 
             m_GridLineLabelCount = Mathf.Min(m_GridLineCount, k_MaxGridLineLabels);
@@ -2004,12 +1971,13 @@ namespace GCAllocBreakdown.Editor
                     fontSize = 9,
                     color = k_DimGray,
                     position = Position.Absolute,
+                    right = 4,
                     unityTextAlign = TextAnchor.MiddleRight
                 },
                 pickingMode = PickingMode.Ignore
             };
             m_GridLineLabels[index] = label;
-            m_GraphElement.Add(label);
+            m_YAxisElement.Add(label);
             return label;
         }
 
