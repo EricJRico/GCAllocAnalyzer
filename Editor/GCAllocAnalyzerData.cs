@@ -64,6 +64,10 @@ namespace GCAllocBreakdown.Editor
         public int FullCallstackGroupIndex = -1;
         public int TopFrameGroupIndex = -1;
 
+        // Dense thread index stamped during initial extraction — enables int[]
+        // counting in sub-range rebuilds instead of Dictionary<string,int> lookups.
+        public int ThreadAllocCountIndex = -1;
+
         // Pre-computed display strings (built once during analysis)
         public string FormattedBytes;
         public string FormattedFrame;

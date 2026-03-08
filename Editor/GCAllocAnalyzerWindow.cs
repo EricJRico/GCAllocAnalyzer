@@ -150,6 +150,8 @@ namespace GCAllocBreakdown.Editor
         readonly HashSet<string> m_AllThreadNames = new();
         readonly HashSet<string> m_SelectedThreads = new();
         readonly Dictionary<string, int> m_ThreadAllocCounts = new(32);
+        readonly List<string> m_ThreadIndexNames = new(32); // dense index → thread display name
+        int[] m_ThreadCountBuffer;                           // reusable buffer for int[]-based counting
 
         // Thread index: group key → set of thread names (built once per grouping)
         readonly Dictionary<string, HashSet<string>> m_GroupThreadIndex = new(256);
@@ -1055,14 +1057,39 @@ namespace GCAllocBreakdown.Editor
         void RebuildThreadAllocCounts()
         {
             m_ThreadAllocCounts.Clear();
-            var allocs = m_Snapshot.RawAllocations;
-            for (int i = 0; i < allocs.Count; i++)
+            int threadNameCount = m_ThreadIndexNames.Count;
+            if (threadNameCount == 0)
             {
-                string td = allocs[i].ThreadDisplayName;
-                if (m_ThreadAllocCounts.TryGetValue(td, out int prev))
-                    m_ThreadAllocCounts[td] = prev + 1;
-                else
-                    m_ThreadAllocCounts[td] = 1;
+                // Fallback for snapshots loaded without dense indices
+                var allocs = m_Snapshot.RawAllocations;
+                for (int i = 0; i < allocs.Count; i++)
+                {
+                    string td = allocs[i].ThreadDisplayName;
+                    if (m_ThreadAllocCounts.TryGetValue(td, out int prev))
+                        m_ThreadAllocCounts[td] = prev + 1;
+                    else
+                        m_ThreadAllocCounts[td] = 1;
+                }
+                return;
+            }
+
+            if (m_ThreadCountBuffer == null || m_ThreadCountBuffer.Length < threadNameCount)
+                m_ThreadCountBuffer = new int[threadNameCount];
+            else
+                Array.Clear(m_ThreadCountBuffer, 0, threadNameCount);
+
+            var rawAllocs = m_Snapshot.RawAllocations;
+            for (int i = 0; i < rawAllocs.Count; i++)
+            {
+                int tidx = rawAllocs[i].ThreadAllocCountIndex;
+                if (tidx >= 0 && tidx < threadNameCount)
+                    m_ThreadCountBuffer[tidx]++;
+            }
+
+            for (int i = 0; i < threadNameCount; i++)
+            {
+                if (m_ThreadCountBuffer[i] > 0)
+                    m_ThreadAllocCounts[m_ThreadIndexNames[i]] = m_ThreadCountBuffer[i];
             }
         }
 
@@ -1416,6 +1443,7 @@ namespace GCAllocBreakdown.Editor
             m_AllThreadNames.Clear();
             m_SelectedThreads.Clear();
             m_ThreadAllocCounts.Clear();
+            m_ThreadIndexNames.Clear();
             m_MethodInfoCache.Clear();
             m_CallStackCache.Clear();
             m_FormattedBytesCache.Clear();
@@ -1683,6 +1711,15 @@ namespace GCAllocBreakdown.Editor
                                 else
                                     m_ThreadAllocCounts[threadDisplay] = 1;
 
+                                // Stamp dense thread index for fast sub-range counting
+                                int denseIdx = m_ThreadIndexNames.IndexOf(threadDisplay);
+                                if (denseIdx < 0)
+                                {
+                                    denseIdx = m_ThreadIndexNames.Count;
+                                    m_ThreadIndexNames.Add(threadDisplay);
+                                }
+                                alloc.ThreadAllocCountIndex = denseIdx;
+
                                 m_SwSampleIteration.Start();
                             }
 
@@ -1854,6 +1891,13 @@ namespace GCAllocBreakdown.Editor
             var topTarget = m_Snapshot.GroupsByTopFrame;
             bool showAsm = m_ShowAssembly;
 
+            // Thread counts via dense int[] (indices stamped during initial Analyze)
+            int threadNameCount = m_ThreadIndexNames.Count;
+            if (m_ThreadCountBuffer == null || m_ThreadCountBuffer.Length < threadNameCount)
+                m_ThreadCountBuffer = new int[threadNameCount];
+            else
+                Array.Clear(m_ThreadCountBuffer, 0, threadNameCount);
+
             // Single-pass: filter + distribute to both groupings + perFrame + top single allocs
             for (int i = 0; i < cached.Count; i++)
             {
@@ -1868,11 +1912,9 @@ namespace GCAllocBreakdown.Editor
                     anyCallStacks = true;
 
                 // Thread counts
-                string td = alloc.ThreadDisplayName;
-                if (m_ThreadAllocCounts.TryGetValue(td, out int prev))
-                    m_ThreadAllocCounts[td] = prev + 1;
-                else
-                    m_ThreadAllocCounts[td] = 1;
+                int tidx = alloc.ThreadAllocCountIndex;
+                if (tidx >= 0 && tidx < threadNameCount)
+                    m_ThreadCountBuffer[tidx]++;
 
                 // Distribute to full-callstack groups
                 int fullIdx = alloc.FullCallstackGroupIndex;
@@ -1911,6 +1953,13 @@ namespace GCAllocBreakdown.Editor
                     m_TopSingleAllocs.RemoveAt(m_TopSingleAllocs.Count - 1);
                     InsertSorted(m_TopSingleAllocs, alloc);
                 }
+            }
+
+            // Populate m_ThreadAllocCounts from dense array
+            for (int i = 0; i < threadNameCount; i++)
+            {
+                if (m_ThreadCountBuffer[i] > 0)
+                    m_ThreadAllocCounts[m_ThreadIndexNames[i]] = m_ThreadCountBuffer[i];
             }
 
             LogTiming(sw, "singlePass");
@@ -2040,6 +2089,13 @@ namespace GCAllocBreakdown.Editor
             var topTarget = m_Snapshot.GroupsByTopFrame;
             bool showAsm = m_ShowAssembly;
 
+            // Thread counts via dense int[] (indices stamped during initial Analyze)
+            int threadNameCount = m_ThreadIndexNames.Count;
+            if (m_ThreadCountBuffer == null || m_ThreadCountBuffer.Length < threadNameCount)
+                m_ThreadCountBuffer = new int[threadNameCount];
+            else
+                Array.Clear(m_ThreadCountBuffer, 0, threadNameCount);
+
             // Single-pass: filter + distribute to both groupings + perFrame + top single allocs
             for (int i = 0; i < cached.Count; i++)
             {
@@ -2055,11 +2111,9 @@ namespace GCAllocBreakdown.Editor
                     anyCallStacks = true;
 
                 // Thread counts
-                string td = alloc.ThreadDisplayName;
-                if (m_ThreadAllocCounts.TryGetValue(td, out int prev))
-                    m_ThreadAllocCounts[td] = prev + 1;
-                else
-                    m_ThreadAllocCounts[td] = 1;
+                int tidx = alloc.ThreadAllocCountIndex;
+                if (tidx >= 0 && tidx < threadNameCount)
+                    m_ThreadCountBuffer[tidx]++;
 
                 // Distribute to full-callstack groups
                 int fullIdx = alloc.FullCallstackGroupIndex;
@@ -2098,6 +2152,13 @@ namespace GCAllocBreakdown.Editor
                     m_TopSingleAllocs.RemoveAt(m_TopSingleAllocs.Count - 1);
                     InsertSorted(m_TopSingleAllocs, alloc);
                 }
+            }
+
+            // Populate m_ThreadAllocCounts from dense array
+            for (int i = 0; i < threadNameCount; i++)
+            {
+                if (m_ThreadCountBuffer[i] > 0)
+                    m_ThreadAllocCounts[m_ThreadIndexNames[i]] = m_ThreadCountBuffer[i];
             }
 
             LogTiming(sw, "singlePass");
