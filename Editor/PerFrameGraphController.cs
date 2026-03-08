@@ -236,7 +236,7 @@ namespace GCAllocBreakdown.Editor
         //  UI ELEMENTS
         // ═══════════════════════════════════════════════════
 
-        Foldout m_GraphFoldout;
+        VisualElement m_GraphSection;
         VisualElement m_GraphRoot;
         GraphElement m_GraphElement;
         Label m_GraphYMax, m_GraphYMid, m_GraphYMin;
@@ -258,13 +258,22 @@ namespace GCAllocBreakdown.Editor
         // ═══════════════════════════════════════════════════
 
         /// <summary>The root Foldout element -- add this to the parent layout.</summary>
-        public VisualElement Root => m_GraphFoldout;
+        public VisualElement Root => m_GraphSection;
 
         /// <summary>
         /// The floating tooltip. Must be added to the window's rootVisualElement
         /// so it renders above all other content.
         /// </summary>
         public VisualElement TooltipElement => m_FloatingTooltip;
+
+        float ActualGraphHeight
+        {
+            get
+            {
+                float h = m_GraphElement.contentRect.height;
+                return float.IsNaN(h) || h < 1f ? k_GraphHeight : h;
+            }
+        }
 
         public PerFrameGraphController(Action<int, string> onFrameSelected, Func<int> getSelectedMarkerIndex)
         {
@@ -362,14 +371,14 @@ namespace GCAllocBreakdown.Editor
         {
             if (m_FrameStore == null || !m_FrameStore.HasFullFrameData)
             {
-                m_GraphFoldout.style.display = DisplayStyle.None;
+                m_GraphSection.style.display = DisplayStyle.None;
                 return;
             }
 
             var perFrame = m_FrameStore.FullFrameBytes;
             int frameCount = perFrame.Length;
 
-            m_GraphFoldout.style.display = DisplayStyle.Flex;
+            m_GraphSection.style.display = DisplayStyle.Flex;
 
             float areaWidth = m_GraphElement.contentRect.width;
             if (float.IsNaN(areaWidth) || areaWidth < 1f) areaWidth = 400f;
@@ -450,7 +459,7 @@ namespace GCAllocBreakdown.Editor
             bool showSegments = m_HasSegmentData && m_FramesPerBucket == 1;
 
             // ── Grid lines ──
-            ComputeGridLines(m_YPanOffset, m_YAxisMax, k_GraphHeight);
+            ComputeGridLines(m_YPanOffset, m_YAxisMax, ActualGraphHeight);
 
             // ── Push data to overview (full range) and main graph (viewport slice) ──
 
@@ -688,11 +697,34 @@ namespace GCAllocBreakdown.Editor
 
         void BuildUI()
         {
-            m_GraphFoldout = MakeSectionFoldout("Per-Frame Graph");
-            m_GraphFoldout.style.marginLeft = 4;
-            m_GraphFoldout.style.marginRight = 4;
-            m_GraphFoldout.style.marginTop = 0;
-            m_GraphFoldout.style.display = DisplayStyle.None; // hidden until data
+            m_GraphSection = new VisualElement
+            {
+                style =
+                {
+                    flexGrow = 1,
+                    marginLeft = 4,
+                    marginRight = 4,
+                    minHeight = k_GraphHeight + k_GraphXAxisHeight + k_OverviewHeight + 40,
+                    display = DisplayStyle.None // hidden until data
+                }
+            };
+
+            var header = new Label("Per-Frame Graph")
+            {
+                style =
+                {
+                    fontSize = 12,
+                    unityFontStyleAndWeight = FontStyle.Bold,
+                    backgroundColor = new Color(0.25f, 0.25f, 0.25f),
+                    paddingTop = 3,
+                    paddingBottom = 3,
+                    paddingLeft = 4,
+                    marginBottom = 2,
+                    borderBottomWidth = 1,
+                    borderBottomColor = new Color(0.15f, 0.15f, 0.15f)
+                }
+            };
+            m_GraphSection.Add(header);
 
             // ── Overview strip (separate row above main graph) ──
             var overviewRow = new VisualElement
@@ -747,7 +779,7 @@ namespace GCAllocBreakdown.Editor
             overviewContainer.RegisterCallback<PointerUpEvent>(OnOverviewPointerUp);
 
             overviewRow.Add(overviewContainer);
-            m_GraphFoldout.Add(overviewRow);
+            m_GraphSection.Add(overviewRow);
 
             // ── Main graph area ──
             m_GraphRoot = new VisualElement
@@ -755,7 +787,8 @@ namespace GCAllocBreakdown.Editor
                 style =
                 {
                     flexDirection = FlexDirection.Row,
-                    height = k_GraphHeight + k_GraphXAxisHeight
+                    flexGrow = 1,
+                    flexShrink = 1
                 }
             };
 
@@ -767,8 +800,7 @@ namespace GCAllocBreakdown.Editor
                     width = k_GraphYAxisWidth,
                     justifyContent = Justify.SpaceBetween,
                     alignItems = Align.FlexEnd,
-                    paddingRight = 4,
-                    height = k_GraphHeight
+                    paddingRight = 4
                 }
             };
             m_GraphYMax = new Label("\u2014")
@@ -824,7 +856,6 @@ namespace GCAllocBreakdown.Editor
             {
                 style =
                 {
-                    height = k_GraphHeight,
                     flexGrow = 1,
                     flexShrink = 1
                 }
@@ -973,7 +1004,7 @@ namespace GCAllocBreakdown.Editor
             chartColumn.Add(xAxis);
 
             m_GraphRoot.Add(chartColumn);
-            m_GraphFoldout.Add(m_GraphRoot);
+            m_GraphSection.Add(m_GraphRoot);
         }
 
         // ═══════════════════════════════════════════════════
@@ -1106,7 +1137,7 @@ namespace GCAllocBreakdown.Editor
             if (m_YPanOffset > maxOffset) m_YPanOffset = maxOffset;
             if (!m_HasCustomYScale) m_YPanOffset = 0;
 
-            ComputeGridLines(m_YPanOffset, effectiveMax, k_GraphHeight);
+            ComputeGridLines(m_YPanOffset, effectiveMax, ActualGraphHeight);
 
             m_GraphElement.YAxisMax = effectiveMax;
             m_GraphElement.YPanOffset = m_YPanOffset;
@@ -1176,7 +1207,7 @@ namespace GCAllocBreakdown.Editor
         {
             m_GraphElement.YPanOffset = m_YPanOffset;
 
-            ComputeGridLines(m_YPanOffset, m_YAxisMax, k_GraphHeight);
+            ComputeGridLines(m_YPanOffset, m_YAxisMax, ActualGraphHeight);
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
 
             long visibleTop = m_YPanOffset + m_YAxisMax;

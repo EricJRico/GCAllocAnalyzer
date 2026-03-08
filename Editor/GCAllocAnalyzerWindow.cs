@@ -668,7 +668,11 @@ namespace GCAllocBreakdown.Editor
             m_FiltersFoldout.Add(filterRow2);
 
             left.Add(m_FiltersFoldout);
-            left.Add(BuildPerFrameGraph());
+
+            // Split view: graph (top, resizable) + marker list (bottom, flex)
+            var graphListSplit = new TwoPaneSplitView(0, 200, TwoPaneSplitViewOrientation.Vertical);
+            graphListSplit.style.flexGrow = 1;
+            graphListSplit.Add(BuildPerFrameGraph());
 
             // Marker list (multi-column, virtualized)
             m_MarkerListView = new MultiColumnListView
@@ -725,7 +729,8 @@ namespace GCAllocBreakdown.Editor
             m_MarkerListView.columnSortingChanged += OnMarkerColumnSortingChanged;
             m_MarkerListView.selectionChanged += OnMarkerSelectionChanged;
 
-            left.Add(m_MarkerListView);
+            graphListSplit.Add(m_MarkerListView);
+            left.Add(graphListSplit);
 
             return left;
         }
