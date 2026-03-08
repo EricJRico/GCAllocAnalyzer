@@ -59,6 +59,11 @@ namespace GCAllocBreakdown.Editor
         public string DisplayName;
         public string DisplayNameWithAssembly;
 
+        // Group indices stamped during initial BuildGrouping — enables fast
+        // integer-keyed regrouping on sub-range selection (avoids rehashing long keys).
+        public int FullCallstackGroupIndex = -1;
+        public int TopFrameGroupIndex = -1;
+
         // Pre-computed display strings (built once during analysis)
         public string FormattedBytes;
         public string FormattedFrame;
@@ -69,6 +74,7 @@ namespace GCAllocBreakdown.Editor
     {
         public string Key;
         public string DisplayName;
+        public int GroupIndex;
         public long TotalBytes;
         public int Count;
         public float Percentage;
@@ -351,6 +357,11 @@ namespace GCAllocBreakdown.Editor
         public List<RawAllocation> CachedRawAllocations;
         public List<string> CachedSortedThreadNames;
 
+        // Group templates from initial full-range analysis — used by RebuildGroupingByIndex
+        // to avoid string dictionary lookups on sub-range selection.
+        public List<CallsiteGroup> CachedGroupsByFullCallstack;
+        public List<CallsiteGroup> CachedGroupsByTopFrame;
+
         public bool HasFullFrameData => FullFrameBytes != null && FullFrameBytes.Length > 0;
         public bool HasCachedAnalysis => CachedRawAllocations != null && CachedRawAllocations.Count > 0;
 
@@ -363,9 +374,12 @@ namespace GCAllocBreakdown.Editor
             FullFrameBytes = null;
             CachedRawAllocations = null;
             CachedSortedThreadNames = null;
+            CachedGroupsByFullCallstack = null;
+            CachedGroupsByTopFrame = null;
         }
 
-        public void CacheAnalysis(List<RawAllocation> rawAllocations, List<string> sortedThreadNames)
+        public void CacheAnalysis(List<RawAllocation> rawAllocations, List<string> sortedThreadNames,
+            List<CallsiteGroup> groupsByFullCallstack, List<CallsiteGroup> groupsByTopFrame)
         {
             // Copy the list so the cache is independent of the snapshot.
             // RawAllocation references are shared but immutable after creation.
@@ -376,6 +390,9 @@ namespace GCAllocBreakdown.Editor
             CachedSortedThreadNames = new List<string>(sortedThreadNames.Count);
             for (int i = 0; i < sortedThreadNames.Count; i++)
                 CachedSortedThreadNames.Add(sortedThreadNames[i]);
+
+            CachedGroupsByFullCallstack = new List<CallsiteGroup>(groupsByFullCallstack);
+            CachedGroupsByTopFrame = new List<CallsiteGroup>(groupsByTopFrame);
         }
 
         // CachedRawAllocations and CachedSortedThreadNames are now serialized

@@ -156,6 +156,17 @@ namespace GCAllocBreakdown.Editor
 
         // Reusable buffers
         readonly StringBuilder m_SharedSB = new(1024);
+        readonly StringBuilder m_TimingLog = new(512);
+
+        void LogTiming(Stopwatch sw, string label)
+        {
+            m_TimingLog.Append(label);
+            m_TimingLog.Append('=');
+            m_TimingLog.Append(sw.ElapsedMilliseconds);
+            m_TimingLog.Append("ms ");
+            sw.Restart();
+        }
+
         readonly List<ulong> m_AddrBuffer = new(64);
         readonly List<ResolvedFrame> m_FrameBuffer = new(64);
         readonly List<DepthEntry> m_DepthStack = new(32);
@@ -302,10 +313,16 @@ namespace GCAllocBreakdown.Editor
             RebuildThreadAllocCounts();
             UpdateThreadButtonLabel();
 
-            // Rebuild both groupings from raw data
+            // Rebuild both groupings from raw data (stamps integer group indices)
             BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
             BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
             ComputeSnapshotPerFrameBytes();
+
+            // Cache copies of group templates so sub-range regrouping uses current indices
+            // Must copy — RebuildGroupingByIndex clears target, which would also clear sourceGroups
+            // if they pointed to the same list.
+            m_FrameStore.CachedGroupsByFullCallstack = new List<CallsiteGroup>(m_Snapshot.GroupsByFullCallstack);
+            m_FrameStore.CachedGroupsByTopFrame = new List<CallsiteGroup>(m_Snapshot.GroupsByTopFrame);
 
             // Restore frame store from snapshot if needed
             if (!m_FrameStore.HasFullFrameData && m_Snapshot.PerFrameBytes != null)
@@ -532,7 +549,8 @@ namespace GCAllocBreakdown.Editor
                 m_FrameStore.FullFrameBytes = new long[count];
                 Array.Copy(m_Snapshot.PerFrameBytes, m_FrameStore.FullFrameBytes, count);
             }
-            m_FrameStore.CacheAnalysis(m_Snapshot.RawAllocations, m_Snapshot.SortedThreadNames);
+            m_FrameStore.CacheAnalysis(m_Snapshot.RawAllocations, m_Snapshot.SortedThreadNames,
+                m_Snapshot.GroupsByFullCallstack, m_Snapshot.GroupsByTopFrame);
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
@@ -871,6 +889,11 @@ namespace GCAllocBreakdown.Editor
         void RebuildGraph()
         {
             m_GraphController?.SetData(m_FrameStore, m_Snapshot, m_FilteredGroups);
+            m_GraphController?.RebuildGraph();
+        }
+        void RefreshGraphForSubRange()
+        {
+            m_GraphController?.UpdateAnalyzedRange(m_Snapshot, m_FilteredGroups);
             m_GraphController?.RebuildGraph();
         }
         void UpdateGraphOverlay(CallsiteGroup group) => m_GraphController?.UpdateOverlay(group);
@@ -1724,7 +1747,8 @@ namespace GCAllocBreakdown.Editor
             }
 
             // Cache full extraction for instant sub-range analysis
-            m_FrameStore.CacheAnalysis(m_Snapshot.RawAllocations, m_Snapshot.SortedThreadNames);
+            m_FrameStore.CacheAnalysis(m_Snapshot.RawAllocations, m_Snapshot.SortedThreadNames,
+                m_Snapshot.GroupsByFullCallstack, m_Snapshot.GroupsByTopFrame);
 
             // Set active based on current toggle
             m_ActiveGroups = m_GroupByCallsite.value ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
@@ -1804,6 +1828,10 @@ namespace GCAllocBreakdown.Editor
                 return;
             }
 
+            var sw = Stopwatch.StartNew();
+            m_TimingLog.Clear();
+            m_TimingLog.Append("[GCAllocAnalyzer] RebuildFromCache: ");
+
             m_Snapshot.RawAllocations.Clear();
             m_SelectedThreads.Clear();
             m_ThreadAllocCounts.Clear();
@@ -1831,6 +1859,8 @@ namespace GCAllocBreakdown.Editor
                     m_ThreadAllocCounts[td] = 1;
             }
 
+            LogTiming(sw, "filter");
+
             // Restore full thread set from cache (not just threads in the sub-range)
             m_AllThreadNames.Clear();
             var cachedThreads = m_FrameStore.CachedSortedThreadNames;
@@ -1853,21 +1883,37 @@ namespace GCAllocBreakdown.Editor
             m_Snapshot.SortedThreadNames.Sort(StringComparer.Ordinal);
             UpdateThreadButtonLabel();
 
-            // Rebuild groupings and stats
-            BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
-            BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
+            // Rebuild groupings using integer indices (avoids rehashing long string keys)
+            RebuildGroupingByIndex(true, m_FrameStore.CachedGroupsByFullCallstack,
+                m_Snapshot.GroupsByFullCallstack);
+            LogTiming(sw, "groupFull");
+            RebuildGroupingByIndex(false, m_FrameStore.CachedGroupsByTopFrame,
+                m_Snapshot.GroupsByTopFrame);
+            LogTiming(sw, "groupTop");
             ComputeSnapshotPerFrameBytes();
+            LogTiming(sw, "perFrame");
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
             BuildThreadIndex(m_ActiveGroups);
             BuildTopOffenders();
+            LogTiming(sw, "topOff");
             ApplyFilters();
+            LogTiming(sw, "applyFilter");
             UpdateDataSummary();
             ShowNoDataState(m_ActiveGroups.Count == 0);
-            RebuildGraph();
+            RefreshGraphForSubRange();
+            LogTiming(sw, "graph");
             m_SaveBtn?.SetEnabled(m_Snapshot.HasData);
             m_ExportBtn?.SetEnabled(m_Snapshot.HasData);
+
+            m_TimingLog.Append("| ");
+            m_TimingLog.Append(m_Snapshot.TotalCount);
+            m_TimingLog.Append(" allocs, fullGroups=");
+            m_TimingLog.Append(m_Snapshot.GroupsByFullCallstack.Count);
+            m_TimingLog.Append(", topGroups=");
+            m_TimingLog.Append(m_Snapshot.GroupsByTopFrame.Count);
+            UnityEngine.Debug.Log(m_TimingLog.ToString());
 
             // Update frame range fields
             m_StartFrameField.SetValueWithoutNotify(GCAllocUtils.DisplayFrame(startFrame));
@@ -1906,6 +1952,10 @@ namespace GCAllocBreakdown.Editor
                 return;
             }
 
+            var sw = Stopwatch.StartNew();
+            m_TimingLog.Clear();
+            m_TimingLog.Append("[GCAllocAnalyzer] RebuildFromCacheWithBuffer: ");
+
             m_Snapshot.RawAllocations.Clear();
             m_SelectedThreads.Clear();
             m_ThreadAllocCounts.Clear();
@@ -1942,6 +1992,8 @@ namespace GCAllocBreakdown.Editor
                     m_ThreadAllocCounts[td] = 1;
             }
 
+            LogTiming(sw, "filter");
+
             // Restore full thread set from cache
             m_AllThreadNames.Clear();
             var cachedThreads = m_FrameStore.CachedSortedThreadNames;
@@ -1964,21 +2016,40 @@ namespace GCAllocBreakdown.Editor
             m_Snapshot.SortedThreadNames.Sort(StringComparer.Ordinal);
             UpdateThreadButtonLabel();
 
-            // Rebuild groupings and stats
-            BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
-            BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
+            // Rebuild groupings using integer indices (avoids rehashing long string keys)
+            RebuildGroupingByIndex(true, m_FrameStore.CachedGroupsByFullCallstack,
+                m_Snapshot.GroupsByFullCallstack);
+            LogTiming(sw, "groupFull");
+            RebuildGroupingByIndex(false, m_FrameStore.CachedGroupsByTopFrame,
+                m_Snapshot.GroupsByTopFrame);
+            LogTiming(sw, "groupTop");
             ComputeSnapshotPerFrameBytes();
+            LogTiming(sw, "perFrame");
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
             BuildThreadIndex(m_ActiveGroups);
             BuildTopOffenders();
+            LogTiming(sw, "topOff");
             ApplyFilters();
+            LogTiming(sw, "applyFilter");
             UpdateDataSummary();
             ShowNoDataState(m_ActiveGroups.Count == 0);
-            RebuildGraph();
+            RefreshGraphForSubRange();
+            LogTiming(sw, "graph");
             m_SaveBtn?.SetEnabled(m_Snapshot.HasData);
             m_ExportBtn?.SetEnabled(m_Snapshot.HasData);
+
+            m_TimingLog.Append("| ");
+            m_TimingLog.Append(m_Snapshot.TotalCount);
+            m_TimingLog.Append(" allocs, fullGroups=");
+            m_TimingLog.Append(m_Snapshot.GroupsByFullCallstack.Count);
+            m_TimingLog.Append(", topGroups=");
+            m_TimingLog.Append(m_Snapshot.GroupsByTopFrame.Count);
+            m_TimingLog.Append(", ");
+            m_TimingLog.Append(selectedFrameCount);
+            m_TimingLog.Append(" frames");
+            UnityEngine.Debug.Log(m_TimingLog.ToString());
 
             // Update frame range fields
             m_StartFrameField.SetValueWithoutNotify(GCAllocUtils.DisplayFrame(startFrame));
@@ -2044,18 +2115,86 @@ namespace GCAllocBreakdown.Editor
                         Key = key,
                         DisplayName = m_ShowAssembly ? alloc.DisplayNameWithAssembly : alloc.DisplayName,
                         ResolvedCallStack = alloc.ResolvedCallStack.Count > 0 ? alloc.ResolvedCallStack : null,
-                        Allocations = new List<RawAllocation>(16)
+                        Allocations = new List<RawAllocation>(16),
+                        GroupIndex = target.Count
                     };
                     m_GroupingDict[key] = g;
                     target.Add(g);
                 }
+
+                // Stamp integer group index for fast sub-range regrouping
+                if (byFullCallstack)
+                    alloc.FullCallstackGroupIndex = g.GroupIndex;
+                else
+                    alloc.TopFrameGroupIndex = g.GroupIndex;
 
                 g.TotalBytes += alloc.Bytes;
                 g.Count++;
                 g.Allocations.Add(alloc);
             }
 
-            // Pre-compute display strings and per-frame stats for each group
+            ComputeGroupStats(target, total);
+        }
+
+        /// <summary>
+        /// Rebuild grouping using pre-stamped integer group indices instead of
+        /// string dictionary lookups. sourceGroups provides the group templates
+        /// (Key, DisplayName, ResolvedCallStack) from the initial full analysis.
+        /// </summary>
+        void RebuildGroupingByIndex(bool byFullCallstack, List<CallsiteGroup> sourceGroups,
+            List<CallsiteGroup> target)
+        {
+            int groupCount = sourceGroups.Count;
+            long total = m_Snapshot.TotalBytes > 0 ? m_Snapshot.TotalBytes : 1;
+
+            // Create group slots matching source indices
+            target.Clear();
+            for (int i = 0; i < groupCount; i++)
+            {
+                var src = sourceGroups[i];
+                target.Add(new CallsiteGroup
+                {
+                    Key = src.Key,
+                    ResolvedCallStack = src.ResolvedCallStack,
+                    Allocations = new List<RawAllocation>(16)
+                });
+            }
+
+            // Distribute allocations by pre-stamped integer index
+            for (int i = 0; i < m_Snapshot.RawAllocations.Count; i++)
+            {
+                var alloc = m_Snapshot.RawAllocations[i];
+                int idx = byFullCallstack
+                    ? alloc.FullCallstackGroupIndex
+                    : alloc.TopFrameGroupIndex;
+
+                if (idx < 0 || idx >= target.Count)
+                {
+                    Debug.LogError($"[GCAllocAnalyzer] RebuildGroupingByIndex: idx={idx} out of range [0,{target.Count}) " +
+                        $"byFullCallstack={byFullCallstack} sourceGroups.Count={sourceGroups.Count} " +
+                        $"alloc i={i} FrameIndex={alloc.FrameIndex} FullIdx={alloc.FullCallstackGroupIndex} TopIdx={alloc.TopFrameGroupIndex}");
+                    continue;
+                }
+                var g = target[idx];
+                if (g.Count == 0)
+                    g.DisplayName = m_ShowAssembly ? alloc.DisplayNameWithAssembly : alloc.DisplayName;
+                g.TotalBytes += alloc.Bytes;
+                g.Count++;
+                g.Allocations.Add(alloc);
+            }
+
+            // Remove groups with zero allocations in this sub-range
+            for (int i = target.Count - 1; i >= 0; i--)
+            {
+                if (target[i].Count == 0)
+                    target.RemoveAt(i);
+            }
+
+            ComputeGroupStats(target, total);
+        }
+
+        void ComputeGroupStats(List<CallsiteGroup> target, long total)
+        {
             for (int i = 0; i < target.Count; i++)
             {
                 var g = target[i];

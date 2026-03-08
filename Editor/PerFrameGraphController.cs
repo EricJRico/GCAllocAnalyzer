@@ -364,6 +364,28 @@ namespace GCAllocBreakdown.Editor
         }
 
         /// <summary>
+        /// Lightweight update for sub-range re-analysis. Updates the analyzed range and
+        /// filtered groups without rebuilding the method palette or segment data (which
+        /// are derived from the full cached dataset and don't change on sub-range selection).
+        /// </summary>
+        public void UpdateAnalyzedRange(AnalysisSnapshot snapshot, List<CallsiteGroup> filteredGroups)
+        {
+            m_Snapshot = snapshot;
+            m_FilteredGroups = filteredGroups;
+
+            if (snapshot != null && snapshot.HasData)
+            {
+                m_AnalyzedFrameStart = snapshot.FrameStart;
+                m_AnalyzedFrameEnd = snapshot.FrameEnd;
+            }
+            else
+            {
+                m_AnalyzedFrameStart = -1;
+                m_AnalyzedFrameEnd = -1;
+            }
+        }
+
+        /// <summary>
         /// Rebuild the entire graph from current frame store data.
         /// </summary>
         public void RebuildGraph()
