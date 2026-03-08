@@ -64,9 +64,20 @@ namespace GCAllocBreakdown.Editor
         public int FullCallstackGroupIndex = -1;
         public int TopFrameGroupIndex = -1;
 
+        // Unique integer IDs for grouping keys — stamped during extraction to
+        // replace string-keyed dictionary lookups in BuildGrouping with O(1) array indexing.
+        // FullCallstackId: one per unique CachedCallStack/CachedDepthInfo entry.
+        // TopFrameId: one per unique TopFrameKey (shared across callstacks with same top frame).
+        public int FullCallstackId = -1;
+        public int TopFrameId = -1;
+
         // Dense thread index stamped during initial extraction — enables int[]
         // counting in sub-range rebuilds instead of Dictionary<string,int> lookups.
         public int ThreadAllocCountIndex = -1;
+
+        // Method palette index stamped by MethodPalette.Build() — enables flat array
+        // indexing in BuildSegmentData instead of per-allocation string dictionary lookups.
+        [NonSerialized] public int SegmentMethodIndex = -1;
 
         // Pre-computed display strings (built once during analysis)
         public string FormattedBytes;
@@ -318,6 +329,18 @@ namespace GCAllocBreakdown.Editor
                 m_MethodToIndex[m_SortedForBuild[i].Key] = i;
                 m_IndexToMethod.Add(m_SortedForBuild[i].Key);
             }
+
+            // Stamp SegmentMethodIndex on each allocation for O(1) array indexing
+            // in BuildSegmentData (avoids 1.87M string dictionary lookups).
+            for (int i = 0; i < allocs.Count; i++)
+            {
+                string key = allocs[i].DisplayName;
+                if (string.IsNullOrEmpty(key))
+                    key = allocs[i].ParentMethod;
+                if (string.IsNullOrEmpty(key))
+                    key = "(unknown)";
+                allocs[i].SegmentMethodIndex = m_MethodToIndex.TryGetValue(key, out int idx) ? idx : k_OthersIndex;
+            }
         }
 
         public int GetIndex(string method)
@@ -358,13 +381,16 @@ namespace GCAllocBreakdown.Editor
         public int FullFrameEnd;
         public long[] FullFrameBytes;              // per-frame GC totals for entire profiler range
 
-        public List<RawAllocation> CachedRawAllocations;
-        public List<string> CachedSortedThreadNames;
+        // These are rebuilt from m_Snapshot in TryRestoreAfterReload — NOT serialized
+        // to avoid duplicating 1.87M+ RawAllocation objects (Unity serializes by value,
+        // not reference, so duplicated lists would multiply serialization cost 4×).
+        [NonSerialized] public List<RawAllocation> CachedRawAllocations;
+        [NonSerialized] public List<string> CachedSortedThreadNames;
 
         // Group templates from initial full-range analysis — used by single-pass
         // sub-range regrouping to avoid string dictionary lookups.
-        public List<CallsiteGroup> CachedGroupsByFullCallstack;
-        public List<CallsiteGroup> CachedGroupsByTopFrame;
+        [NonSerialized] public List<CallsiteGroup> CachedGroupsByFullCallstack;
+        [NonSerialized] public List<CallsiteGroup> CachedGroupsByTopFrame;
 
         public bool HasFullFrameData => FullFrameBytes != null && FullFrameBytes.Length > 0;
         public bool HasCachedAnalysis => CachedRawAllocations != null && CachedRawAllocations.Count > 0;
@@ -399,8 +425,8 @@ namespace GCAllocBreakdown.Editor
             CachedGroupsByTopFrame = new List<CallsiteGroup>(groupsByTopFrame);
         }
 
-        // CachedRawAllocations and CachedSortedThreadNames are now serialized
-        // so that drag-select and Reset continue to work after domain reload.
+        // CachedRawAllocations and CachedSortedThreadNames are rebuilt from
+        // m_Snapshot after domain reload in TryRestoreAfterReload.
     }
 
     // ═══════════════════════════════════════════════════

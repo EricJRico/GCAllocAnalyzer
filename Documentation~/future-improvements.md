@@ -86,6 +86,26 @@ The profiler often provides only the method name without a line number (`SourceL
 
 **Scope:** `PerFrameGraphController.cs` (build bucketed segments, remove three gates), overview element should also receive segments. `GraphElement.cs` needs no changes — it already renders any segments it receives.
 
+## Performance: Binary Temp File for Domain Reload Persistence
+
+**Problem:** `m_Snapshot.RawAllocations` (1.87M+ `RawAllocation` objects) is `[SerializeField]` and Unity serializes it by value during domain reload. Each object has ~10 string fields (thread names, method names, call stack keys) that are massively duplicated across allocations — Unity serializes `"MainThread"` 1.87M times. This produces ~2.5GB of serialized data, causing slow reloads and high memory pressure.
+
+**Current workaround:** `GraphFrameStore`'s cached fields are `[NonSerialized]` (was 4× duplication = 10GB+ → OOM crash). The snapshot itself still serializes ~2.5GB.
+
+**Proposed Solution:** Replace Unity's built-in serialization with a compact binary temp file:
+1. In `OnDisable`, write analysis state to a temp file (`FileUtil.GetUniqueTempPathInProject()`) with deduplicated string tables:
+   - Build a string intern table (thread names: ~20 unique, call stack keys: ~400 unique, display names: ~400 unique)
+   - Write string table once, then per-allocation write only integer indices + non-string fields
+   - Expected size: ~50-100MB for 1.87M allocs (vs 2.5GB with Unity serialization)
+2. In `TryRestoreAfterReload`, read the binary file back and reconstruct all data
+3. Mark `m_Snapshot` as `[NonSerialized]` — only the temp file path needs to survive
+
+**Additional candidates for binary serialization:**
+- Any other `[SerializeField]` data containing large collections of objects with repeated string fields
+- `FullFrameBytes` (long[]) — already compact, low priority
+
+**Scope:** New `SnapshotSerializer` utility class with `Write(AnalysisSnapshot, string path)` and `Read(string path)` methods. Changes to `OnDisable`/`TryRestoreAfterReload` to use the file instead of Unity serialization.
+
 ## Performance: Minor Allocation Hotspots
 
 Low-priority items flagged during code review. Not urgent — each allocates once per user action or once per analysis, not per frame.

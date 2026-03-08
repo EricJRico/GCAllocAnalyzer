@@ -144,8 +144,9 @@ namespace GCAllocBreakdown.Editor
         int[] m_SegmentOffsets;           // per-bar offset into m_Segments (length = totalBuckets + 1)
         bool m_HasSegmentData;
         MethodColorPalette m_MethodPalette = new();
-        Dictionary<string, long> m_MethodAccum = new(64);
-        List<KeyValuePair<string, long>> m_SortedMethods = new(64);
+        long[] m_SegmentFlatArray;           // flat [frameCount * methodCount] accumulator
+        int[] m_SegmentSortIndices;          // reusable per-frame sort buffer
+        long[] m_SegmentSortValues;          // reusable per-frame sort buffer
         float m_LastTooltipY;
 
         // Overview strip
@@ -1913,95 +1914,97 @@ namespace GCAllocBreakdown.Editor
         //  STACKED BAR SEGMENT BUILDING
         // ═══════════════════════════════════════════════════
 
-        // Reusable per-frame method dictionaries — keyed by frame index.
-        // Outer dictionary maps frame -> inner dictionary (method -> bytes).
-        // Inner dictionaries are pooled and .Clear()ed instead of re-allocated.
-        readonly Dictionary<int, Dictionary<string, long>> m_FrameToMethods = new(512);
-        readonly List<Dictionary<string, long>> m_MethodDictPool = new(512);
-        int m_MethodDictPoolUsed;
-
-        Dictionary<string, long> RentMethodDict()
-        {
-            if (m_MethodDictPoolUsed < m_MethodDictPool.Count)
-            {
-                var d = m_MethodDictPool[m_MethodDictPoolUsed++];
-                d.Clear();
-                return d;
-            }
-            var fresh = new Dictionary<string, long>(16);
-            m_MethodDictPool.Add(fresh);
-            m_MethodDictPoolUsed++;
-            return fresh;
-        }
-
         void BuildSegmentData()
         {
             var allocs = m_FrameStore.CachedRawAllocations;
             int frameCount = m_FrameStore.FullFrameBytes.Length;
+            int methodCount = m_MethodPalette.Count;
+            int baseFrame = m_FrameStore.FullFrameStart;
 
-            // Group allocations by frame, summing bytes per DisplayName.
-            m_FrameToMethods.Clear();
-            m_MethodDictPoolUsed = 0;
+            // Flat array: row = frame relative index, col = SegmentMethodIndex.
+            // Each cell accumulates total bytes for that (frame, method) pair.
+            int flatLen = frameCount * methodCount;
+            if (m_SegmentFlatArray == null || m_SegmentFlatArray.Length < flatLen)
+                m_SegmentFlatArray = new long[Mathf.Max(flatLen, 256)];
+            else
+                Array.Clear(m_SegmentFlatArray, 0, flatLen);
 
+            // Single pass over all allocations — O(1) per alloc via integer indexing.
             for (int a = 0; a < allocs.Count; a++)
             {
-                int frame = allocs[a].FrameIndex;
-                string method = allocs[a].DisplayName;
-                if (string.IsNullOrEmpty(method))
-                    method = allocs[a].ParentMethod;
-                if (string.IsNullOrEmpty(method))
-                    method = "(unknown)";
-                long bytes = allocs[a].Bytes;
-
-                if (!m_FrameToMethods.TryGetValue(frame, out var methods))
-                {
-                    methods = RentMethodDict();
-                    m_FrameToMethods[frame] = methods;
-                }
-                if (methods.TryGetValue(method, out long existing))
-                    methods[method] = existing + bytes;
-                else
-                    methods[method] = bytes;
+                int methodIdx = allocs[a].SegmentMethodIndex;
+                if (methodIdx < 0) continue;
+                int frameRel = allocs[a].FrameIndex - baseFrame;
+                m_SegmentFlatArray[frameRel * methodCount + methodIdx] += allocs[a].Bytes;
             }
 
-            // Estimate max segments: frameCount * ~10 methods avg
+            // Ensure segment output arrays
             int estimatedSegments = frameCount * 12;
             if (m_Segments == null || m_Segments.Length < estimatedSegments)
                 m_Segments = new BarSegment[Mathf.Max(estimatedSegments, 256)];
             if (m_SegmentOffsets == null || m_SegmentOffsets.Length < frameCount + 1)
                 m_SegmentOffsets = new int[Mathf.Max(frameCount + 1, 64)];
 
+            // Reusable per-frame sort buffers
+            if (m_SegmentSortIndices == null || m_SegmentSortIndices.Length < methodCount)
+            {
+                m_SegmentSortIndices = new int[Mathf.Max(methodCount, 64)];
+                m_SegmentSortValues = new long[Mathf.Max(methodCount, 64)];
+            }
+
             int segIdx = 0;
-            int baseFrame = m_FrameStore.FullFrameStart;
 
             for (int b = 0; b < frameCount; b++)
             {
                 m_SegmentOffsets[b] = segIdx;
 
-                int frame = baseFrame + b;
-                if (!m_FrameToMethods.TryGetValue(frame, out var methods) || methods.Count == 0)
-                    continue;
-
-                // Sort methods ascending by bytes so smallest segments are at
-                // the bottom of the stacked bar and largest are at the top.
-                m_SortedMethods.Clear();
-                foreach (var kvp in methods)
-                    m_SortedMethods.Add(kvp);
-                m_SortedMethods.Sort((a, b2) => a.Value.CompareTo(b2.Value));
-
-                for (int m = 0; m < m_SortedMethods.Count; m++)
+                // Collect non-zero methods for this frame
+                int rowStart = b * methodCount;
+                int nonZero = 0;
+                for (int m = 0; m < methodCount; m++)
                 {
-                    if (segIdx >= m_Segments.Length)
+                    long val = m_SegmentFlatArray[rowStart + m];
+                    if (val > 0)
                     {
-                        var grown = new BarSegment[m_Segments.Length * 2];
-                        Array.Copy(m_Segments, grown, m_Segments.Length);
-                        m_Segments = grown;
+                        m_SegmentSortIndices[nonZero] = m;
+                        m_SegmentSortValues[nonZero] = val;
+                        nonZero++;
                     }
+                }
 
+                if (nonZero == 0) continue;
+
+                // Sort ascending by bytes (smallest at bottom of stacked bar).
+                // Simple insertion sort — nonZero is typically < 20.
+                for (int i = 1; i < nonZero; i++)
+                {
+                    long keyVal = m_SegmentSortValues[i];
+                    int keyIdx = m_SegmentSortIndices[i];
+                    int j = i - 1;
+                    while (j >= 0 && m_SegmentSortValues[j] > keyVal)
+                    {
+                        m_SegmentSortValues[j + 1] = m_SegmentSortValues[j];
+                        m_SegmentSortIndices[j + 1] = m_SegmentSortIndices[j];
+                        j--;
+                    }
+                    m_SegmentSortValues[j + 1] = keyVal;
+                    m_SegmentSortIndices[j + 1] = keyIdx;
+                }
+
+                // Emit segments
+                if (segIdx + nonZero > m_Segments.Length)
+                {
+                    var grown = new BarSegment[Mathf.Max(m_Segments.Length * 2, segIdx + nonZero)];
+                    Array.Copy(m_Segments, grown, segIdx);
+                    m_Segments = grown;
+                }
+
+                for (int m = 0; m < nonZero; m++)
+                {
                     m_Segments[segIdx++] = new BarSegment
                     {
-                        MethodIndex = m_MethodPalette.GetIndex(m_SortedMethods[m].Key),
-                        Bytes = m_SortedMethods[m].Value
+                        MethodIndex = m_SegmentSortIndices[m],
+                        Bytes = m_SegmentSortValues[m]
                     };
                 }
             }

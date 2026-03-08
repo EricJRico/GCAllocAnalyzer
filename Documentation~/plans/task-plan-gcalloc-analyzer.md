@@ -1,5 +1,7 @@
 # GC Alloc Analyzer — Verified Task Plan
 
+> **OBSOLETE:** Tasks 1–7 are complete. Tasks 8–13 (Compare mode) have been revised against the actual codebase and moved to [`compare-mode-plan.md`](compare-mode-plan.md). Use that plan for all Compare mode work.
+
 ## Gap Analysis Verification
 
 I reviewed every item in the gap analysis against the actual `GCAllocAnalyzerWindow.cs` (2,209 lines). Here's what I confirmed:
