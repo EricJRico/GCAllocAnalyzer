@@ -357,8 +357,8 @@ namespace GCAllocBreakdown.Editor
         public List<RawAllocation> CachedRawAllocations;
         public List<string> CachedSortedThreadNames;
 
-        // Group templates from initial full-range analysis — used by RebuildGroupingByIndex
-        // to avoid string dictionary lookups on sub-range selection.
+        // Group templates from initial full-range analysis — used by single-pass
+        // sub-range regrouping to avoid string dictionary lookups.
         public List<CallsiteGroup> CachedGroupsByFullCallstack;
         public List<CallsiteGroup> CachedGroupsByTopFrame;
 

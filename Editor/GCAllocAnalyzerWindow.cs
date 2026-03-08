@@ -318,9 +318,7 @@ namespace GCAllocBreakdown.Editor
             BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
             ComputeSnapshotPerFrameBytes();
 
-            // Cache copies of group templates so sub-range regrouping uses current indices
-            // Must copy — RebuildGroupingByIndex clears target, which would also clear sourceGroups
-            // if they pointed to the same list.
+            // Cache copies of group templates for single-pass sub-range regrouping
             m_FrameStore.CachedGroupsByFullCallstack = new List<CallsiteGroup>(m_Snapshot.GroupsByFullCallstack);
             m_FrameStore.CachedGroupsByTopFrame = new List<CallsiteGroup>(m_Snapshot.GroupsByTopFrame);
 
@@ -1832,14 +1830,31 @@ namespace GCAllocBreakdown.Editor
             m_TimingLog.Clear();
             m_TimingLog.Append("[GCAllocAnalyzer] RebuildFromCache: ");
 
+            var cached = m_FrameStore.CachedRawAllocations;
             m_Snapshot.RawAllocations.Clear();
+            if (m_Snapshot.RawAllocations.Capacity < cached.Count)
+                m_Snapshot.RawAllocations.Capacity = cached.Count;
             m_SelectedThreads.Clear();
             m_ThreadAllocCounts.Clear();
             long totalBytes = 0;
             bool anyCallStacks = false;
 
-            // Filter cached allocations by frame range
-            var cached = m_FrameStore.CachedRawAllocations;
+            // Prepare group slots and per-frame array before single-pass loop
+            InitGroupSlots(m_FrameStore.CachedGroupsByFullCallstack, m_Snapshot.GroupsByFullCallstack);
+            InitGroupSlots(m_FrameStore.CachedGroupsByTopFrame, m_Snapshot.GroupsByTopFrame);
+
+            int frameCount = endFrame - startFrame + 1;
+            if (m_Snapshot.PerFrameBytes == null || m_Snapshot.PerFrameBytes.Length < frameCount)
+                m_Snapshot.PerFrameBytes = new long[frameCount];
+            else
+                Array.Clear(m_Snapshot.PerFrameBytes, 0, frameCount);
+
+            m_TopSingleAllocs.Clear();
+            var fullTarget = m_Snapshot.GroupsByFullCallstack;
+            var topTarget = m_Snapshot.GroupsByTopFrame;
+            bool showAsm = m_ShowAssembly;
+
+            // Single-pass: filter + distribute to both groupings + perFrame + top single allocs
             for (int i = 0; i < cached.Count; i++)
             {
                 var alloc = cached[i];
@@ -1847,19 +1862,66 @@ namespace GCAllocBreakdown.Editor
                     continue;
 
                 m_Snapshot.RawAllocations.Add(alloc);
-                totalBytes += alloc.Bytes;
+                long bytes = alloc.Bytes;
+                totalBytes += bytes;
                 if (alloc.ResolvedCallStack != null && alloc.ResolvedCallStack.Count > 0)
                     anyCallStacks = true;
 
-                // Track per-thread counts for the sub-range
+                // Thread counts
                 string td = alloc.ThreadDisplayName;
                 if (m_ThreadAllocCounts.TryGetValue(td, out int prev))
                     m_ThreadAllocCounts[td] = prev + 1;
                 else
                     m_ThreadAllocCounts[td] = 1;
+
+                // Distribute to full-callstack groups
+                int fullIdx = alloc.FullCallstackGroupIndex;
+                if (fullIdx >= 0 && fullIdx < fullTarget.Count)
+                {
+                    var gFull = fullTarget[fullIdx];
+                    if (gFull.Count == 0)
+                        gFull.DisplayName = showAsm ? alloc.DisplayNameWithAssembly : alloc.DisplayName;
+                    gFull.TotalBytes += bytes;
+                    gFull.Count++;
+                    gFull.Allocations.Add(alloc);
+                }
+
+                // Distribute to top-frame groups
+                int topIdx = alloc.TopFrameGroupIndex;
+                if (topIdx >= 0 && topIdx < topTarget.Count)
+                {
+                    var gTop = topTarget[topIdx];
+                    if (gTop.Count == 0)
+                        gTop.DisplayName = showAsm ? alloc.DisplayNameWithAssembly : alloc.DisplayName;
+                    gTop.TotalBytes += bytes;
+                    gTop.Count++;
+                    gTop.Allocations.Add(alloc);
+                }
+
+                // Per-frame bytes
+                int pfIdx = alloc.FrameIndex - startFrame;
+                if (pfIdx >= 0 && pfIdx < frameCount)
+                    m_Snapshot.PerFrameBytes[pfIdx] += bytes;
+
+                // Track top 10 single largest allocations
+                if (m_TopSingleAllocs.Count < 10)
+                    InsertSorted(m_TopSingleAllocs, alloc);
+                else if (bytes > m_TopSingleAllocs[m_TopSingleAllocs.Count - 1].Bytes)
+                {
+                    m_TopSingleAllocs.RemoveAt(m_TopSingleAllocs.Count - 1);
+                    InsertSorted(m_TopSingleAllocs, alloc);
+                }
             }
 
-            LogTiming(sw, "filter");
+            LogTiming(sw, "singlePass");
+
+            // Finalize groups: remove empty slots, compute stats
+            RemoveEmptyGroups(fullTarget);
+            RemoveEmptyGroups(topTarget);
+            long total = totalBytes > 0 ? totalBytes : 1;
+            ComputeGroupStats(fullTarget, total);
+            ComputeGroupStats(topTarget, total);
+            LogTiming(sw, "groupStats");
 
             // Restore full thread set from cache (not just threads in the sub-range)
             m_AllThreadNames.Clear();
@@ -1883,20 +1945,10 @@ namespace GCAllocBreakdown.Editor
             m_Snapshot.SortedThreadNames.Sort(StringComparer.Ordinal);
             UpdateThreadButtonLabel();
 
-            // Rebuild groupings using integer indices (avoids rehashing long string keys)
-            RebuildGroupingByIndex(true, m_FrameStore.CachedGroupsByFullCallstack,
-                m_Snapshot.GroupsByFullCallstack);
-            LogTiming(sw, "groupFull");
-            RebuildGroupingByIndex(false, m_FrameStore.CachedGroupsByTopFrame,
-                m_Snapshot.GroupsByTopFrame);
-            LogTiming(sw, "groupTop");
-            ComputeSnapshotPerFrameBytes();
-            LogTiming(sw, "perFrame");
-
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
-            BuildThreadIndex(m_ActiveGroups);
-            BuildTopOffenders();
+            // Skip BuildThreadIndex — full-range index is a safe superset for thread filtering
+            BuildTopOffenders_GroupsOnly();
             LogTiming(sw, "topOff");
             ApplyFilters();
             LogTiming(sw, "applyFilter");
@@ -1956,7 +2008,10 @@ namespace GCAllocBreakdown.Editor
             m_TimingLog.Clear();
             m_TimingLog.Append("[GCAllocAnalyzer] RebuildFromCacheWithBuffer: ");
 
+            var cached = m_FrameStore.CachedRawAllocations;
             m_Snapshot.RawAllocations.Clear();
+            if (m_Snapshot.RawAllocations.Capacity < cached.Count)
+                m_Snapshot.RawAllocations.Capacity = cached.Count;
             m_SelectedThreads.Clear();
             m_ThreadAllocCounts.Clear();
             long totalBytes = 0;
@@ -1970,29 +2025,90 @@ namespace GCAllocBreakdown.Editor
                 if (frameBuffer[i]) selectedFrameCount++;
             }
 
-            // Filter cached allocations by frame buffer membership
-            var cached = m_FrameStore.CachedRawAllocations;
+            // Prepare group slots and per-frame array before single-pass loop
+            InitGroupSlots(m_FrameStore.CachedGroupsByFullCallstack, m_Snapshot.GroupsByFullCallstack);
+            InitGroupSlots(m_FrameStore.CachedGroupsByTopFrame, m_Snapshot.GroupsByTopFrame);
+
+            int frameCount = endFrame - startFrame + 1;
+            if (m_Snapshot.PerFrameBytes == null || m_Snapshot.PerFrameBytes.Length < frameCount)
+                m_Snapshot.PerFrameBytes = new long[frameCount];
+            else
+                Array.Clear(m_Snapshot.PerFrameBytes, 0, frameCount);
+
+            m_TopSingleAllocs.Clear();
+            var fullTarget = m_Snapshot.GroupsByFullCallstack;
+            var topTarget = m_Snapshot.GroupsByTopFrame;
+            bool showAsm = m_ShowAssembly;
+
+            // Single-pass: filter + distribute to both groupings + perFrame + top single allocs
             for (int i = 0; i < cached.Count; i++)
             {
                 var alloc = cached[i];
-                int idx = alloc.FrameIndex - baseFrame;
-                if (idx < 0 || idx >= bufferLen || !frameBuffer[idx])
+                int bufIdx = alloc.FrameIndex - baseFrame;
+                if (bufIdx < 0 || bufIdx >= bufferLen || !frameBuffer[bufIdx])
                     continue;
 
                 m_Snapshot.RawAllocations.Add(alloc);
-                totalBytes += alloc.Bytes;
+                long bytes = alloc.Bytes;
+                totalBytes += bytes;
                 if (alloc.ResolvedCallStack != null && alloc.ResolvedCallStack.Count > 0)
                     anyCallStacks = true;
 
-                // Track per-thread counts
+                // Thread counts
                 string td = alloc.ThreadDisplayName;
                 if (m_ThreadAllocCounts.TryGetValue(td, out int prev))
                     m_ThreadAllocCounts[td] = prev + 1;
                 else
                     m_ThreadAllocCounts[td] = 1;
+
+                // Distribute to full-callstack groups
+                int fullIdx = alloc.FullCallstackGroupIndex;
+                if (fullIdx >= 0 && fullIdx < fullTarget.Count)
+                {
+                    var gFull = fullTarget[fullIdx];
+                    if (gFull.Count == 0)
+                        gFull.DisplayName = showAsm ? alloc.DisplayNameWithAssembly : alloc.DisplayName;
+                    gFull.TotalBytes += bytes;
+                    gFull.Count++;
+                    gFull.Allocations.Add(alloc);
+                }
+
+                // Distribute to top-frame groups
+                int topIdx = alloc.TopFrameGroupIndex;
+                if (topIdx >= 0 && topIdx < topTarget.Count)
+                {
+                    var gTop = topTarget[topIdx];
+                    if (gTop.Count == 0)
+                        gTop.DisplayName = showAsm ? alloc.DisplayNameWithAssembly : alloc.DisplayName;
+                    gTop.TotalBytes += bytes;
+                    gTop.Count++;
+                    gTop.Allocations.Add(alloc);
+                }
+
+                // Per-frame bytes
+                int pfIdx = alloc.FrameIndex - startFrame;
+                if (pfIdx >= 0 && pfIdx < frameCount)
+                    m_Snapshot.PerFrameBytes[pfIdx] += bytes;
+
+                // Track top 10 single largest allocations
+                if (m_TopSingleAllocs.Count < 10)
+                    InsertSorted(m_TopSingleAllocs, alloc);
+                else if (bytes > m_TopSingleAllocs[m_TopSingleAllocs.Count - 1].Bytes)
+                {
+                    m_TopSingleAllocs.RemoveAt(m_TopSingleAllocs.Count - 1);
+                    InsertSorted(m_TopSingleAllocs, alloc);
+                }
             }
 
-            LogTiming(sw, "filter");
+            LogTiming(sw, "singlePass");
+
+            // Finalize groups: remove empty slots, compute stats
+            RemoveEmptyGroups(fullTarget);
+            RemoveEmptyGroups(topTarget);
+            long total = totalBytes > 0 ? totalBytes : 1;
+            ComputeGroupStats(fullTarget, total);
+            ComputeGroupStats(topTarget, total);
+            LogTiming(sw, "groupStats");
 
             // Restore full thread set from cache
             m_AllThreadNames.Clear();
@@ -2016,20 +2132,10 @@ namespace GCAllocBreakdown.Editor
             m_Snapshot.SortedThreadNames.Sort(StringComparer.Ordinal);
             UpdateThreadButtonLabel();
 
-            // Rebuild groupings using integer indices (avoids rehashing long string keys)
-            RebuildGroupingByIndex(true, m_FrameStore.CachedGroupsByFullCallstack,
-                m_Snapshot.GroupsByFullCallstack);
-            LogTiming(sw, "groupFull");
-            RebuildGroupingByIndex(false, m_FrameStore.CachedGroupsByTopFrame,
-                m_Snapshot.GroupsByTopFrame);
-            LogTiming(sw, "groupTop");
-            ComputeSnapshotPerFrameBytes();
-            LogTiming(sw, "perFrame");
-
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
-            BuildThreadIndex(m_ActiveGroups);
-            BuildTopOffenders();
+            // Skip BuildThreadIndex — full-range index is a safe superset for thread filtering
+            BuildTopOffenders_GroupsOnly();
             LogTiming(sw, "topOff");
             ApplyFilters();
             LogTiming(sw, "applyFilter");
@@ -2091,6 +2197,36 @@ namespace GCAllocBreakdown.Editor
         //  GROUPING — builds into target list, no LINQ
         // ═══════════════════════════════════════════════════
 
+        /// <summary>
+        /// Create empty group slots matching source group templates.
+        /// Used before the single-pass filter+distribute loop.
+        /// </summary>
+        void InitGroupSlots(List<CallsiteGroup> sourceGroups, List<CallsiteGroup> target)
+        {
+            target.Clear();
+            for (int i = 0; i < sourceGroups.Count; i++)
+            {
+                var src = sourceGroups[i];
+                // Pre-size Allocations from source group to avoid repeated list growth
+                int capacity = src.Allocations != null ? src.Allocations.Count : 16;
+                target.Add(new CallsiteGroup
+                {
+                    Key = src.Key,
+                    ResolvedCallStack = src.ResolvedCallStack,
+                    Allocations = new List<RawAllocation>(capacity)
+                });
+            }
+        }
+
+        static void RemoveEmptyGroups(List<CallsiteGroup> groups)
+        {
+            for (int i = groups.Count - 1; i >= 0; i--)
+            {
+                if (groups[i].Count == 0)
+                    groups.RemoveAt(i);
+            }
+        }
+
         void BuildGrouping(bool byFullCallstack, List<CallsiteGroup> target)
         {
             target.Clear();
@@ -2131,63 +2267,6 @@ namespace GCAllocBreakdown.Editor
                 g.TotalBytes += alloc.Bytes;
                 g.Count++;
                 g.Allocations.Add(alloc);
-            }
-
-            ComputeGroupStats(target, total);
-        }
-
-        /// <summary>
-        /// Rebuild grouping using pre-stamped integer group indices instead of
-        /// string dictionary lookups. sourceGroups provides the group templates
-        /// (Key, DisplayName, ResolvedCallStack) from the initial full analysis.
-        /// </summary>
-        void RebuildGroupingByIndex(bool byFullCallstack, List<CallsiteGroup> sourceGroups,
-            List<CallsiteGroup> target)
-        {
-            int groupCount = sourceGroups.Count;
-            long total = m_Snapshot.TotalBytes > 0 ? m_Snapshot.TotalBytes : 1;
-
-            // Create group slots matching source indices
-            target.Clear();
-            for (int i = 0; i < groupCount; i++)
-            {
-                var src = sourceGroups[i];
-                target.Add(new CallsiteGroup
-                {
-                    Key = src.Key,
-                    ResolvedCallStack = src.ResolvedCallStack,
-                    Allocations = new List<RawAllocation>(16)
-                });
-            }
-
-            // Distribute allocations by pre-stamped integer index
-            for (int i = 0; i < m_Snapshot.RawAllocations.Count; i++)
-            {
-                var alloc = m_Snapshot.RawAllocations[i];
-                int idx = byFullCallstack
-                    ? alloc.FullCallstackGroupIndex
-                    : alloc.TopFrameGroupIndex;
-
-                if (idx < 0 || idx >= target.Count)
-                {
-                    Debug.LogError($"[GCAllocAnalyzer] RebuildGroupingByIndex: idx={idx} out of range [0,{target.Count}) " +
-                        $"byFullCallstack={byFullCallstack} sourceGroups.Count={sourceGroups.Count} " +
-                        $"alloc i={i} FrameIndex={alloc.FrameIndex} FullIdx={alloc.FullCallstackGroupIndex} TopIdx={alloc.TopFrameGroupIndex}");
-                    continue;
-                }
-                var g = target[idx];
-                if (g.Count == 0)
-                    g.DisplayName = m_ShowAssembly ? alloc.DisplayNameWithAssembly : alloc.DisplayName;
-                g.TotalBytes += alloc.Bytes;
-                g.Count++;
-                g.Allocations.Add(alloc);
-            }
-
-            // Remove groups with zero allocations in this sub-range
-            for (int i = target.Count - 1; i >= 0; i--)
-            {
-                if (target[i].Count == 0)
-                    target.RemoveAt(i);
             }
 
             ComputeGroupStats(target, total);
@@ -2782,6 +2861,22 @@ namespace GCAllocBreakdown.Editor
                     InsertSorted(m_TopSingleAllocs, a);
                 }
             }
+
+            PopulateTopOffendersUI();
+        }
+
+        /// <summary>
+        /// Groups-only variant for use after single-pass loop where
+        /// m_TopSingleAllocs is already populated during the main pass.
+        /// </summary>
+        void BuildTopOffenders_GroupsOnly()
+        {
+            m_TopByTotalBytes.Clear();
+            for (int i = 0; i < m_ActiveGroups.Count; i++)
+                m_TopByTotalBytes.Add(m_ActiveGroups[i]);
+            m_TopByTotalBytes.Sort((a, b) => b.TotalBytes.CompareTo(a.TotalBytes));
+            if (m_TopByTotalBytes.Count > 10)
+                m_TopByTotalBytes.RemoveRange(10, m_TopByTotalBytes.Count - 10);
 
             PopulateTopOffendersUI();
         }
