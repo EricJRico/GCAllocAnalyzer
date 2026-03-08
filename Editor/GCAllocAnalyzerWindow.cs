@@ -220,6 +220,19 @@ namespace GCAllocBreakdown.Editor
             public ulong Id;
         }
         readonly Dictionary<int, CachedThreadInfo> m_ThreadInfoCache = new(32);
+
+        // Depth-stack cache — when call stacks are unavailable, allocations at
+        // the same hierarchy position share identical derived strings.  Keyed
+        // by a hash of the depth-stack marker-ID sequence.
+        struct CachedDepthInfo
+        {
+            public string HierarchyPath;
+            public string ParentMethod;
+            public string DisplayName;
+            public string DisplayNameWithAssembly;
+            public string GroupKey; // "no_cs|" + parentMethod — reused as both FullCallstackKey and TopFrameKey
+        }
+        readonly Dictionary<long, CachedDepthInfo> m_DepthStackCache = new(256);
         string[] m_FormattedFrameStrs;
         static readonly List<ResolvedFrame> k_EmptyFrameList = new(0);
         long m_StackCacheHits;
@@ -1463,6 +1476,7 @@ namespace GCAllocBreakdown.Editor
             m_ThreadIndexNames.Clear();
             m_ThreadIndexLookup.Clear();
             m_ThreadInfoCache.Clear();
+            m_DepthStackCache.Clear();
             m_MethodInfoCache.Clear();
             m_CallStackCache.Clear();
             m_FormattedBytesCache.Clear();
@@ -1699,20 +1713,47 @@ namespace GCAllocBreakdown.Editor
                                 }
                                 else
                                 {
-                                    // No call stacks — resolve depth stack names lazily
+                                    // No call stacks — cache by depth-stack marker-ID sequence
                                     resolvedFrames = k_EmptyFrameList;
-                                    fullCallstackKey = "";
-                                    topFrameKey = "";
+
+                                    long depthHash = m_DepthStack.Count;
                                     for (int d = 0; d < m_DepthStack.Count; d++)
+                                        depthHash = depthHash * 6364136223846793005L + m_DepthStack[d].MarkerId;
+
+                                    if (m_DepthStackCache.TryGetValue(depthHash, out var di))
                                     {
-                                        if (m_DepthStack[d].Name == null)
-                                            m_DepthStack[d].Name = raw.GetMarkerName(m_DepthStack[d].MarkerId);
+                                        hierarchyPath = di.HierarchyPath;
+                                        parentMethod = di.ParentMethod;
+                                        displayName = di.DisplayName;
+                                        displayNameWithAssembly = di.DisplayNameWithAssembly;
+                                        fullCallstackKey = di.GroupKey;
+                                        topFrameKey = di.GroupKey;
                                     }
-                                    hierarchyPath = BuildHierarchyPath(m_DepthStack);
-                                    parentMethod = m_DepthStack.Count > 0
-                                        ? m_DepthStack[m_DepthStack.Count - 1].Name : "<root>";
-                                    displayName = GCAllocUtils.StripAssembly(parentMethod);
-                                    displayNameWithAssembly = GCAllocUtils.StripLeadingColons(parentMethod);
+                                    else
+                                    {
+                                        for (int d = 0; d < m_DepthStack.Count; d++)
+                                        {
+                                            if (m_DepthStack[d].Name == null)
+                                                m_DepthStack[d].Name = raw.GetMarkerName(m_DepthStack[d].MarkerId);
+                                        }
+                                        hierarchyPath = BuildHierarchyPath(m_DepthStack);
+                                        parentMethod = m_DepthStack.Count > 0
+                                            ? m_DepthStack[m_DepthStack.Count - 1].Name : "<root>";
+                                        displayName = GCAllocUtils.StripAssembly(parentMethod);
+                                        displayNameWithAssembly = GCAllocUtils.StripLeadingColons(parentMethod);
+                                        string groupKey = string.Concat("no_cs|", parentMethod);
+                                        fullCallstackKey = groupKey;
+                                        topFrameKey = groupKey;
+
+                                        m_DepthStackCache[depthHash] = new CachedDepthInfo
+                                        {
+                                            HierarchyPath = hierarchyPath,
+                                            ParentMethod = parentMethod,
+                                            DisplayName = displayName,
+                                            DisplayNameWithAssembly = displayNameWithAssembly,
+                                            GroupKey = groupKey
+                                        };
+                                    }
                                 }
 
                                 m_SwStackCacheLookup.Stop();
@@ -1873,14 +1914,15 @@ namespace GCAllocBreakdown.Editor
                 "    GetRawFrameDataView:  ", m_SwFrameDataView.ElapsedMilliseconds.ToString("N0"), "ms\n",
                 "    Per-thread overhead:  ", m_SwPerThreadOverhead.ElapsedMilliseconds.ToString("N0"), "ms\n",
                 "    Sample iteration:     ", m_SwSampleIteration.ElapsedMilliseconds.ToString("N0"), "ms\n",
-                "    Stack cache lookup:   ", m_SwStackCacheLookup.ElapsedMilliseconds.ToString("N0"), "ms\n",
+                "    Stack cache lookup:   ", m_SwStackCacheLookup.ElapsedMilliseconds.ToString("N0"), "ms",
+                "  (call stacks: ", m_CallStackCache.Count.ToString("N0"), " unique",
+                " | depth stacks: ", m_DepthStackCache.Count.ToString("N0"), " unique)\n",
                 "    ResolveMethodInfo:    ", m_SwResolveMethod.ElapsedMilliseconds.ToString("N0"), "ms",
                 "  (calls: ", m_ResolveCallCount.ToString("N0"),
                 " | cached: ", m_ResolveCacheHits.ToString("N0"),
                 " | miss: ", resolveMisses.ToString("N0"), ")\n",
                 "    Object allocation:    ", m_SwObjectAlloc.ElapsedMilliseconds.ToString("N0"), "ms",
-                "  (stacks: ", m_CallStackCache.Count.ToString("N0"), " unique",
-                " | deduped: ", m_StackCacheHits.ToString("N0"),
+                "  (deduped stacks: ", m_StackCacheHits.ToString("N0"),
                 " | bytes formats: ", m_FormattedBytesCache.Count.ToString("N0"), ")\n",
                 "    Thread tracking:      ", m_SwThreadTracking.ElapsedMilliseconds.ToString("N0"), "ms\n",
                 "    Unaccounted gap:      ", extractionGap.ToString("N0"), "ms\n",
@@ -2364,12 +2406,7 @@ namespace GCAllocBreakdown.Editor
             for (int i = 0; i < m_Snapshot.RawAllocations.Count; i++)
             {
                 var alloc = m_Snapshot.RawAllocations[i];
-                string key;
-
-                if (alloc.ResolvedCallStack.Count > 0)
-                    key = byFullCallstack ? alloc.FullCallstackKey : alloc.TopFrameKey;
-                else
-                    key = string.Concat("no_cs|", alloc.ParentMethod);
+                string key = byFullCallstack ? alloc.FullCallstackKey : alloc.TopFrameKey;
 
                 if (!m_GroupingDict.TryGetValue(key, out var g))
                 {
@@ -3143,8 +3180,6 @@ namespace GCAllocBreakdown.Editor
 
             // Find the group this alloc belongs to and select it
             string key = m_GroupByCallsite.value ? alloc.FullCallstackKey : alloc.TopFrameKey;
-            if (alloc.ResolvedCallStack == null || alloc.ResolvedCallStack.Count == 0)
-                key = string.Concat("no_cs|", alloc.ParentMethod);
 
             for (int i = 0; i < m_FilteredGroups.Count; i++)
             {
