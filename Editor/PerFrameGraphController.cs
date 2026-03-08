@@ -498,7 +498,7 @@ namespace GCAllocBreakdown.Editor
             PositionGridLineLabels();
 
             // ── Y-axis reset button visibility ──
-            m_YAxisResetBtn.style.display = m_HasCustomYScale ? DisplayStyle.Flex : DisplayStyle.None;
+            m_YAxisResetBtn.SetEnabled(m_HasCustomYScale);
 
             // ── Reset tooltip cache (stale after rebuild) ──
             m_LastTooltipBar = -1;
@@ -709,22 +709,82 @@ namespace GCAllocBreakdown.Editor
                 }
             };
 
-            var header = new Label("Per-Frame Graph")
+            var headerRow = new VisualElement
             {
                 style =
                 {
-                    fontSize = 12,
-                    unityFontStyleAndWeight = FontStyle.Bold,
+                    flexDirection = FlexDirection.Row,
+                    alignItems = Align.Center,
                     backgroundColor = new Color(0.25f, 0.25f, 0.25f),
-                    paddingTop = 3,
-                    paddingBottom = 3,
+                    paddingTop = 4,
+                    paddingBottom = 4,
                     paddingLeft = 4,
+                    paddingRight = 4,
                     marginBottom = 2,
                     borderBottomWidth = 1,
                     borderBottomColor = new Color(0.15f, 0.15f, 0.15f)
                 }
             };
-            m_GraphSection.Add(header);
+            headerRow.Add(new Label("Per-Frame Graph")
+            {
+                style =
+                {
+                    fontSize = 12,
+                    unityFontStyleAndWeight = FontStyle.Bold,
+                    flexGrow = 1
+                }
+            });
+
+            m_YAxisResetBtn = new Button(ResetYAxisScale)
+            {
+                text = "Reset Y",
+                tooltip = "Reset Y-axis to auto-fit",
+                style =
+                {
+                    fontSize = 10,
+                    paddingLeft = 4,
+                    paddingRight = 4,
+                    paddingTop = 1,
+                    paddingBottom = 1,
+                    marginRight = 4
+                }
+            };
+            m_YAxisResetBtn.SetEnabled(false);
+            headerRow.Add(m_YAxisResetBtn);
+
+            m_SortToggleBtn = new Button(OnSortToggleClicked)
+            {
+                text = "Order by Size",
+                tooltip = "Toggle between frame order and order by allocation size (descending)",
+                style =
+                {
+                    fontSize = 10,
+                    paddingLeft = 4,
+                    paddingRight = 4,
+                    paddingTop = 1,
+                    paddingBottom = 1,
+                    marginRight = 4
+                }
+            };
+            headerRow.Add(m_SortToggleBtn);
+
+            m_ResetBtn = new Button(() => { ResetYAxisScale(); ResetViewport(); OnResetRequested?.Invoke(); })
+            {
+                text = "Reset to Full Range",
+                tooltip = "Restore full-range analysis from cache (instant)",
+                style =
+                {
+                    fontSize = 10,
+                    paddingLeft = 4,
+                    paddingRight = 4,
+                    paddingTop = 1,
+                    paddingBottom = 1
+                }
+            };
+            m_ResetBtn.SetEnabled(false);
+            headerRow.Add(m_ResetBtn);
+
+            m_GraphSection.Add(headerRow);
 
             // ── Overview strip (separate row above main graph) ──
             var overviewRow = new VisualElement
@@ -828,24 +888,6 @@ namespace GCAllocBreakdown.Editor
             m_YAxisElement.RegisterCallback<PointerMoveEvent>(OnYAxisPointerMove);
             m_YAxisElement.RegisterCallback<PointerUpEvent>(OnYAxisPointerUp);
 
-            m_YAxisResetBtn = new Button(ResetYAxisScale)
-            {
-                text = "Reset Y",
-                tooltip = "Reset Y-axis to auto-fit",
-                style =
-                {
-                    fontSize = 9,
-                    paddingLeft = 3,
-                    paddingRight = 3,
-                    paddingTop = 1,
-                    paddingBottom = 1,
-                    position = Position.Absolute,
-                    bottom = k_GraphXAxisHeight + 2,
-                    left = 2,
-                    display = DisplayStyle.None
-                }
-            };
-
             m_GraphRoot.Add(yAxis);
 
             // ── Chart area (right side, fills remaining width) ──
@@ -881,27 +923,6 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.RegisterCallback<PointerUpEvent>(OnGraphPanPointerUp);
 
             chartColumn.Add(m_GraphElement);
-            chartColumn.Add(m_YAxisResetBtn);
-
-            // ── Reset button (inline, only visible during sub-range) ──
-            m_ResetBtn = new Button(() => { ResetYAxisScale(); ResetViewport(); OnResetRequested?.Invoke(); })
-            {
-                text = "Reset to Full Range",
-                tooltip = "Restore full-range analysis from cache (instant)",
-                style =
-                {
-                    fontSize = 10,
-                    paddingLeft = 6,
-                    paddingRight = 6,
-                    paddingTop = 2,
-                    paddingBottom = 2,
-                    position = Position.Absolute,
-                    top = 4,
-                    right = 4,
-                    display = DisplayStyle.None
-                }
-            };
-            m_GraphElement.Add(m_ResetBtn);
 
             // ── Floating tooltip (positioned at mouse cursor) ──
             m_FloatingTooltip = new Label
@@ -976,30 +997,12 @@ namespace GCAllocBreakdown.Editor
                     marginRight = 8
                 }
             };
-            m_SortToggleBtn = new Button(OnSortToggleClicked)
-            {
-                text = "Order by Size",
-                tooltip = "Toggle between frame order and order by allocation size (descending)",
-                style =
-                {
-                    fontSize = 10,
-                    paddingLeft = 4,
-                    paddingRight = 4,
-                    paddingTop = 0,
-                    paddingBottom = 0,
-                    height = k_GraphXAxisHeight,
-                    flexShrink = 0,
-                    marginRight = 4
-                }
-            };
-
             m_GraphXEnd = new Label("\u2014")
             {
                 style = { fontSize = 10, color = k_DimGray, flexShrink = 0 }
             };
             xAxis.Add(m_GraphXStart);
             xAxis.Add(m_GraphOverlayLabel);
-            xAxis.Add(m_SortToggleBtn);
             xAxis.Add(m_GraphXEnd);
             chartColumn.Add(xAxis);
 
@@ -1023,10 +1026,22 @@ namespace GCAllocBreakdown.Editor
         void OnGraphGeometryChanged(GeometryChangedEvent evt)
         {
             if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
-            float oldW = evt.oldRect.width;
-            float newW = evt.newRect.width;
-            if (Mathf.Abs(newW - oldW) < 2f) return;
-            RebuildGraph();
+            bool widthChanged = Mathf.Abs(evt.newRect.width - evt.oldRect.width) >= 2f;
+            bool heightChanged = Mathf.Abs(evt.newRect.height - evt.oldRect.height) >= 2f;
+            if (!widthChanged && !heightChanged) return;
+
+            if (widthChanged)
+            {
+                RebuildGraph();
+            }
+            else
+            {
+                // Height-only change (split view resize): recompute grid lines + reposition labels
+                ComputeGridLines(m_YPanOffset, m_YAxisMax, ActualGraphHeight);
+                m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
+                PositionGridLineLabels();
+                m_GraphElement.MarkDirtyRepaint();
+            }
         }
 
         void OnGraphKeyDown(KeyDownEvent evt)
@@ -1151,7 +1166,7 @@ namespace GCAllocBreakdown.Editor
 
             PositionGridLineLabels();
 
-            m_YAxisResetBtn.style.display = m_HasCustomYScale ? DisplayStyle.Flex : DisplayStyle.None;
+            m_YAxisResetBtn.SetEnabled(m_HasCustomYScale);
 
             m_LastTooltipBar = -1;
             m_LastTooltipY = -1f;
@@ -1702,7 +1717,7 @@ namespace GCAllocBreakdown.Editor
                 && (m_AnalyzedFrameStart != m_FrameStore.FullFrameStart
                     || m_AnalyzedFrameEnd != m_FrameStore.FullFrameEnd);
 
-            m_ResetBtn.style.display = isSubRange ? DisplayStyle.Flex : DisplayStyle.None;
+            m_ResetBtn.SetEnabled(isSubRange);
         }
 
 
