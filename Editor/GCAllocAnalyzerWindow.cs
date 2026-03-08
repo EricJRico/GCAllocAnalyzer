@@ -151,6 +151,7 @@ namespace GCAllocBreakdown.Editor
         readonly HashSet<string> m_SelectedThreads = new();
         readonly Dictionary<string, int> m_ThreadAllocCounts = new(32);
         readonly List<string> m_ThreadIndexNames = new(32); // dense index → thread display name
+        readonly Dictionary<string, int> m_ThreadIndexLookup = new(32); // thread display name → dense index
         int[] m_ThreadCountBuffer;                           // reusable buffer for int[]-based counting
 
         // Thread index: group key → set of thread names (built once per grouping)
@@ -186,7 +187,12 @@ namespace GCAllocBreakdown.Editor
         readonly Stopwatch m_SwResolveMethod = new();
         readonly Stopwatch m_SwObjectAlloc = new();
         readonly Stopwatch m_SwGrouping = new();
+        readonly Stopwatch m_SwGroupingLoop = new();
+        readonly Stopwatch m_SwGroupingStats = new();
         readonly Stopwatch m_SwPerFrame = new();
+        readonly Stopwatch m_SwPerThreadOverhead = new();
+        readonly Stopwatch m_SwStackCacheLookup = new();
+        readonly Stopwatch m_SwThreadTracking = new();
         long m_ResolveCallCount;
         long m_ResolveCacheHits;
 
@@ -203,6 +209,17 @@ namespace GCAllocBreakdown.Editor
         }
         readonly Dictionary<long, CachedCallStack> m_CallStackCache = new(512);
         readonly Dictionary<long, string> m_FormattedBytesCache = new(256);
+
+        // Per-thread info cache — avoids redundant property reads + StringBuilder
+        // ops for the same threadIdx across frames (threadIdx → cached info).
+        struct CachedThreadInfo
+        {
+            public string DisplayName;
+            public string Name;
+            public string GroupName;
+            public ulong Id;
+        }
+        readonly Dictionary<int, CachedThreadInfo> m_ThreadInfoCache = new(32);
         string[] m_FormattedFrameStrs;
         static readonly List<ResolvedFrame> k_EmptyFrameList = new(0);
         long m_StackCacheHits;
@@ -1444,6 +1461,8 @@ namespace GCAllocBreakdown.Editor
             m_SelectedThreads.Clear();
             m_ThreadAllocCounts.Clear();
             m_ThreadIndexNames.Clear();
+            m_ThreadIndexLookup.Clear();
+            m_ThreadInfoCache.Clear();
             m_MethodInfoCache.Clear();
             m_CallStackCache.Clear();
             m_FormattedBytesCache.Clear();
@@ -1486,6 +1505,9 @@ namespace GCAllocBreakdown.Editor
             m_SwSampleIteration.Reset();
             m_SwResolveMethod.Reset();
             m_SwObjectAlloc.Reset();
+            m_SwPerThreadOverhead.Reset();
+            m_SwStackCacheLookup.Reset();
+            m_SwThreadTracking.Reset();
 
             try
             {
@@ -1511,23 +1533,45 @@ namespace GCAllocBreakdown.Editor
 
                         if (!raw.valid) continue;
 
+                        m_SwPerThreadOverhead.Start();
+
                         int gcAllocId = raw.GetMarkerId("GC.Alloc");
-                        if (gcAllocId == FrameDataView.invalidMarkerId) continue;
-
-                        string threadName = raw.threadName;
-                        string threadGroup = raw.threadGroupName;
-                        ulong threadId = raw.threadId;
-
-                        m_SharedSB.Clear();
-                        if (!string.IsNullOrEmpty(threadGroup))
+                        if (gcAllocId == FrameDataView.invalidMarkerId)
                         {
-                            m_SharedSB.Append(threadGroup);
-                            m_SharedSB.Append('.');
+                            m_SwPerThreadOverhead.Stop();
+                            continue;
                         }
-                        m_SharedSB.Append(threadName);
-                        string threadDisplay = m_SharedSB.ToString();
+
+                        // Cache thread info per threadIdx — same index always
+                        // returns the same name/group/id across frames.
+                        if (!m_ThreadInfoCache.TryGetValue(threadIdx, out var threadInfo))
+                        {
+                            string tn = raw.threadName;
+                            string tg = raw.threadGroupName;
+                            m_SharedSB.Clear();
+                            if (!string.IsNullOrEmpty(tg))
+                            {
+                                m_SharedSB.Append(tg);
+                                m_SharedSB.Append('.');
+                            }
+                            m_SharedSB.Append(tn);
+                            threadInfo = new CachedThreadInfo
+                            {
+                                DisplayName = m_SharedSB.ToString(),
+                                Name = tn,
+                                GroupName = tg,
+                                Id = raw.threadId
+                            };
+                            m_ThreadInfoCache[threadIdx] = threadInfo;
+                        }
+
+                        string threadDisplay = threadInfo.DisplayName;
+                        string threadName = threadInfo.Name;
+                        string threadGroup = threadInfo.GroupName;
+                        ulong threadId = threadInfo.Id;
 
                         m_DepthStack.Clear();
+                        m_SwPerThreadOverhead.Stop();
 
                         m_SwSampleIteration.Start();
                         for (int i = 0; i < raw.sampleCount; i++)
@@ -1553,6 +1597,7 @@ namespace GCAllocBreakdown.Editor
                                 raw.GetSampleCallstack(i, m_AddrBuffer);
 
                                 m_SwSampleIteration.Stop();
+                                m_SwStackCacheLookup.Start();
 
                                 // ── Fast path: check call stack cache BEFORE resolving
                                 // individual methods.  With ~373 unique stacks across
@@ -1670,6 +1715,7 @@ namespace GCAllocBreakdown.Editor
                                     displayNameWithAssembly = GCAllocUtils.StripLeadingColons(parentMethod);
                                 }
 
+                                m_SwStackCacheLookup.Stop();
                                 m_SwObjectAlloc.Start();
 
                                 // Cache formatted byte strings
@@ -1703,6 +1749,7 @@ namespace GCAllocBreakdown.Editor
                                 m_Snapshot.RawAllocations.Add(alloc);
 
                                 m_SwObjectAlloc.Stop();
+                                m_SwThreadTracking.Start();
 
                                 // Track thread only when it has real allocations
                                 m_AllThreadNames.Add(threadDisplay);
@@ -1712,14 +1759,15 @@ namespace GCAllocBreakdown.Editor
                                     m_ThreadAllocCounts[threadDisplay] = 1;
 
                                 // Stamp dense thread index for fast sub-range counting
-                                int denseIdx = m_ThreadIndexNames.IndexOf(threadDisplay);
-                                if (denseIdx < 0)
+                                if (!m_ThreadIndexLookup.TryGetValue(threadDisplay, out int denseIdx))
                                 {
                                     denseIdx = m_ThreadIndexNames.Count;
                                     m_ThreadIndexNames.Add(threadDisplay);
+                                    m_ThreadIndexLookup[threadDisplay] = denseIdx;
                                 }
                                 alloc.ThreadAllocCountIndex = denseIdx;
 
+                                m_SwThreadTracking.Stop();
                                 m_SwSampleIteration.Start();
                             }
 
@@ -1763,6 +1811,8 @@ namespace GCAllocBreakdown.Editor
 
             // ── Phase 3: Grouping ──
             m_SwGrouping.Restart();
+            m_SwGroupingLoop.Reset();
+            m_SwGroupingStats.Reset();
             BuildGrouping(true, m_Snapshot.GroupsByFullCallstack);
             BuildGrouping(false, m_Snapshot.GroupsByTopFrame);
             m_SwGrouping.Stop();
@@ -1806,13 +1856,24 @@ namespace GCAllocBreakdown.Editor
             // ── Timing report ──
             long resolveMisses = m_ResolveCallCount - m_ResolveCacheHits;
             long stackCacheMisses = m_Snapshot.TotalCount - m_StackCacheHits;
+            long extractionAccounted = m_SwFrameDataView.ElapsedMilliseconds
+                + m_SwPerThreadOverhead.ElapsedMilliseconds
+                + m_SwSampleIteration.ElapsedMilliseconds
+                + m_SwStackCacheLookup.ElapsedMilliseconds
+                + m_SwResolveMethod.ElapsedMilliseconds
+                + m_SwObjectAlloc.ElapsedMilliseconds
+                + m_SwThreadTracking.ElapsedMilliseconds;
+            long extractionGap = m_SwExtraction.ElapsedMilliseconds - extractionAccounted;
+
             Debug.Log(string.Concat(
                 "[GCAllocAnalyzer] Analysis complete in ", m_SwTotal.ElapsedMilliseconds.ToString("N0"), "ms\n",
                 "  Thread pre-scan:     ", m_SwThreadScan.ElapsedMilliseconds.ToString("N0"), "ms\n",
                 "  Frame extraction: ", m_SwExtraction.ElapsedMilliseconds.ToString("N0"), "ms",
                 "  (", totalFrames.ToString("N0"), " frames, ", gcThreadIndices.Count.ToString(), " GC threads)\n",
                 "    GetRawFrameDataView:  ", m_SwFrameDataView.ElapsedMilliseconds.ToString("N0"), "ms\n",
+                "    Per-thread overhead:  ", m_SwPerThreadOverhead.ElapsedMilliseconds.ToString("N0"), "ms\n",
                 "    Sample iteration:     ", m_SwSampleIteration.ElapsedMilliseconds.ToString("N0"), "ms\n",
+                "    Stack cache lookup:   ", m_SwStackCacheLookup.ElapsedMilliseconds.ToString("N0"), "ms\n",
                 "    ResolveMethodInfo:    ", m_SwResolveMethod.ElapsedMilliseconds.ToString("N0"), "ms",
                 "  (calls: ", m_ResolveCallCount.ToString("N0"),
                 " | cached: ", m_ResolveCacheHits.ToString("N0"),
@@ -1821,7 +1882,11 @@ namespace GCAllocBreakdown.Editor
                 "  (stacks: ", m_CallStackCache.Count.ToString("N0"), " unique",
                 " | deduped: ", m_StackCacheHits.ToString("N0"),
                 " | bytes formats: ", m_FormattedBytesCache.Count.ToString("N0"), ")\n",
-                "  BuildGrouping:        ", m_SwGrouping.ElapsedMilliseconds.ToString("N0"), "ms\n",
+                "    Thread tracking:      ", m_SwThreadTracking.ElapsedMilliseconds.ToString("N0"), "ms\n",
+                "    Unaccounted gap:      ", extractionGap.ToString("N0"), "ms\n",
+                "  BuildGrouping:        ", m_SwGrouping.ElapsedMilliseconds.ToString("N0"), "ms",
+                "  (loop: ", m_SwGroupingLoop.ElapsedMilliseconds.ToString("N0"), "ms",
+                " | stats: ", m_SwGroupingStats.ElapsedMilliseconds.ToString("N0"), "ms)\n",
                 "  ComputePerFrame:      ", m_SwPerFrame.ElapsedMilliseconds.ToString("N0"), "ms\n",
                 "  Total allocations: ", m_Snapshot.TotalCount.ToString("N0"),
                 " | Unique addresses: ", m_MethodInfoCache.Count.ToString("N0")));
@@ -2295,6 +2360,7 @@ namespace GCAllocBreakdown.Editor
 
             long total = m_Snapshot.TotalBytes > 0 ? m_Snapshot.TotalBytes : 1;
 
+            m_SwGroupingLoop.Start();
             for (int i = 0; i < m_Snapshot.RawAllocations.Count; i++)
             {
                 var alloc = m_Snapshot.RawAllocations[i];
@@ -2329,8 +2395,11 @@ namespace GCAllocBreakdown.Editor
                 g.Count++;
                 g.Allocations.Add(alloc);
             }
+            m_SwGroupingLoop.Stop();
 
+            m_SwGroupingStats.Start();
             ComputeGroupStats(target, total);
+            m_SwGroupingStats.Stop();
         }
 
         void ComputeGroupStats(List<CallsiteGroup> target, long total)
