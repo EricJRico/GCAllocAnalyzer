@@ -46,6 +46,7 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_BarNormal         = new Color(0.27f, 0.67f, 0.6f);
         static readonly Color k_SelectionAreaBarColor      = new Color(0.4f, 0.8f, 0.73f);
         static readonly Color k_SelectionAreaBgColor = new Color(0.25f, 0.35f, 0.55f, 0.3f);
+        static readonly Color k_SelectionEdgeColor  = new Color(0.5f, 0.7f, 1f, 0.8f);
         static readonly Color k_BarSelectedOverlayColor  = new Color(1f, 1f, 1f, 0.7f);
         static readonly Color k_BarDimmed         = new Color(0.27f, 0.67f, 0.6f, 0.3f);
         static readonly Color k_HoverOverlay      = new Color(1f, 1f, 1f, 0.12f);
@@ -96,8 +97,8 @@ namespace GCAllocBreakdown.Editor
         bool m_PointerDown;
         bool m_Dragging;
         Vector2 m_PointerDownPos;
-        int m_DragStartBar = -1;
-        int m_DragCurrentBar = -1;
+        float m_DragStartX;
+        float m_DragCurrentX;
 
         // ═══════════════════════════════════════════════════
         //  EVENTS
@@ -251,6 +252,7 @@ namespace GCAllocBreakdown.Editor
             DrawSelectionBackground(painter, rect);
             DrawBars(painter, rect);
             DrawOverlayBars(painter, rect);
+            DrawSelectionEdges(painter, rect);
         }
 
         // ═══════════════════════════════════════════════════
@@ -302,18 +304,34 @@ namespace GCAllocBreakdown.Editor
 
         void DrawSelectionBackground(Painter2D painter, Rect rect)
         {
-            if (m_SelectionStart < 0 || m_SelectionEnd < 0) return;
-            if (m_Bars == null || m_BarCount <= 0) return;
+            float left, right;
 
-            int sStart = m_SelectionStart < m_SelectionEnd ? m_SelectionStart : m_SelectionEnd;
-            int sEnd   = m_SelectionStart < m_SelectionEnd ? m_SelectionEnd   : m_SelectionStart;
+            if (m_Dragging)
+            {
+                // During active drag, use raw pixel positions for immediate feedback
+                left  = m_DragStartX < m_DragCurrentX ? m_DragStartX : m_DragCurrentX;
+                right = m_DragStartX < m_DragCurrentX ? m_DragCurrentX : m_DragStartX;
+                left  = Mathf.Clamp(left, 0f, rect.width);
+                right = Mathf.Clamp(right, 0f, rect.width);
+            }
+            else
+            {
+                // Finalized selection — snap to bar boundaries
+                if (m_SelectionStart < 0 || m_SelectionEnd < 0) return;
+                if (m_Bars == null || m_BarCount <= 0) return;
 
-            if (sStart >= m_BarCount) return;
-            if (sEnd >= m_BarCount) sEnd = m_BarCount - 1;
+                int sStart = m_SelectionStart < m_SelectionEnd ? m_SelectionStart : m_SelectionEnd;
+                int sEnd   = m_SelectionStart < m_SelectionEnd ? m_SelectionEnd   : m_SelectionStart;
 
-            float barWidth = rect.width / m_BarCount;
-            float left  = sStart * barWidth;
-            float right = (sEnd + 1) * barWidth;
+                if (sStart >= m_BarCount) return;
+                if (sEnd >= m_BarCount) sEnd = m_BarCount - 1;
+
+                float barWidth = rect.width / m_BarCount;
+                left  = sStart * barWidth;
+                right = (sEnd + 1) * barWidth;
+            }
+
+            if (right - left < 1f) return;
 
             painter.fillColor = k_SelectionAreaBgColor;
             painter.BeginPath();
@@ -325,6 +343,45 @@ namespace GCAllocBreakdown.Editor
             painter.Fill();
         }
 
+        void DrawSelectionEdges(Painter2D painter, Rect rect)
+        {
+            float left, right;
+
+            if (m_Dragging)
+            {
+                left  = Mathf.Clamp(m_DragStartX < m_DragCurrentX ? m_DragStartX : m_DragCurrentX, 0f, rect.width);
+                right = Mathf.Clamp(m_DragStartX < m_DragCurrentX ? m_DragCurrentX : m_DragStartX, 0f, rect.width);
+            }
+            else
+            {
+                if (m_SelectionStart < 0 || m_SelectionEnd < 0) return;
+                if (m_Bars == null || m_BarCount <= 0) return;
+
+                int sStart = m_SelectionStart < m_SelectionEnd ? m_SelectionStart : m_SelectionEnd;
+                int sEnd   = m_SelectionStart < m_SelectionEnd ? m_SelectionEnd   : m_SelectionStart;
+
+                if (sStart >= m_BarCount) return;
+                if (sEnd >= m_BarCount) sEnd = m_BarCount - 1;
+
+                float barWidth = rect.width / m_BarCount;
+                left  = sStart * barWidth;
+                right = (sEnd + 1) * barWidth;
+            }
+
+            if (right - left < 1f) return;
+
+            painter.strokeColor = k_SelectionEdgeColor;
+            painter.lineWidth = 1f;
+            painter.BeginPath();
+            painter.MoveTo(new Vector2(left, 0f));
+            painter.LineTo(new Vector2(left, rect.height));
+            painter.Stroke();
+            painter.BeginPath();
+            painter.MoveTo(new Vector2(right, 0f));
+            painter.LineTo(new Vector2(right, rect.height));
+            painter.Stroke();
+        }
+
         // ═══════════════════════════════════════════════════
         //  DRAWING — BARS
         // ═══════════════════════════════════════════════════
@@ -333,9 +390,18 @@ namespace GCAllocBreakdown.Editor
         {
             if (m_Bars == null || m_BarCount <= 0) return;
 
-            // Normalize selection range
+            // Normalize selection range — during active drag, derive from pixel positions
             int sStart = -1, sEnd = -1;
-            if (m_SelectionStart >= 0 && m_SelectionEnd >= 0)
+            if (m_Dragging)
+            {
+                float leftX  = m_DragStartX < m_DragCurrentX ? m_DragStartX : m_DragCurrentX;
+                float rightX = m_DragStartX < m_DragCurrentX ? m_DragCurrentX : m_DragStartX;
+                sStart = HitTestBar(new Vector2(leftX, 0f));
+                sEnd   = HitTestBar(new Vector2(rightX, 0f));
+                if (sStart < 0) sStart = 0;
+                if (sEnd < 0) sEnd = m_BarCount - 1;
+            }
+            else if (m_SelectionStart >= 0 && m_SelectionEnd >= 0)
             {
                 sStart = m_SelectionStart < m_SelectionEnd ? m_SelectionStart : m_SelectionEnd;
                 sEnd   = m_SelectionStart < m_SelectionEnd ? m_SelectionEnd   : m_SelectionStart;
@@ -574,8 +640,8 @@ namespace GCAllocBreakdown.Editor
             m_PointerDown = true;
             m_Dragging = false;
             m_PointerDownPos = evt.localPosition;
-            m_DragStartBar = HitTestBar(evt.localPosition);
-            m_DragCurrentBar = m_DragStartBar;
+            m_DragStartX = evt.localPosition.x;
+            m_DragCurrentX = evt.localPosition.x;
 
             this.CapturePointer(evt.pointerId);
             evt.StopPropagation();
@@ -590,39 +656,25 @@ namespace GCAllocBreakdown.Editor
 
             if (!m_Dragging)
             {
-                // Only horizontal movement counts — vertical drags (e.g. clicking segments)
-                // should not trigger selection. Threshold scales with bar width so zoomed-in
-                // bars require more deliberate horizontal movement to start a drag-select.
-                float barWidth = m_BarCount > 0 ? contentRect.width / m_BarCount : 0f;
-                float threshold = Mathf.Max(barWidth * 0.6f, k_MinDragThreshold);
-                if (dx < threshold) return;
+                if (dx < k_MinDragThreshold) return;
                 m_Dragging = true;
             }
 
-            int currentBar = HitTestBar(pos);
-            if (currentBar < 0)
+            m_DragCurrentX = pos.x;
+            MarkDirtyRepaint();
+
+            // Notify controller with bar indices for live updates (tooltip, etc.)
+            int startBar = HitTestBar(new Vector2(m_DragStartX, 0f));
+            int endBar = HitTestBar(pos);
+            if (endBar < 0 && m_Bars != null && m_BarCount > 0)
+                endBar = pos.x <= 0 ? 0 : m_BarCount - 1;
+            if (startBar < 0 && m_Bars != null && m_BarCount > 0)
+                startBar = m_DragStartX <= 0 ? 0 : m_BarCount - 1;
+
+            if (startBar >= 0 && endBar >= 0)
             {
-                // Clamp to nearest edge
-                if (m_Bars != null && m_BarCount > 0)
-                {
-                    if (pos.x <= 0)
-                        currentBar = 0;
-                    else if (pos.x >= contentRect.width)
-                        currentBar = m_BarCount - 1;
-                }
-            }
-
-            if (currentBar >= 0 && currentBar != m_DragCurrentBar)
-            {
-                m_DragCurrentBar = currentBar;
-
-                int start = m_DragStartBar < m_DragCurrentBar ? m_DragStartBar : m_DragCurrentBar;
-                int end   = m_DragStartBar < m_DragCurrentBar ? m_DragCurrentBar : m_DragStartBar;
-
-                m_SelectionStart = start;
-                m_SelectionEnd = end;
-
-                MarkDirtyRepaint();
+                int start = startBar < endBar ? startBar : endBar;
+                int end   = startBar < endBar ? endBar   : startBar;
 
                 if (SelectionChanged != null)
                     SelectionChanged(start, end);
@@ -644,11 +696,23 @@ namespace GCAllocBreakdown.Editor
 
             if (wasDragging)
             {
-                // Finalize drag selection
-                if (m_DragStartBar >= 0 && m_DragCurrentBar >= 0)
+                // Convert pixel positions to bar indices
+                int startBar = HitTestBar(new Vector2(m_DragStartX, 0f));
+                int endBar = HitTestBar(new Vector2(m_DragCurrentX, 0f));
+                if (startBar < 0 && m_Bars != null && m_BarCount > 0)
+                    startBar = m_DragStartX <= 0 ? 0 : m_BarCount - 1;
+                if (endBar < 0 && m_Bars != null && m_BarCount > 0)
+                    endBar = m_DragCurrentX <= 0 ? 0 : m_BarCount - 1;
+
+                if (startBar >= 0 && endBar >= 0)
                 {
-                    int start = m_DragStartBar < m_DragCurrentBar ? m_DragStartBar : m_DragCurrentBar;
-                    int end   = m_DragStartBar < m_DragCurrentBar ? m_DragCurrentBar : m_DragStartBar;
+                    int start = startBar < endBar ? startBar : endBar;
+                    int end   = startBar < endBar ? endBar   : startBar;
+
+                    // Snap selection to bar boundaries now that drag is finalized
+                    m_SelectionStart = start;
+                    m_SelectionEnd = end;
+                    MarkDirtyRepaint();
 
                     if (DragCompleted != null)
                         DragCompleted(start, end);
@@ -668,9 +732,6 @@ namespace GCAllocBreakdown.Editor
                 }
             }
 
-            m_DragStartBar = -1;
-            m_DragCurrentBar = -1;
-
             evt.StopPropagation();
         }
 
@@ -684,8 +745,6 @@ namespace GCAllocBreakdown.Editor
 
             m_PointerDown = false;
             m_Dragging = false;
-            m_DragStartBar = -1;
-            m_DragCurrentBar = -1;
         }
 
         // ═══════════════════════════════════════════════════
