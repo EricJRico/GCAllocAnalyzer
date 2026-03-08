@@ -89,11 +89,13 @@ namespace GCAllocBreakdown.Editor
         float m_YAxisDragStartY;
         long m_YAxisDragStartMax;
 
-        // Y-axis pan state (middle-mouse drag)
+        // XY pan state (middle-mouse drag)
         long m_YPanOffset;
-        bool m_YPanning;
+        bool m_Panning;
         float m_YPanStartMouseY;
         long m_YPanStartOffset;
+        float m_XPanStartMouseX;
+        float m_XPanStartViewportStart;
 
         // Viewport state: normalized range [0,1] over the full bar set
         float m_ViewportStart;
@@ -1169,17 +1171,19 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
-        //  Y-AXIS PAN (MIDDLE-MOUSE DRAG)
+        //  XY PAN (MIDDLE-MOUSE DRAG)
         // ═══════════════════════════════════════════════════
 
         void OnGraphPanPointerDown(PointerDownEvent evt)
         {
             if (evt.button != 2) return;
-            if (!m_HasCustomYScale) return;
+            if (!m_HasCustomYScale && !IsZoomedIn) return;
             if (m_GraphElement.HasPointerCapture(evt.pointerId)) return;
             m_YPanStartMouseY = evt.localPosition.y;
             m_YPanStartOffset = m_YPanOffset;
-            m_YPanning = true;
+            m_XPanStartMouseX = evt.localPosition.x;
+            m_XPanStartViewportStart = m_ViewportStart;
+            m_Panning = true;
             m_GraphElement.CapturePointer(evt.pointerId);
             SetSystemCursor(m_GraphElement, MouseCursor.Pan);
             evt.StopPropagation();
@@ -1187,28 +1191,65 @@ namespace GCAllocBreakdown.Editor
 
         void OnGraphPanPointerMove(PointerMoveEvent evt)
         {
-            if (!m_YPanning) return;
-            float deltaY = evt.localPosition.y - m_YPanStartMouseY;
-            float areaHeight = m_GraphElement.contentRect.height;
-            if (areaHeight < 1f) return;
-            long deltaByte = (long)(deltaY / areaHeight * m_YAxisMax);
-            long newOffset = m_YPanStartOffset + deltaByte;
+            if (!m_Panning) return;
 
-            long maxOffset = m_AutoYAxisMax - m_YAxisMax;
-            if (maxOffset < 0) maxOffset = 0;
-            if (newOffset < 0) newOffset = 0;
-            if (newOffset > maxOffset) newOffset = maxOffset;
+            bool needsRebuild = false;
 
-            m_YPanOffset = newOffset;
-            ApplyYPan();
+            // Y-axis panning (only when Y-zoomed)
+            if (m_HasCustomYScale)
+            {
+                float deltaY = evt.localPosition.y - m_YPanStartMouseY;
+                float areaHeight = m_GraphElement.contentRect.height;
+                if (areaHeight >= 1f)
+                {
+                    long deltaByte = (long)(deltaY / areaHeight * m_YAxisMax);
+                    long newOffset = m_YPanStartOffset + deltaByte;
+
+                    long maxOffset = m_AutoYAxisMax - m_YAxisMax;
+                    if (maxOffset < 0) maxOffset = 0;
+                    if (newOffset < 0) newOffset = 0;
+                    if (newOffset > maxOffset) newOffset = maxOffset;
+
+                    m_YPanOffset = newOffset;
+                    ApplyYPan();
+                }
+            }
+
+            // X-axis panning (only when X-zoomed)
+            if (IsZoomedIn)
+            {
+                float deltaX = evt.localPosition.x - m_XPanStartMouseX;
+                float areaWidth = m_GraphElement.contentRect.width;
+                if (areaWidth >= 1f)
+                {
+                    float span = m_ViewportEnd - m_ViewportStart;
+                    float viewportDelta = -deltaX / areaWidth * span;
+                    float newStart = m_XPanStartViewportStart + viewportDelta;
+                    float newEnd = newStart + span;
+
+                    if (newStart < 0f) { newStart = 0f; newEnd = span; }
+                    if (newEnd > 1f) { newEnd = 1f; newStart = 1f - span; }
+                    if (newStart < 0f) newStart = 0f;
+
+                    if (m_ViewportStart != newStart)
+                    {
+                        m_ViewportStart = newStart;
+                        m_ViewportEnd = newEnd;
+                        needsRebuild = true;
+                    }
+                }
+            }
+
+            if (needsRebuild)
+                RebuildGraph();
         }
 
         void OnGraphPanPointerUp(PointerUpEvent evt)
         {
             if (evt.button != 2) return;
-            if (!m_YPanning) return;
+            if (!m_Panning) return;
             m_GraphElement.ReleasePointer(evt.pointerId);
-            m_YPanning = false;
+            m_Panning = false;
             m_GraphElement.style.cursor = StyleKeyword.Null;
             evt.StopPropagation();
         }
