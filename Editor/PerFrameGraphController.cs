@@ -1082,13 +1082,36 @@ namespace GCAllocBreakdown.Editor
         {
             if (m_TotalBucketCount == 0) return;
 
-            // Compute anchor as normalized position within the graph
+            // Ctrl/Cmd + scroll = Y-axis zoom
+            if (evt.actionKey && m_AutoYAxisMax > 0)
+            {
+                float zoomFactor = evt.delta.y > 0 ? 1.3f : 1f / 1.3f;
+                long newMax = (long)(m_YAxisMax * zoomFactor);
+                if (newMax < 1024L) newMax = 1024L;
+                if (newMax >= m_AutoYAxisMax)
+                {
+                    newMax = m_AutoYAxisMax;
+                    m_HasCustomYScale = false;
+                    m_UserYAxisMax = 0;
+                    m_YPanOffset = 0;
+                }
+                else
+                {
+                    m_UserYAxisMax = newMax;
+                    m_HasCustomYScale = true;
+                }
+                ApplyYAxisScale();
+                evt.StopPropagation();
+                return;
+            }
+
+            // Plain scroll = X-axis zoom
             float localX = evt.localMousePosition.x;
             float areaWidth = m_GraphElement.contentRect.width;
             float anchor = areaWidth > 0 ? Mathf.Clamp01(localX / areaWidth) : 0.5f;
 
-            float zoomFactor = evt.delta.y > 0 ? 1.2f : 0.8f;
-            ZoomViewport(zoomFactor, anchor);
+            float xZoomFactor = evt.delta.y > 0 ? 1.2f : 0.8f;
+            ZoomViewport(xZoomFactor, anchor);
             evt.StopPropagation();
         }
 
