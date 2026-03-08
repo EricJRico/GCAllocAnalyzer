@@ -35,7 +35,7 @@ namespace GCAllocBreakdown.Editor
         //  CONSTANTS
         // ═══════════════════════════════════════════════════
 
-        const float k_DragThreshold = 3f;
+        const float k_MinDragThreshold = 3f;
 
         // ═══════════════════════════════════════════════════
         //  COLORS
@@ -586,13 +586,16 @@ namespace GCAllocBreakdown.Editor
             if (!m_PointerDown) return;
 
             Vector2 pos = evt.localPosition;
-            float dx = pos.x - m_PointerDownPos.x;
-            float dy = pos.y - m_PointerDownPos.y;
-            float dist = Mathf.Sqrt(dx * dx + dy * dy);
+            float dx = Mathf.Abs(pos.x - m_PointerDownPos.x);
 
             if (!m_Dragging)
             {
-                if (dist < k_DragThreshold) return;
+                // Only horizontal movement counts — vertical drags (e.g. clicking segments)
+                // should not trigger selection. Threshold scales with bar width so zoomed-in
+                // bars require more deliberate horizontal movement to start a drag-select.
+                float barWidth = m_BarCount > 0 ? contentRect.width / m_BarCount : 0f;
+                float threshold = Mathf.Max(barWidth * 0.6f, k_MinDragThreshold);
+                if (dx < threshold) return;
                 m_Dragging = true;
             }
 
