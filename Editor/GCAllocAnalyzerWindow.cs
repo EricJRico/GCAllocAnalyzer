@@ -613,53 +613,53 @@ namespace GCAllocBreakdown.Editor
                     Fail($"FullFrameBytes.Length ({m_FrameStore.FullFrameBytes.Length}) != expected ({expectedLen})");
             }
 
-            // ── User-visible state (serialized "before" vs live "after") ──
+            // ── User-visible state (live vs saved WindowState) ──
+
+            ref readonly var expected = ref m_SavedState;
 
             // Filters
-            if (m_NameFilter.value != m_SavedState.NameFilter)
-                Fail($"NameFilter: UI='{m_NameFilter.value}' expected='{m_SavedState.NameFilter}'");
-            if (m_ExcludeFilter.value != m_SavedState.ExcludeFilter)
-                Fail($"ExcludeFilter: UI='{m_ExcludeFilter.value}' expected='{m_SavedState.ExcludeFilter}'");
+            if (m_NameFilter.value != expected.NameFilter)
+                Fail($"NameFilter: UI='{m_NameFilter.value}' expected='{expected.NameFilter}'");
+            if (m_ExcludeFilter.value != expected.ExcludeFilter)
+                Fail($"ExcludeFilter: UI='{m_ExcludeFilter.value}' expected='{expected.ExcludeFilter}'");
+            if (m_GroupByCallsite.value != expected.GroupByCallsite)
+                Fail($"GroupByCallsite: UI={m_GroupByCallsite.value} expected={expected.GroupByCallsite}");
 
-            // Grouping mode
-            if (m_GroupByCallsite.value != m_SavedState.GroupByCallsite)
-                Fail($"GroupByCallsite: UI={m_GroupByCallsite.value} expected={m_SavedState.GroupByCallsite}");
-
-            // Sort order
-            if ((int)m_SortCol != m_SavedState.SortCol)
-                Fail($"SortCol: live={(int)m_SortCol} expected={m_SavedState.SortCol}");
-            if (m_SortAsc != m_SavedState.SortAsc)
-                Fail($"SortAsc: live={m_SortAsc} expected={m_SavedState.SortAsc}");
-
-            // Selected marker
-            if (m_SavedState.SelectedMarkerIndex >= 0 && m_FilteredGroups.Count > 0
-                && m_SavedState.SelectedMarkerIndex < m_FilteredGroups.Count)
-            {
-                if (m_MarkerListView.selectedIndex != m_SavedState.SelectedMarkerIndex)
-                    Fail($"SelectedMarker: UI={m_MarkerListView.selectedIndex} expected={m_SavedState.SelectedMarkerIndex}");
-            }
-
-            // Individual allocation selection
-            if (phase == "allocs" && m_SavedState.SelectedAllocIndex >= 0
-                && m_SelectedAllocations.Count > 0
-                && m_SavedState.SelectedAllocIndex < m_SelectedAllocations.Count)
-            {
-                if (m_AllocListView.selectedIndex != m_SavedState.SelectedAllocIndex)
-                    Fail($"SelectedAlloc: UI={m_AllocListView.selectedIndex} expected={m_SavedState.SelectedAllocIndex}");
-            }
+            // Sort
+            if ((int)m_SortCol != expected.SortCol)
+                Fail($"SortCol: live={(int)m_SortCol} expected={expected.SortCol}");
+            if (m_SortAsc != expected.SortAsc)
+                Fail($"SortAsc: live={m_SortAsc} expected={expected.SortAsc}");
 
             // Thread filter
-            if (m_SavedState.SelectedThreads.Length > 0)
+            if (expected.SelectedThreads.Length > 0)
             {
-                if (m_SelectedThreads.Count != m_SavedState.SelectedThreads.Length)
-                    Fail($"ThreadFilter: {m_SelectedThreads.Count} selected, expected {m_SavedState.SelectedThreads.Length}");
+                if (m_SelectedThreads.Count != expected.SelectedThreads.Length)
+                    Fail($"ThreadFilter: {m_SelectedThreads.Count} selected, expected {expected.SelectedThreads.Length}");
             }
 
-            // Graph viewport
+            // Marker selection
+            if (expected.SelectedMarkerIndex >= 0 && m_FilteredGroups.Count > 0
+                && expected.SelectedMarkerIndex < m_FilteredGroups.Count)
+            {
+                if (m_MarkerListView.selectedIndex != expected.SelectedMarkerIndex)
+                    Fail($"SelectedMarker: UI={m_MarkerListView.selectedIndex} expected={expected.SelectedMarkerIndex}");
+            }
+
+            // Alloc selection (allocs phase only)
+            if (phase == "allocs" && expected.SelectedAllocIndex >= 0
+                && m_SelectedAllocations.Count > 0
+                && expected.SelectedAllocIndex < m_SelectedAllocations.Count)
+            {
+                if (m_AllocListView.selectedIndex != expected.SelectedAllocIndex)
+                    Fail($"SelectedAlloc: UI={m_AllocListView.selectedIndex} expected={expected.SelectedAllocIndex}");
+            }
+
+            // Graph state
             if (m_GraphController != null)
             {
                 var live = m_GraphController.CaptureState();
-                ref readonly var eg = ref m_SavedState.Graph;
+                ref readonly var eg = ref expected.Graph;
                 if (Mathf.Abs(live.ViewportStart - eg.ViewportStart) > 0.001f)
                     Fail($"ViewportStart: live={live.ViewportStart:F3} expected={eg.ViewportStart:F3}");
                 if (Mathf.Abs(live.ViewportEnd - eg.ViewportEnd) > 0.001f)
@@ -675,7 +675,13 @@ namespace GCAllocBreakdown.Editor
                     if (live.YPanOffset != eg.YPanOffset)
                         Fail($"YPanOffset: live={live.YPanOffset} expected={eg.YPanOffset}");
                 }
+                if (live.HasFrameSelection != eg.HasFrameSelection)
+                    Fail($"HasFrameSelection: live={live.HasFrameSelection} expected={eg.HasFrameSelection}");
             }
+
+            // Display
+            if (m_ShowAssembly != expected.ShowAssembly)
+                Fail($"ShowAssembly: live={m_ShowAssembly} expected={expected.ShowAssembly}");
 
             // ── Alloc-phase invariants ──
             if (phase == "allocs")
