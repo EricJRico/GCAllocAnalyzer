@@ -116,10 +116,15 @@ namespace GCAllocBreakdown.Editor
         int m_SelectionFrameEnd = -1;
         int m_HighlightedFrame = -1;
 
-        // Reusable buffer marking which frames are in the drag selection
+        // Reusable buffer marking which frames are in the drag selection.
+        // m_BufferFrameStart/End track the frame range the buffer covers (for
+        // domain reload rebuild). Separate from m_SelectionFrameStart/End which
+        // track the visual selection bars and are cleared after drag-and-apply.
         bool[] m_SelectedFrameBuffer;
         bool m_HasFrameSelection;
         int m_SelectedFrameBaseFrame;
+        int m_BufferFrameStart = -1;
+        int m_BufferFrameEnd = -1;
 
         /// <summary>
         /// After a drag-completed event, contains a boolean buffer where
@@ -359,6 +364,8 @@ namespace GCAllocBreakdown.Editor
             m_ViewportEnd = state.ViewportEnd;
             m_SelectionFrameStart = state.SelectionFrameStart;
             m_SelectionFrameEnd = state.SelectionFrameEnd;
+            m_BufferFrameStart = state.SelectionFrameStart;
+            m_BufferFrameEnd = state.SelectionFrameEnd;
             m_HighlightedFrame = state.HighlightedFrame;
             m_UserYAxisMax = state.UserYAxisMax;
             m_HasCustomYScale = state.HasCustomYScale;
@@ -368,7 +375,7 @@ namespace GCAllocBreakdown.Editor
             // m_FrameStore may not be set yet (RestoreState runs during BuildPerFrameGraph,
             // before TryRestoreAfterReload), so defer rebuild — it will be rebuilt when
             // ApplyWindowState calls RestoreState again with a populated frame store.
-            if (state.HasFrameSelection && m_SelectionFrameStart >= 0 && m_SelectionFrameEnd >= 0
+            if (state.HasFrameSelection && m_BufferFrameStart >= 0 && m_BufferFrameEnd >= 0
                 && m_FrameStore != null && m_FrameStore.HasFullFrameData)
             {
                 RebuildFrameSelectionBuffer();
@@ -382,8 +389,11 @@ namespace GCAllocBreakdown.Editor
         }
 
         /// <summary>
-        /// Rebuilds the frame selection buffer from m_SelectionFrameStart/End.
+        /// Rebuilds the frame selection buffer from m_BufferFrameStart/End.
         /// Used after domain reload when the buffer was lost but frame indices survived.
+        /// NOTE: Rebuilds as contiguous range [start, end]. Non-contiguous selections
+        /// from sorted/magnitude view are approximated after domain reload. This is an
+        /// acceptable trade-off vs serializing the full bool[] (which caused freeze).
         /// </summary>
         void RebuildFrameSelectionBuffer()
         {
@@ -395,8 +405,8 @@ namespace GCAllocBreakdown.Editor
             else
                 System.Array.Clear(m_SelectedFrameBuffer, 0, fullFrameCount);
 
-            int sf = Mathf.Max(m_SelectionFrameStart, m_SelectedFrameBaseFrame);
-            int ef = Mathf.Min(m_SelectionFrameEnd, m_SelectedFrameBaseFrame + fullFrameCount - 1);
+            int sf = Mathf.Max(m_BufferFrameStart, m_SelectedFrameBaseFrame);
+            int ef = Mathf.Min(m_BufferFrameEnd, m_SelectedFrameBaseFrame + fullFrameCount - 1);
             for (int f = sf; f <= ef; f++)
             {
                 int idx = f - m_SelectedFrameBaseFrame;
@@ -630,9 +640,8 @@ namespace GCAllocBreakdown.Editor
         }
 
         /// <summary>
-        /// Clear the visual selection bars and highlighted bar.
-        /// Frame buffer and frame indices are preserved: the buffer controls dimming,
-        /// and the indices are needed to rebuild the buffer after domain reload.
+        /// Clear the visual selection and highlighted bar.
+        /// The frame buffer is preserved so dimming stays correct across mode switches.
         /// </summary>
         public void ClearSelection()
         {
@@ -640,6 +649,8 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.SetHighlightedBar(-1);
             m_LastSelectionStartBar = -1;
             m_LastSelectionEndBar = -1;
+            m_SelectionFrameStart = -1;
+            m_SelectionFrameEnd = -1;
             m_HighlightedFrame = -1;
         }
 
@@ -650,6 +661,8 @@ namespace GCAllocBreakdown.Editor
         public void ClearFrameSelection()
         {
             m_HasFrameSelection = false;
+            m_BufferFrameStart = -1;
+            m_BufferFrameEnd = -1;
         }
 
         /// <summary>
@@ -724,6 +737,7 @@ namespace GCAllocBreakdown.Editor
         {
             if (m_Snapshot == null || m_Snapshot.PerFrameBytes == null) return;
             if (m_BarCount == 0 || m_FrameStore == null) return;
+            if (!m_Snapshot.HasRawAllocations) return;
 
             int snapshotFrameCount = m_Snapshot.PerFrameBytes.Length;
             int fullFrameCount = m_FrameStore.FullFrameBytes.Length;
@@ -1110,11 +1124,9 @@ namespace GCAllocBreakdown.Editor
             long maxOffset = m_AutoYAxisMax - m_YAxisMax;
             // Invert: scroller top (0) = high data, scroller bottom (max) = low data
             float highValue = Mathf.Max(0, 1f - (float)m_YAxisMax / m_AutoYAxisMax);
-            long prevOffset = m_YPanOffset;
             m_YPanOffset = (long)((highValue - value) * maxOffset / highValue);
             if (m_YPanOffset < 0) m_YPanOffset = 0;
             if (m_YPanOffset > maxOffset) m_YPanOffset = maxOffset;
-            Debug.Log($"[VScroll] value={value:F4} hv={highValue:F4} maxOff={maxOffset} prevPan={prevOffset} newPan={m_YPanOffset} scrollerVal={m_VScroller.value:F4} sliderVal={m_VScroller.slider.value:F4}");
             ApplyYAxisScale();
         }
 
@@ -1877,7 +1889,6 @@ namespace GCAllocBreakdown.Editor
             m_VScroller.highValue = highValue;
             m_VScroller.slider.pageSize = span;
             m_VScroller.slider.SetValueWithoutNotify(normalizedPos);
-            Debug.Log($"[VScrollUpdate] span={span:F4} hv={highValue:F4} normPos={normalizedPos:F4} panOff={m_YPanOffset} maxOff={maxOffset} wasHidden={wasHidden} sliderVal={m_VScroller.slider.value:F4}");
 
             if (wasHidden)
                 m_VScroller.schedule.Execute(() => m_VScroller.Adjust(span));
@@ -2333,6 +2344,8 @@ namespace GCAllocBreakdown.Editor
             }
 
             m_HasFrameSelection = true;
+            m_BufferFrameStart = m_SelectionFrameStart;
+            m_BufferFrameEnd = m_SelectionFrameEnd;
         }
 
         // ═══════════════════════════════════════════════════
