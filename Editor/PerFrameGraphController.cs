@@ -375,6 +375,14 @@ namespace GCAllocBreakdown.Editor
             }
             else
             {
+                // DIAG: which condition failed?
+                if (state.HasFrameSelection)
+                {
+                    Debug.Log($"[GCAllocAnalyzer] RestoreState: HasFrameSelection=true but rebuild skipped:"
+                        + $" selStart={m_SelectionFrameStart} selEnd={m_SelectionFrameEnd}"
+                        + $" frameStore={(m_FrameStore != null ? "set" : "null")}"
+                        + $" hasFullData={(m_FrameStore?.HasFullFrameData)}");
+                }
                 m_HasFrameSelection = false;
             }
 

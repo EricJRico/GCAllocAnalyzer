@@ -523,5 +523,16 @@ namespace GCAllocBreakdown.Editor
             ShowAssembly = false,
             IsLoadedSnapshot = false
         };
+
+        /// <summary>
+        /// Patch null reference-type fields that arise when Unity deserializes
+        /// default(WindowState) after a serialization format change.
+        /// </summary>
+        public void EnsureValid()
+        {
+            NameFilter ??= "";
+            ExcludeFilter ??= "";
+            SelectedThreads ??= Array.Empty<string>();
+        }
     }
 }

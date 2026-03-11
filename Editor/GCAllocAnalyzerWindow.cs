@@ -489,6 +489,7 @@ namespace GCAllocBreakdown.Editor
         /// </summary>
         void TryRestoreAfterReload()
         {
+            m_SavedState.EnsureValid();
             m_Snapshot.EnsureNonSerializedLists();
             if (!m_Snapshot.HasData) return;
 
