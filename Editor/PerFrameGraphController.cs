@@ -375,14 +375,6 @@ namespace GCAllocBreakdown.Editor
             }
             else
             {
-                // DIAG: which condition failed?
-                if (state.HasFrameSelection)
-                {
-                    Debug.Log($"[GCAllocAnalyzer] RestoreState: HasFrameSelection=true but rebuild skipped:"
-                        + $" selStart={m_SelectionFrameStart} selEnd={m_SelectionFrameEnd}"
-                        + $" frameStore={(m_FrameStore != null ? "set" : "null")}"
-                        + $" hasFullData={(m_FrameStore?.HasFullFrameData)}");
-                }
                 m_HasFrameSelection = false;
             }
 
@@ -638,8 +630,9 @@ namespace GCAllocBreakdown.Editor
         }
 
         /// <summary>
-        /// Clear the visual selection and highlighted bar.
-        /// The frame buffer is preserved so dimming stays correct across mode switches.
+        /// Clear the visual selection bars and highlighted bar.
+        /// Frame buffer and frame indices are preserved: the buffer controls dimming,
+        /// and the indices are needed to rebuild the buffer after domain reload.
         /// </summary>
         public void ClearSelection()
         {
@@ -647,8 +640,6 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.SetHighlightedBar(-1);
             m_LastSelectionStartBar = -1;
             m_LastSelectionEndBar = -1;
-            m_SelectionFrameStart = -1;
-            m_SelectionFrameEnd = -1;
             m_HighlightedFrame = -1;
         }
 
