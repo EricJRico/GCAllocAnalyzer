@@ -13,7 +13,7 @@ namespace GCAllocBreakdown.Editor
     [Serializable]
     internal class AnalysisSnapshot
     {
-        public List<RawAllocation> RawAllocations = new(4096);
+        [NonSerialized] public List<RawAllocation> RawAllocations = new(4096);
         public List<string> SortedThreadNames = new(32);
         public long TotalBytes;
         public int TotalCount;
@@ -25,13 +25,20 @@ namespace GCAllocBreakdown.Editor
         [NonSerialized] public List<CallsiteGroup> GroupsByTopFrame = new(256);
         [NonSerialized] public long[] PerFrameBytes;
 
-        public bool HasData => RawAllocations != null && RawAllocations.Count > 0;
+        /// <summary>
+        /// True when skeleton metadata exists (from analysis or file restore).
+        /// RawAllocations may still be loading on a background thread.
+        /// </summary>
+        public bool HasData => TotalCount > 0;
 
         public void EnsureNonSerializedLists()
         {
+            RawAllocations ??= new List<RawAllocation>(4096);
             GroupsByFullCallstack ??= new List<CallsiteGroup>(256);
             GroupsByTopFrame ??= new List<CallsiteGroup>(256);
         }
+
+        public bool HasRawAllocations => RawAllocations != null && RawAllocations.Count > 0;
     }
 
     // ═══════════════════════════════════════════════════
@@ -89,12 +96,21 @@ namespace GCAllocBreakdown.Editor
     {
         public string Key;
         public string DisplayName;
+        public string DisplayNameNoAssembly;
+        public string DisplayNameWithAssembly;
+        public string HierarchyPath;
         public int GroupIndex;
         public long TotalBytes;
         public int Count;
         public float Percentage;
         public List<ResolvedFrame> ResolvedCallStack;
-        public List<RawAllocation> Allocations;
+
+        // First allocation info — for CPU module selection and display name swap
+        public int FirstAllocFrameIndex;
+        public int FirstAllocRawSampleIndex;
+        public string FirstAllocThreadName;
+        public string FirstAllocThreadGroupName;
+        public ulong FirstAllocThreadId;
 
         // Per-frame statistics (computed during grouping)
         public double MeanBytesPerFrame;
@@ -442,7 +458,7 @@ namespace GCAllocBreakdown.Editor
         public float ViewportStart;
         public float ViewportEnd;
         public bool HasFrameSelection;
-        public bool[] SelectedFrameBuffer;
+        [System.NonSerialized] public bool[] SelectedFrameBuffer;
         public int SelectedFrameBaseFrame;
         public int SelectionFrameStart;
         public int SelectionFrameEnd;

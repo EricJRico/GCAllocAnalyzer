@@ -60,6 +60,7 @@ namespace GCAllocBreakdown.Editor
         AnalysisSnapshot m_Snapshot;
         List<CallsiteGroup> m_FilteredGroups;
         GraphFrameStore m_FrameStore;
+        bool m_GroupByCallsite;
         int m_AnalyzedFrameStart = -1;
         int m_AnalyzedFrameEnd = -1;
 
@@ -296,11 +297,12 @@ namespace GCAllocBreakdown.Editor
         /// <summary>
         /// Store data references after each analysis run or Pull Data.
         /// </summary>
-        public void SetData(GraphFrameStore frameStore, AnalysisSnapshot snapshot, List<CallsiteGroup> filteredGroups)
+        public void SetData(GraphFrameStore frameStore, AnalysisSnapshot snapshot, List<CallsiteGroup> filteredGroups, bool groupByCallsite)
         {
             m_FrameStore = frameStore;
             m_Snapshot = snapshot;
             m_FilteredGroups = filteredGroups;
+            m_GroupByCallsite = groupByCallsite;
 
             // Reset Y-axis zoom on new data
             m_HasCustomYScale = false;
@@ -357,7 +359,6 @@ namespace GCAllocBreakdown.Editor
             m_OrderByMagnitude = state.OrderByMagnitude;
             m_ViewportStart = state.ViewportStart;
             m_ViewportEnd = state.ViewportEnd;
-            m_HasFrameSelection = state.HasFrameSelection;
             m_SelectedFrameBuffer = state.SelectedFrameBuffer;
             m_SelectedFrameBaseFrame = state.SelectedFrameBaseFrame;
             m_SelectionFrameStart = state.SelectionFrameStart;
@@ -366,7 +367,49 @@ namespace GCAllocBreakdown.Editor
             m_UserYAxisMax = state.UserYAxisMax;
             m_HasCustomYScale = state.HasCustomYScale;
             m_YPanOffset = state.YPanOffset;
+
+            // Rebuild the frame selection buffer if it was lost during domain reload.
+            // The bool[] is [NonSerialized] so it becomes null, but the frame indices survive.
+            // m_FrameStore may not be set yet (RestoreState runs during BuildPerFrameGraph,
+            // before TryRestoreAfterReload), so defer rebuild — it will be rebuilt when
+            // OnAllocsRestoredFromFile calls RestoreState again with a populated frame store.
+            if (state.HasFrameSelection && state.SelectedFrameBuffer == null
+                && m_SelectionFrameStart >= 0 && m_SelectionFrameEnd >= 0
+                && m_FrameStore != null && m_FrameStore.HasFullFrameData)
+            {
+                RebuildFrameSelectionBuffer();
+            }
+            else
+            {
+                m_HasFrameSelection = state.HasFrameSelection && state.SelectedFrameBuffer != null;
+            }
+
             UpdateSortToggleLabel();
+        }
+
+        /// <summary>
+        /// Rebuilds the frame selection buffer from m_SelectionFrameStart/End.
+        /// Used after domain reload when the buffer was lost but frame indices survived.
+        /// </summary>
+        void RebuildFrameSelectionBuffer()
+        {
+            int fullFrameCount = m_FrameStore.FullFrameBytes.Length;
+            m_SelectedFrameBaseFrame = m_FrameStore.FullFrameStart;
+
+            if (m_SelectedFrameBuffer == null || m_SelectedFrameBuffer.Length < fullFrameCount)
+                m_SelectedFrameBuffer = new bool[fullFrameCount];
+            else
+                System.Array.Clear(m_SelectedFrameBuffer, 0, fullFrameCount);
+
+            int sf = Mathf.Max(m_SelectionFrameStart, m_SelectedFrameBaseFrame);
+            int ef = Mathf.Min(m_SelectionFrameEnd, m_SelectedFrameBaseFrame + fullFrameCount - 1);
+            for (int f = sf; f <= ef; f++)
+            {
+                int idx = f - m_SelectedFrameBaseFrame;
+                if (idx >= 0 && idx < fullFrameCount)
+                    m_SelectedFrameBuffer[idx] = true;
+            }
+            m_HasFrameSelection = true;
         }
 
         /// <summary>
@@ -374,10 +417,11 @@ namespace GCAllocBreakdown.Editor
         /// filtered groups without rebuilding the method palette or segment data (which
         /// are derived from the full cached dataset and don't change on sub-range selection).
         /// </summary>
-        public void UpdateAnalyzedRange(AnalysisSnapshot snapshot, List<CallsiteGroup> filteredGroups)
+        public void UpdateAnalyzedRange(AnalysisSnapshot snapshot, List<CallsiteGroup> filteredGroups, bool groupByCallsite)
         {
             m_Snapshot = snapshot;
             m_FilteredGroups = filteredGroups;
+            m_GroupByCallsite = groupByCallsite;
 
             if (snapshot != null && snapshot.HasData)
             {
@@ -573,11 +617,9 @@ namespace GCAllocBreakdown.Editor
                 m_GraphElement.SetOverlayData(m_OverlayBars, 0);
 
                 int methodIdx = -1;
-                if (m_HasSegmentData && group.Allocations.Count > 0)
+                if (m_HasSegmentData && group.Count > 0)
                 {
-                    string key = group.Allocations[0].DisplayName;
-                    if (string.IsNullOrEmpty(key))
-                        key = group.Allocations[0].ParentMethod;
+                    string key = group.DisplayNameNoAssembly ?? group.DisplayName;
                     methodIdx = m_MethodPalette.GetIndex(key);
                 }
                 m_GraphElement.SetHighlightedMethod(methodIdx);
@@ -695,9 +737,13 @@ namespace GCAllocBreakdown.Editor
 
             // Sum group's allocations into per-frame buffer
             EnsurePerFrameBuffer(snapshotFrameCount);
-            for (int i = 0; i < group.Allocations.Count; i++)
+            int groupIdx = group.GroupIndex;
+            var allocs = m_Snapshot.RawAllocations;
+            for (int i = 0; i < allocs.Count; i++)
             {
-                var alloc = group.Allocations[i];
+                var alloc = allocs[i];
+                int matchIdx = m_GroupByCallsite ? alloc.FullCallstackGroupIndex : alloc.TopFrameGroupIndex;
+                if (matchIdx != groupIdx) continue;
                 int idx = alloc.FrameIndex - m_Snapshot.FrameStart;
                 if (idx >= 0 && idx < snapshotFrameCount)
                     m_PerFrameBuffer[idx] += alloc.Bytes;
@@ -1071,9 +1117,11 @@ namespace GCAllocBreakdown.Editor
             long maxOffset = m_AutoYAxisMax - m_YAxisMax;
             // Invert: scroller top (0) = high data, scroller bottom (max) = low data
             float highValue = Mathf.Max(0, 1f - (float)m_YAxisMax / m_AutoYAxisMax);
+            long prevOffset = m_YPanOffset;
             m_YPanOffset = (long)((highValue - value) * maxOffset / highValue);
             if (m_YPanOffset < 0) m_YPanOffset = 0;
             if (m_YPanOffset > maxOffset) m_YPanOffset = maxOffset;
+            Debug.Log($"[VScroll] value={value:F4} hv={highValue:F4} maxOff={maxOffset} prevPan={prevOffset} newPan={m_YPanOffset} scrollerVal={m_VScroller.value:F4} sliderVal={m_VScroller.slider.value:F4}");
             ApplyYAxisScale();
         }
 
@@ -1836,6 +1884,7 @@ namespace GCAllocBreakdown.Editor
             m_VScroller.highValue = highValue;
             m_VScroller.slider.pageSize = span;
             m_VScroller.slider.SetValueWithoutNotify(normalizedPos);
+            Debug.Log($"[VScrollUpdate] span={span:F4} hv={highValue:F4} normPos={normalizedPos:F4} panOff={m_YPanOffset} maxOff={maxOffset} wasHidden={wasHidden} sliderVal={m_VScroller.slider.value:F4}");
 
             if (wasHidden)
                 m_VScroller.schedule.Execute(() => m_VScroller.Adjust(span));
