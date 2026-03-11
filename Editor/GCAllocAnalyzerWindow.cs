@@ -339,6 +339,61 @@ namespace GCAllocBreakdown.Editor
             return state;
         }
 
+        /// <summary>
+        /// Apply saved user-visible state after all data rebuilds are complete.
+        /// Call order matters: filters → graph → selections (each depends on prior).
+        /// </summary>
+        void ApplyWindowState(bool hasAllocs)
+        {
+            ref readonly var state = ref m_SavedState;
+
+            // ── 1. Working field copies ──
+            m_SortCol = (SortCol)state.SortCol;
+            m_SortAsc = state.SortAsc;
+            m_ShowAssembly = state.ShowAssembly;
+            m_IsLoadedSnapshot = state.IsLoadedSnapshot;
+
+            // ── 2. Thread filter ──
+            m_SelectedThreads.Clear();
+            for (int i = 0; i < state.SelectedThreads.Length; i++)
+            {
+                if (m_AllThreadNames.Contains(state.SelectedThreads[i]))
+                    m_SelectedThreads.Add(state.SelectedThreads[i]);
+            }
+            UpdateThreadButtonLabel();
+
+            // ── 3. Filters + sort ──
+            ApplyFilters();
+            RestoreMarkerSortIndicator();
+
+            // ── 4. Graph state (viewport + Y-axis) ──
+            m_GraphController.RestoreState(state.Graph);
+            m_GraphController.RebuildGraph();
+
+            // ── 5. Marker selection (ApplyFilters defaults to index 0) ──
+            if (state.SelectedMarkerIndex >= 0 && state.SelectedMarkerIndex < m_FilteredGroups.Count)
+            {
+                m_MarkerListView.selectedIndex = state.SelectedMarkerIndex;
+                UpdateMarkerSummary(m_FilteredGroups[state.SelectedMarkerIndex]);
+            }
+
+            // ── 6. Alloc selection (only after allocs phase) ──
+            if (hasAllocs && state.SelectedAllocIndex >= 0
+                && state.SelectedAllocIndex < m_SelectedAllocations.Count)
+            {
+                m_AllocListView.selectedIndex = state.SelectedAllocIndex;
+            }
+
+            // ── 7. Loaded snapshot label ──
+            if (m_IsLoadedSnapshot)
+                m_LoadedSnapshotLabel.style.display = DisplayStyle.Flex;
+
+            // ── 8. Frame range UI ──
+            m_StartFrameField.value = GCAllocUtils.DisplayFrame(m_Snapshot.FrameStart);
+            m_EndFrameField.value = GCAllocUtils.DisplayFrame(m_Snapshot.FrameEnd);
+            UpdateFrameRangeInfo();
+        }
+
         void OnDisable()
         {
             GCAllocSettings.SettingsChanged -= OnSettingsChanged;
@@ -478,35 +533,14 @@ namespace GCAllocBreakdown.Editor
             for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
                 m_AllThreadNames.Add(m_Snapshot.SortedThreadNames[i]);
 
-            // Restore thread selection from serialized array
-            m_SelectedThreads.Clear();
-            for (int i = 0; i < m_SavedState.SelectedThreads.Length; i++)
-            {
-                if (m_AllThreadNames.Contains(m_SavedState.SelectedThreads[i]))
-                    m_SelectedThreads.Add(m_SavedState.SelectedThreads[i]);
-            }
-
-            UpdateThreadButtonLabel();
-
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
             BuildTopOffenders();
-            ApplyFilters();
             UpdateDataSummary();
             ShowNoDataState(m_ActiveGroups.Count == 0);
 
-            // Restore selected marker (ApplyFilters defaults to index 0)
-            if (m_SavedState.SelectedMarkerIndex >= 0 && m_SavedState.SelectedMarkerIndex < m_FilteredGroups.Count)
-                m_MarkerListView.selectedIndex = m_SavedState.SelectedMarkerIndex;
-
             RebuildGraph();
-            m_GraphController.RestoreState(m_SavedState.Graph);
-            m_GraphController.RebuildGraph();
-
-            // Restore frame range in UI (fields display 1-based)
-            m_StartFrameField.value = GCAllocUtils.DisplayFrame(m_Snapshot.FrameStart);
-            m_EndFrameField.value = GCAllocUtils.DisplayFrame(m_Snapshot.FrameEnd);
-            UpdateFrameRangeInfo();
+            ApplyWindowState(false);
 
             long msSkeleton = sw.ElapsedMilliseconds;
 
@@ -517,12 +551,8 @@ namespace GCAllocBreakdown.Editor
             m_SharedSB.Append(m_Snapshot.TotalCount);
             m_SharedSB.Append(" allocs...");
             m_StatusLabel.text = m_SharedSB.ToString();
-            RestoreMarkerSortIndicator();
             m_SaveBtn.SetEnabled(false);  // disabled until allocs loaded
             m_ExportBtn.SetEnabled(false);
-
-            if (m_IsLoadedSnapshot)
-                m_LoadedSnapshotLabel.style.display = DisplayStyle.Flex;
 
             ValidateState("skeleton");
 
@@ -742,37 +772,7 @@ namespace GCAllocBreakdown.Editor
             if (isSubRange)
                 RebuildFromCache(subRangeStart, subRangeEnd);
 
-            // Restore thread filter (RebuildFromCache clears m_SelectedThreads)
-            if (m_SavedState.SelectedThreads.Length > 0)
-            {
-                m_SelectedThreads.Clear();
-                for (int i = 0; i < m_SavedState.SelectedThreads.Length; i++)
-                {
-                    if (m_AllThreadNames.Contains(m_SavedState.SelectedThreads[i]))
-                        m_SelectedThreads.Add(m_SavedState.SelectedThreads[i]);
-                }
-                UpdateThreadButtonLabel();
-                ApplyFilters();
-            }
-
-            // Restore graph state (viewport + Y-axis) from the serialized state captured
-            // in OnDisable. Must happen AFTER RebuildFromCache because that triggers
-            // RefreshGraphForSubRange → SetData which resets Y-axis state.
-            m_GraphController.RestoreState(m_SavedState.Graph);
-            m_GraphController.RebuildGraph();
-
-            // Restore marker selection (RebuildFromCache/ApplyFilters defaults to index 0)
-            if (m_SavedState.SelectedMarkerIndex >= 0 && m_SavedState.SelectedMarkerIndex < m_FilteredGroups.Count)
-            {
-                m_MarkerListView.selectedIndex = m_SavedState.SelectedMarkerIndex;
-                UpdateMarkerSummary(m_FilteredGroups[m_SavedState.SelectedMarkerIndex]);
-            }
-            else if (m_MarkerListView.selectedIndex >= 0 && m_MarkerListView.selectedIndex < m_FilteredGroups.Count)
-                UpdateMarkerSummary(m_FilteredGroups[m_MarkerListView.selectedIndex]);
-
-            // Restore individual allocation selection (UpdateMarkerSummary defaults to index 0)
-            if (m_SavedState.SelectedAllocIndex >= 0 && m_SavedState.SelectedAllocIndex < m_SelectedAllocations.Count)
-                m_AllocListView.selectedIndex = m_SavedState.SelectedAllocIndex;
+            ApplyWindowState(true);
 
             m_SaveBtn.SetEnabled(true);
             m_ExportBtn.SetEnabled(true);
