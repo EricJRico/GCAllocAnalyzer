@@ -458,7 +458,6 @@ namespace GCAllocBreakdown.Editor
         public float ViewportStart;
         public float ViewportEnd;
         public bool HasFrameSelection;
-        [System.NonSerialized] public bool[] SelectedFrameBuffer;
         public int SelectedFrameBaseFrame;
         public int SelectionFrameStart;
         public int SelectionFrameEnd;

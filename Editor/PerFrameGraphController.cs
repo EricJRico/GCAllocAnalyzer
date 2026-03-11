@@ -343,7 +343,6 @@ namespace GCAllocBreakdown.Editor
                 ViewportStart = m_ViewportStart,
                 ViewportEnd = m_ViewportEnd,
                 HasFrameSelection = m_HasFrameSelection,
-                SelectedFrameBuffer = m_HasFrameSelection ? m_SelectedFrameBuffer : null,
                 SelectedFrameBaseFrame = m_SelectedFrameBaseFrame,
                 SelectionFrameStart = m_SelectionFrameStart,
                 SelectionFrameEnd = m_SelectionFrameEnd,
@@ -359,7 +358,6 @@ namespace GCAllocBreakdown.Editor
             m_OrderByMagnitude = state.OrderByMagnitude;
             m_ViewportStart = state.ViewportStart;
             m_ViewportEnd = state.ViewportEnd;
-            m_SelectedFrameBuffer = state.SelectedFrameBuffer;
             m_SelectedFrameBaseFrame = state.SelectedFrameBaseFrame;
             m_SelectionFrameStart = state.SelectionFrameStart;
             m_SelectionFrameEnd = state.SelectionFrameEnd;
@@ -368,20 +366,18 @@ namespace GCAllocBreakdown.Editor
             m_HasCustomYScale = state.HasCustomYScale;
             m_YPanOffset = state.YPanOffset;
 
-            // Rebuild the frame selection buffer if it was lost during domain reload.
-            // The bool[] is [NonSerialized] so it becomes null, but the frame indices survive.
+            // Rebuild the frame selection buffer from serialized frame indices.
             // m_FrameStore may not be set yet (RestoreState runs during BuildPerFrameGraph,
             // before TryRestoreAfterReload), so defer rebuild — it will be rebuilt when
-            // OnAllocsRestoredFromFile calls RestoreState again with a populated frame store.
-            if (state.HasFrameSelection && state.SelectedFrameBuffer == null
-                && m_SelectionFrameStart >= 0 && m_SelectionFrameEnd >= 0
+            // ApplyWindowState calls RestoreState again with a populated frame store.
+            if (state.HasFrameSelection && m_SelectionFrameStart >= 0 && m_SelectionFrameEnd >= 0
                 && m_FrameStore != null && m_FrameStore.HasFullFrameData)
             {
                 RebuildFrameSelectionBuffer();
             }
             else
             {
-                m_HasFrameSelection = state.HasFrameSelection && state.SelectedFrameBuffer != null;
+                m_HasFrameSelection = false;
             }
 
             UpdateSortToggleLabel();

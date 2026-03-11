@@ -695,8 +695,7 @@ namespace GCAllocBreakdown.Editor
                 // Frame selection buffer consistency
                 if (m_GraphController != null)
                 {
-                    var live = m_GraphController.CaptureState();
-                    if (live.HasFrameSelection && live.SelectedFrameBuffer == null)
+                    if (m_GraphController.HasFrameSelection && m_GraphController.SelectedFrameBuffer == null)
                         Fail("HasFrameSelection=true but SelectedFrameBuffer is null");
                 }
             }
