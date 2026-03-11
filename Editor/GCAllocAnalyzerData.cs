@@ -481,4 +481,49 @@ namespace GCAllocBreakdown.Editor
             YPanOffset = 0
         };
     }
+
+    // ═══════════════════════════════════════════════════
+    //  WindowState — all user-visible state that must survive
+    //  domain reload, captured as a single unit.
+    // ═══════════════════════════════════════════════════
+
+    [Serializable]
+    internal struct WindowState
+    {
+        // Graph
+        public GraphControllerState Graph;
+
+        // Filters
+        public string NameFilter;
+        public string ExcludeFilter;
+        public bool GroupByCallsite;
+        public string[] SelectedThreads;  // empty = all threads
+
+        // Sort
+        public int SortCol;    // cast from SortCol enum (private to window)
+        public bool SortAsc;
+
+        // Selections
+        public int SelectedMarkerIndex;
+        public int SelectedAllocIndex;
+
+        // Display
+        public bool ShowAssembly;
+        public bool IsLoadedSnapshot;
+
+        public static WindowState Default => new WindowState
+        {
+            Graph = GraphControllerState.Default,
+            NameFilter = "",
+            ExcludeFilter = "",
+            GroupByCallsite = true,
+            SelectedThreads = Array.Empty<string>(),
+            SortCol = 0,  // Bytes
+            SortAsc = false,
+            SelectedMarkerIndex = -1,
+            SelectedAllocIndex = -1,
+            ShowAssembly = false,
+            IsLoadedSnapshot = false
+        };
+    }
 }
