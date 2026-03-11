@@ -343,7 +343,6 @@ namespace GCAllocBreakdown.Editor
                 ViewportStart = m_ViewportStart,
                 ViewportEnd = m_ViewportEnd,
                 HasFrameSelection = m_HasFrameSelection,
-                SelectedFrameBaseFrame = m_SelectedFrameBaseFrame,
                 SelectionFrameStart = m_SelectionFrameStart,
                 SelectionFrameEnd = m_SelectionFrameEnd,
                 HighlightedFrame = m_HighlightedFrame,
@@ -358,7 +357,6 @@ namespace GCAllocBreakdown.Editor
             m_OrderByMagnitude = state.OrderByMagnitude;
             m_ViewportStart = state.ViewportStart;
             m_ViewportEnd = state.ViewportEnd;
-            m_SelectedFrameBaseFrame = state.SelectedFrameBaseFrame;
             m_SelectionFrameStart = state.SelectionFrameStart;
             m_SelectionFrameEnd = state.SelectionFrameEnd;
             m_HighlightedFrame = state.HighlightedFrame;
