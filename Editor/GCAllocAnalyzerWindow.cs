@@ -437,19 +437,19 @@ namespace GCAllocBreakdown.Editor
             if (string.IsNullOrEmpty(m_SnapshotFilePath))
                 m_SnapshotFilePath = GetSnapshotFilePath();
 
-            // Create a write-only snapshot with independent copies of the group lists.
+            // Create a write-only snapshot with independent copies of all lists.
             // Sub-range drag-selects call RebuildFromCache on the main thread, which clears
-            // and repopulates GroupsByFullCallstack/TopFrame. Without copies, the background
-            // writer iterating these lists would hit concurrent modification (index out of range).
-            // RawAllocations and SortedThreadNames are never modified by sub-range rebuilds.
+            // and repopulates GroupsByFullCallstack/TopFrame and RawAllocations. Without
+            // copies, the background writer iterating these lists would hit concurrent
+            // modification (index out of range).
             var writeSnapshot = new AnalysisSnapshot();
             writeSnapshot.TotalBytes = m_Snapshot.TotalBytes;
             writeSnapshot.TotalCount = m_Snapshot.TotalCount;
             writeSnapshot.FrameStart = m_Snapshot.FrameStart;
             writeSnapshot.FrameEnd = m_Snapshot.FrameEnd;
             writeSnapshot.HadCallStacks = m_Snapshot.HadCallStacks;
-            writeSnapshot.SortedThreadNames = m_Snapshot.SortedThreadNames;
-            writeSnapshot.RawAllocations = m_Snapshot.RawAllocations;
+            writeSnapshot.SortedThreadNames = new List<string>(m_Snapshot.SortedThreadNames);
+            writeSnapshot.RawAllocations = new List<RawAllocation>(m_Snapshot.RawAllocations);
             writeSnapshot.GroupsByFullCallstack = new List<CallsiteGroup>(m_Snapshot.GroupsByFullCallstack);
             writeSnapshot.GroupsByTopFrame = new List<CallsiteGroup>(m_Snapshot.GroupsByTopFrame);
 
