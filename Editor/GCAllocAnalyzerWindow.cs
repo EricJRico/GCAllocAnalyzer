@@ -114,7 +114,7 @@ namespace GCAllocBreakdown.Editor
         bool m_AllocSortAsc;
 
         // Loaded snapshot — Profiler sync is invalid for loaded snapshots
-        [SerializeField] bool m_IsLoadedSnapshot;
+        bool m_IsLoadedSnapshot;
 
         // ═══════════════════════════════════════════════════
         //  SORT
@@ -130,17 +130,13 @@ namespace GCAllocBreakdown.Editor
         // Core analysis data — serialized to survive domain reload
         [SerializeField] AnalysisSnapshot m_Snapshot = new();
         [SerializeField] GraphFrameStore m_FrameStore = new();
-        [SerializeField] SortCol m_SortCol = SortCol.Bytes;
-        [SerializeField] bool m_SortAsc;
-        [SerializeField] bool m_ShowAssembly;
-        [SerializeField] GraphControllerState m_GraphState = GraphControllerState.Default;
-        [SerializeField] string m_NameFilterText = "";
-        [SerializeField] string m_ExcludeFilterText = "";
-        [SerializeField] bool m_GroupByCallsiteValue = true;
-        [SerializeField] string[] m_SerializedSelectedThreads = Array.Empty<string>();
-        [SerializeField] int m_SelectedMarkerIndex = -1;
-        [SerializeField] int m_SelectedAllocIndex = -1;
+        [SerializeField] WindowState m_SavedState = WindowState.Default;
         [SerializeField] string m_SnapshotFilePath;  // .gcas file for domain reload restore
+
+        // Working copies — restored from m_SavedState after domain reload
+        SortCol m_SortCol = SortCol.Bytes;
+        bool m_SortAsc;
+        bool m_ShowAssembly;
 
 
         // Points to m_Snapshot.GroupsByFullCallstack or GroupsByTopFrame
@@ -310,30 +306,43 @@ namespace GCAllocBreakdown.Editor
             TryRestoreAfterReload();
         }
 
-        void OnDisable()
+        WindowState CaptureWindowState()
         {
-            GCAllocSettings.SettingsChanged -= OnSettingsChanged;
+            var state = new WindowState
+            {
+                Graph = m_GraphController.CaptureState(),
+                NameFilter = m_NameFilter.value,
+                ExcludeFilter = m_ExcludeFilter.value,
+                GroupByCallsite = m_GroupByCallsite.value,
+                SortCol = (int)m_SortCol,
+                SortAsc = m_SortAsc,
+                SelectedMarkerIndex = m_MarkerListView.selectedIndex,
+                SelectedAllocIndex = m_AllocListView.selectedIndex,
+                ShowAssembly = m_ShowAssembly,
+                IsLoadedSnapshot = m_IsLoadedSnapshot
+            };
 
-            m_GraphState = m_GraphController.CaptureState();
-            m_NameFilterText = m_NameFilter.value;
-            m_ExcludeFilterText = m_ExcludeFilter.value;
-            m_GroupByCallsiteValue = m_GroupByCallsite.value;
-            m_SelectedMarkerIndex = m_MarkerListView.selectedIndex;
-            m_SelectedAllocIndex = m_AllocListView.selectedIndex;
-
-            // Serialize thread selection (HashSet is not serializable).
+            // Serialize thread selection (HashSet not serializable).
             // Empty array = "all threads" (no filtering active).
             if (m_SelectedThreads.Count > 0 && m_SelectedThreads.Count < m_AllThreadNames.Count)
             {
-                m_SerializedSelectedThreads = new string[m_SelectedThreads.Count];
+                state.SelectedThreads = new string[m_SelectedThreads.Count];
                 int idx = 0;
                 foreach (string t in m_SelectedThreads)
-                    m_SerializedSelectedThreads[idx++] = t;
+                    state.SelectedThreads[idx++] = t;
             }
             else
             {
-                m_SerializedSelectedThreads = Array.Empty<string>();
+                state.SelectedThreads = Array.Empty<string>();
             }
+
+            return state;
+        }
+
+        void OnDisable()
+        {
+            GCAllocSettings.SettingsChanged -= OnSettingsChanged;
+            m_SavedState = CaptureWindowState();
 
             // If background write already completed, nothing to do.
             // If still in progress, spin-wait (must finish before domain unloads).
@@ -471,10 +480,10 @@ namespace GCAllocBreakdown.Editor
 
             // Restore thread selection from serialized array
             m_SelectedThreads.Clear();
-            for (int i = 0; i < m_SerializedSelectedThreads.Length; i++)
+            for (int i = 0; i < m_SavedState.SelectedThreads.Length; i++)
             {
-                if (m_AllThreadNames.Contains(m_SerializedSelectedThreads[i]))
-                    m_SelectedThreads.Add(m_SerializedSelectedThreads[i]);
+                if (m_AllThreadNames.Contains(m_SavedState.SelectedThreads[i]))
+                    m_SelectedThreads.Add(m_SavedState.SelectedThreads[i]);
             }
 
             UpdateThreadButtonLabel();
@@ -487,11 +496,11 @@ namespace GCAllocBreakdown.Editor
             ShowNoDataState(m_ActiveGroups.Count == 0);
 
             // Restore selected marker (ApplyFilters defaults to index 0)
-            if (m_SelectedMarkerIndex >= 0 && m_SelectedMarkerIndex < m_FilteredGroups.Count)
-                m_MarkerListView.selectedIndex = m_SelectedMarkerIndex;
+            if (m_SavedState.SelectedMarkerIndex >= 0 && m_SavedState.SelectedMarkerIndex < m_FilteredGroups.Count)
+                m_MarkerListView.selectedIndex = m_SavedState.SelectedMarkerIndex;
 
             RebuildGraph();
-            m_GraphController.RestoreState(m_GraphState);
+            m_GraphController.RestoreState(m_SavedState.Graph);
             m_GraphController.RebuildGraph();
 
             // Restore frame range in UI (fields display 1-based)
@@ -577,60 +586,64 @@ namespace GCAllocBreakdown.Editor
             // ── User-visible state (serialized "before" vs live "after") ──
 
             // Filters
-            if (m_NameFilter.value != m_NameFilterText)
-                Fail($"Name filter: UI='{m_NameFilter.value}' expected='{m_NameFilterText}'");
-            if (m_ExcludeFilter.value != m_ExcludeFilterText)
-                Fail($"Exclude filter: UI='{m_ExcludeFilter.value}' expected='{m_ExcludeFilterText}'");
+            if (m_NameFilter.value != m_SavedState.NameFilter)
+                Fail($"NameFilter: UI='{m_NameFilter.value}' expected='{m_SavedState.NameFilter}'");
+            if (m_ExcludeFilter.value != m_SavedState.ExcludeFilter)
+                Fail($"ExcludeFilter: UI='{m_ExcludeFilter.value}' expected='{m_SavedState.ExcludeFilter}'");
 
             // Grouping mode
-            if (m_GroupByCallsite.value != m_GroupByCallsiteValue)
-                Fail($"GroupByCallsite: UI={m_GroupByCallsite.value} expected={m_GroupByCallsiteValue}");
+            if (m_GroupByCallsite.value != m_SavedState.GroupByCallsite)
+                Fail($"GroupByCallsite: UI={m_GroupByCallsite.value} expected={m_SavedState.GroupByCallsite}");
 
             // Sort order
-            // (SortCol and SortAsc are serialized and applied via RestoreMarkerSortIndicator)
+            if ((int)m_SortCol != m_SavedState.SortCol)
+                Fail($"SortCol: live={(int)m_SortCol} expected={m_SavedState.SortCol}");
+            if (m_SortAsc != m_SavedState.SortAsc)
+                Fail($"SortAsc: live={m_SortAsc} expected={m_SavedState.SortAsc}");
 
             // Selected marker
-            if (m_SelectedMarkerIndex >= 0 && m_FilteredGroups.Count > 0)
+            if (m_SavedState.SelectedMarkerIndex >= 0 && m_FilteredGroups.Count > 0
+                && m_SavedState.SelectedMarkerIndex < m_FilteredGroups.Count)
             {
-                if (m_MarkerListView.selectedIndex != m_SelectedMarkerIndex
-                    && m_SelectedMarkerIndex < m_FilteredGroups.Count)
-                    Fail($"SelectedMarker: UI={m_MarkerListView.selectedIndex} expected={m_SelectedMarkerIndex}");
+                if (m_MarkerListView.selectedIndex != m_SavedState.SelectedMarkerIndex)
+                    Fail($"SelectedMarker: UI={m_MarkerListView.selectedIndex} expected={m_SavedState.SelectedMarkerIndex}");
             }
 
             // Individual allocation selection
-            if (m_SelectedAllocIndex >= 0 && m_SelectedAllocations.Count > 0
-                && phase == "allocs")
+            if (phase == "allocs" && m_SavedState.SelectedAllocIndex >= 0
+                && m_SelectedAllocations.Count > 0
+                && m_SavedState.SelectedAllocIndex < m_SelectedAllocations.Count)
             {
-                if (m_AllocListView.selectedIndex != m_SelectedAllocIndex
-                    && m_SelectedAllocIndex < m_SelectedAllocations.Count)
-                    Fail($"SelectedAlloc: UI={m_AllocListView.selectedIndex} expected={m_SelectedAllocIndex}");
+                if (m_AllocListView.selectedIndex != m_SavedState.SelectedAllocIndex)
+                    Fail($"SelectedAlloc: UI={m_AllocListView.selectedIndex} expected={m_SavedState.SelectedAllocIndex}");
             }
 
             // Thread filter
-            if (m_SerializedSelectedThreads.Length > 0)
+            if (m_SavedState.SelectedThreads.Length > 0)
             {
-                if (m_SelectedThreads.Count != m_SerializedSelectedThreads.Length)
-                    Fail($"ThreadFilter: {m_SelectedThreads.Count} selected, expected {m_SerializedSelectedThreads.Length}");
+                if (m_SelectedThreads.Count != m_SavedState.SelectedThreads.Length)
+                    Fail($"ThreadFilter: {m_SelectedThreads.Count} selected, expected {m_SavedState.SelectedThreads.Length}");
             }
 
-            // Graph viewport (from serialized GraphControllerState)
+            // Graph viewport
             if (m_GraphController != null)
             {
                 var live = m_GraphController.CaptureState();
-                if (Mathf.Abs(live.ViewportStart - m_GraphState.ViewportStart) > 0.001f)
-                    Fail($"ViewportStart: live={live.ViewportStart:F3} expected={m_GraphState.ViewportStart:F3}");
-                if (Mathf.Abs(live.ViewportEnd - m_GraphState.ViewportEnd) > 0.001f)
-                    Fail($"ViewportEnd: live={live.ViewportEnd:F3} expected={m_GraphState.ViewportEnd:F3}");
-                if (live.OrderByMagnitude != m_GraphState.OrderByMagnitude)
-                    Fail($"OrderByMagnitude: live={live.OrderByMagnitude} expected={m_GraphState.OrderByMagnitude}");
-                if (live.HasCustomYScale != m_GraphState.HasCustomYScale)
-                    Fail($"HasCustomYScale: live={live.HasCustomYScale} expected={m_GraphState.HasCustomYScale}");
-                if (live.HasCustomYScale && m_GraphState.HasCustomYScale)
+                ref readonly var eg = ref m_SavedState.Graph;
+                if (Mathf.Abs(live.ViewportStart - eg.ViewportStart) > 0.001f)
+                    Fail($"ViewportStart: live={live.ViewportStart:F3} expected={eg.ViewportStart:F3}");
+                if (Mathf.Abs(live.ViewportEnd - eg.ViewportEnd) > 0.001f)
+                    Fail($"ViewportEnd: live={live.ViewportEnd:F3} expected={eg.ViewportEnd:F3}");
+                if (live.OrderByMagnitude != eg.OrderByMagnitude)
+                    Fail($"OrderByMagnitude: live={live.OrderByMagnitude} expected={eg.OrderByMagnitude}");
+                if (live.HasCustomYScale != eg.HasCustomYScale)
+                    Fail($"HasCustomYScale: live={live.HasCustomYScale} expected={eg.HasCustomYScale}");
+                if (live.HasCustomYScale && eg.HasCustomYScale)
                 {
-                    if (live.UserYAxisMax != m_GraphState.UserYAxisMax)
-                        Fail($"UserYAxisMax: live={live.UserYAxisMax} expected={m_GraphState.UserYAxisMax}");
-                    if (live.YPanOffset != m_GraphState.YPanOffset)
-                        Fail($"YPanOffset: live={live.YPanOffset} expected={m_GraphState.YPanOffset}");
+                    if (live.UserYAxisMax != eg.UserYAxisMax)
+                        Fail($"UserYAxisMax: live={live.UserYAxisMax} expected={eg.UserYAxisMax}");
+                    if (live.YPanOffset != eg.YPanOffset)
+                        Fail($"YPanOffset: live={live.YPanOffset} expected={eg.YPanOffset}");
                 }
             }
 
@@ -730,13 +743,13 @@ namespace GCAllocBreakdown.Editor
                 RebuildFromCache(subRangeStart, subRangeEnd);
 
             // Restore thread filter (RebuildFromCache clears m_SelectedThreads)
-            if (m_SerializedSelectedThreads.Length > 0)
+            if (m_SavedState.SelectedThreads.Length > 0)
             {
                 m_SelectedThreads.Clear();
-                for (int i = 0; i < m_SerializedSelectedThreads.Length; i++)
+                for (int i = 0; i < m_SavedState.SelectedThreads.Length; i++)
                 {
-                    if (m_AllThreadNames.Contains(m_SerializedSelectedThreads[i]))
-                        m_SelectedThreads.Add(m_SerializedSelectedThreads[i]);
+                    if (m_AllThreadNames.Contains(m_SavedState.SelectedThreads[i]))
+                        m_SelectedThreads.Add(m_SavedState.SelectedThreads[i]);
                 }
                 UpdateThreadButtonLabel();
                 ApplyFilters();
@@ -745,21 +758,21 @@ namespace GCAllocBreakdown.Editor
             // Restore graph state (viewport + Y-axis) from the serialized state captured
             // in OnDisable. Must happen AFTER RebuildFromCache because that triggers
             // RefreshGraphForSubRange → SetData which resets Y-axis state.
-            m_GraphController.RestoreState(m_GraphState);
+            m_GraphController.RestoreState(m_SavedState.Graph);
             m_GraphController.RebuildGraph();
 
             // Restore marker selection (RebuildFromCache/ApplyFilters defaults to index 0)
-            if (m_SelectedMarkerIndex >= 0 && m_SelectedMarkerIndex < m_FilteredGroups.Count)
+            if (m_SavedState.SelectedMarkerIndex >= 0 && m_SavedState.SelectedMarkerIndex < m_FilteredGroups.Count)
             {
-                m_MarkerListView.selectedIndex = m_SelectedMarkerIndex;
-                UpdateMarkerSummary(m_FilteredGroups[m_SelectedMarkerIndex]);
+                m_MarkerListView.selectedIndex = m_SavedState.SelectedMarkerIndex;
+                UpdateMarkerSummary(m_FilteredGroups[m_SavedState.SelectedMarkerIndex]);
             }
             else if (m_MarkerListView.selectedIndex >= 0 && m_MarkerListView.selectedIndex < m_FilteredGroups.Count)
                 UpdateMarkerSummary(m_FilteredGroups[m_MarkerListView.selectedIndex]);
 
             // Restore individual allocation selection (UpdateMarkerSummary defaults to index 0)
-            if (m_SelectedAllocIndex >= 0 && m_SelectedAllocIndex < m_SelectedAllocations.Count)
-                m_AllocListView.selectedIndex = m_SelectedAllocIndex;
+            if (m_SavedState.SelectedAllocIndex >= 0 && m_SavedState.SelectedAllocIndex < m_SelectedAllocations.Count)
+                m_AllocListView.selectedIndex = m_SavedState.SelectedAllocIndex;
 
             m_SaveBtn.SetEnabled(true);
             m_ExportBtn.SetEnabled(true);
@@ -1025,7 +1038,7 @@ namespace GCAllocBreakdown.Editor
             m_NameFilter.labelElement.style.minWidth = StyleKeyword.Auto;
             m_NameFilter.labelElement.style.width = StyleKeyword.Auto;
             m_NameFilter.labelElement.style.marginRight = 4;
-            m_NameFilter.SetValueWithoutNotify(m_NameFilterText);
+            m_NameFilter.SetValueWithoutNotify(m_SavedState.NameFilter);
             m_NameFilter.RegisterValueChangedCallback(OnNameFilterChanged);
             filterRow1.Add(m_NameFilter);
 
@@ -1036,7 +1049,7 @@ namespace GCAllocBreakdown.Editor
             m_ExcludeFilter.labelElement.style.minWidth = StyleKeyword.Auto;
             m_ExcludeFilter.labelElement.style.width = StyleKeyword.Auto;
             m_ExcludeFilter.labelElement.style.marginRight = 4;
-            m_ExcludeFilter.SetValueWithoutNotify(m_ExcludeFilterText);
+            m_ExcludeFilter.SetValueWithoutNotify(m_SavedState.ExcludeFilter);
             m_ExcludeFilter.RegisterValueChangedCallback(OnExcludeFilterChanged);
             filterRow1.Add(m_ExcludeFilter);
 
@@ -1062,7 +1075,7 @@ namespace GCAllocBreakdown.Editor
             m_GroupByCallsite.labelElement.style.minWidth = StyleKeyword.Auto;
             m_GroupByCallsite.labelElement.style.width = StyleKeyword.Auto;
             m_GroupByCallsite.labelElement.style.marginRight = 4;
-            m_GroupByCallsite.SetValueWithoutNotify(m_GroupByCallsiteValue);
+            m_GroupByCallsite.SetValueWithoutNotify(m_SavedState.GroupByCallsite);
             m_GroupByCallsite.RegisterValueChangedCallback(OnGroupByChanged);
             filterRow2.Add(m_GroupByCallsite);
 
@@ -1158,7 +1171,7 @@ namespace GCAllocBreakdown.Editor
             m_GraphController.OnDragCompleted += OnGraphDragCompleted;
             m_GraphController.OnResetRequested += OnGraphResetRequested;
             m_GraphController.SetData(m_FrameStore, m_Snapshot, m_FilteredGroups, m_GroupByCallsite.value);
-            m_GraphController.RestoreState(m_GraphState);
+            m_GraphController.RestoreState(m_SavedState.Graph);
             return m_GraphController.Root;
         }
 
