@@ -47,7 +47,7 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_SelectionAreaBarColor      = new Color(0.4f, 0.8f, 0.73f);
         static readonly Color k_SelectionAreaBgColor = new Color(0.25f, 0.35f, 0.55f, 0.3f);
         static readonly Color k_SelectionEdgeColor  = new Color(0.5f, 0.7f, 1f, 0.8f);
-        static readonly Color k_BarSelectedOverlayColor  = new Color(1f, 1f, 1f, 0.7f);
+        static readonly Color k_HighlightedMethodOverlay  = new Color(1f, 1f, 1f, 0.6f);
         static readonly Color k_BarDimmed         = new Color(0.27f, 0.67f, 0.6f, 0.3f);
         static readonly Color k_HoverOverlay      = new Color(1f, 1f, 1f, 0.12f);
 
@@ -58,6 +58,8 @@ namespace GCAllocBreakdown.Editor
         BarData[] m_Bars;
         int m_BarOffset;
         int m_BarCount;
+        float m_VisibleSpan; // exact number of bars the viewport covers (fractional)
+        float m_FractionalOffset; // sub-bar offset for smooth scrolling [0, 1)
 
         BarData[] m_OverlayBars;
         int m_OverlayBarCount;
@@ -88,7 +90,7 @@ namespace GCAllocBreakdown.Editor
         bool m_HasSegmentData;
         MethodColorPalette m_MethodPalette;
         int[] m_SegmentIndexMap; // display index → original index for segment lookup (null = identity)
-        int m_OverlayMethodIndex = -1; // method index for segment-aligned overlay (-1 = bottom-aligned)
+        int m_HighlightedMethodIndex = -1; // method index to tint in stacked segments (-1 = none)
 
         // ═══════════════════════════════════════════════════
         //  DRAG STATE
@@ -168,19 +170,27 @@ namespace GCAllocBreakdown.Editor
         //  PUBLIC DATA SETTERS
         // ═══════════════════════════════════════════════════
 
-        public void SetBarData(BarData[] bars, int offset, int count)
+        public void SetBarData(BarData[] bars, int offset, int count, float visibleSpan = 0f, float fractionalOffset = 0f)
         {
             m_Bars = bars;
             m_BarOffset = offset;
             m_BarCount = bars != null ? count : 0;
+            m_VisibleSpan = visibleSpan > 0f ? visibleSpan : m_BarCount;
+            m_FractionalOffset = fractionalOffset;
             MarkDirtyRepaint();
         }
 
-        public void SetOverlayData(BarData[] overlayBars, int count, int methodIndex = -1)
+        public void SetHighlightedMethod(int methodIndex)
+        {
+            if (m_HighlightedMethodIndex == methodIndex) return;
+            m_HighlightedMethodIndex = methodIndex;
+            MarkDirtyRepaint();
+        }
+
+        public void SetOverlayData(BarData[] overlayBars, int count)
         {
             m_OverlayBars = overlayBars;
             m_OverlayBarCount = overlayBars != null ? count : 0;
-            m_OverlayMethodIndex = methodIndex;
             MarkDirtyRepaint();
         }
 
@@ -326,9 +336,9 @@ namespace GCAllocBreakdown.Editor
                 if (sStart >= m_BarCount) return;
                 if (sEnd >= m_BarCount) sEnd = m_BarCount - 1;
 
-                float barWidth = rect.width / m_BarCount;
-                left  = sStart * barWidth;
-                right = (sEnd + 1) * barWidth;
+                float barWidth = rect.width / m_VisibleSpan;
+                left  = (sStart - m_FractionalOffset) * barWidth;
+                right = (sEnd + 1 - m_FractionalOffset) * barWidth;
             }
 
             if (right - left < 1f) return;
@@ -363,9 +373,9 @@ namespace GCAllocBreakdown.Editor
                 if (sStart >= m_BarCount) return;
                 if (sEnd >= m_BarCount) sEnd = m_BarCount - 1;
 
-                float barWidth = rect.width / m_BarCount;
-                left  = sStart * barWidth;
-                right = (sEnd + 1) * barWidth;
+                float barWidth = rect.width / m_VisibleSpan;
+                left  = (sStart - m_FractionalOffset) * barWidth;
+                right = (sEnd + 1 - m_FractionalOffset) * barWidth;
             }
 
             if (right - left < 1f) return;
@@ -409,7 +419,7 @@ namespace GCAllocBreakdown.Editor
 
             float areaWidth = rect.width;
             float areaHeight = rect.height;
-            float barWidth = areaWidth / m_BarCount;
+            float barWidth = areaWidth / m_VisibleSpan;
 
             for (int i = 0; i < m_BarCount; i++)
             {
@@ -438,7 +448,7 @@ namespace GCAllocBreakdown.Editor
                 bool isHighlighted = i == m_HighlightedBar;
                 bool isSelected = sStart >= 0 && i >= sStart && i <= sEnd;
 
-                float x = i * barWidth;
+                float x = (i - m_FractionalOffset) * barWidth;
                 float w = Mathf.Max(barWidth, 1f);
 
                 // Check if this bar should use stacked rendering
@@ -485,6 +495,10 @@ namespace GCAllocBreakdown.Editor
 
                             DrawFilledRect(painter, x, segTop, w, segH, segColor);
 
+                            // Tint highlighted method (selected marker in list)
+                            if (m_HighlightedMethodIndex >= 0 && m_Segments[s].MethodIndex == m_HighlightedMethodIndex)
+                                DrawFilledRect(painter, x, segTop, w, segH, k_HighlightedMethodOverlay);
+
                             if (isHighlighted && s == m_HighlightedSegment)
                                 DrawFilledRect(painter, x, segTop, w, segH, k_HoverOverlay);
                         }
@@ -504,6 +518,19 @@ namespace GCAllocBreakdown.Editor
                         color = k_BarNormal;
 
                     DrawFilledRect(painter, x, barTop, w, barHeight, color);
+
+                    // Tint if this bar contains the highlighted method
+                    if (m_HighlightedMethodIndex >= 0 && inAnalyzed && segEnd > segStart)
+                    {
+                        for (int s = segStart; s < segEnd; s++)
+                        {
+                            if (m_Segments[s].MethodIndex == m_HighlightedMethodIndex)
+                            {
+                                DrawFilledRect(painter, x, barTop, w, barHeight, k_HighlightedMethodOverlay);
+                                break;
+                            }
+                        }
+                    }
 
                     if (isHighlighted)
                         DrawFilledRect(painter, x, barTop, w, barHeight, k_HoverOverlay);
@@ -531,7 +558,7 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
-        //  DRAWING — OVERLAY BARS
+        //  DRAWING — OVERLAY BARS (bucketed zoom levels)
         // ═══════════════════════════════════════════════════
 
         void DrawOverlayBars(Painter2D painter, Rect rect)
@@ -540,18 +567,16 @@ namespace GCAllocBreakdown.Editor
 
             float areaWidth = rect.width;
             float areaHeight = rect.height;
-            float barWidth = areaWidth / m_BarCount;
-            painter.fillColor = k_BarSelectedOverlayColor;
+            float barWidth = areaWidth / m_VisibleSpan;
+            painter.fillColor = k_HighlightedMethodOverlay;
 
             for (int i = 0; i < m_OverlayBarCount; i++)
             {
-                // Scale overlay bar height to actual content rect
                 float barHeight = m_YAxisMax > 0
                     ? (float)m_OverlayBars[i].Value / m_YAxisMax * areaHeight
                     : 0f;
                 if (barHeight <= 0f) continue;
 
-                // Skip overlay for bars outside analyzed range
                 int maskIdx = m_BarOffset + i;
                 if (m_AnalyzedBarMask != null)
                 {
@@ -560,51 +585,14 @@ namespace GCAllocBreakdown.Editor
                 else if (m_AnalyzedStartBar >= 0 && (i < m_AnalyzedStartBar || i > m_AnalyzedEndBar))
                     continue;
 
-                float x = i * barWidth;
+                float x = (i - m_FractionalOffset) * barWidth;
                 float w = Mathf.Max(barWidth, 1f);
 
-                // When a method index is set, draw overlay at the matching segment's
-                // Y position instead of from the bottom of the chart.
-                if (m_OverlayMethodIndex >= 0 && m_HasSegmentData && m_SegmentOffsets != null)
-                {
-                    int srcIdx = m_BarOffset + i;
-                    int segLookup = m_SegmentIndexMap != null ? m_SegmentIndexMap[srcIdx] : srcIdx;
-                    if (segLookup + 1 < m_SegmentOffsets.Length)
-                    {
-                        int segStart = m_SegmentOffsets[segLookup];
-                        int segEnd = m_SegmentOffsets[segLookup + 1];
-
-                        float currentY = m_YAxisMax > 0
-                            ? areaHeight + (float)m_YPanOffset / m_YAxisMax * areaHeight
-                            : areaHeight;
-                        for (int s = segStart; s < segEnd; s++)
-                        {
-                            float segH = m_YAxisMax > 0
-                                ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
-                                : 0f;
-                            float segTop = currentY - segH;
-
-                            if (m_Segments[s].MethodIndex == m_OverlayMethodIndex)
-                            {
-                                // Draw overlay at this segment's position, clamped to segment bounds
-                                float segOverlayTop = currentY - barHeight;
-                                if (segOverlayTop < segTop) segOverlayTop = segTop;
-                                DrawFilledRect(painter, x, segOverlayTop, w, currentY - segOverlayTop,
-                                    k_BarSelectedOverlayColor);
-                                break;
-                            }
-                            currentY = segTop;
-                        }
-                        continue;
-                    }
-                }
-
-                // Default: draw overlay from the bottom of the chart
                 float overlayBottom = m_YAxisMax > 0
                     ? areaHeight + (float)m_YPanOffset / m_YAxisMax * areaHeight
                     : areaHeight;
                 float overlayTop = overlayBottom - barHeight;
-                DrawFilledRect(painter, x, overlayTop, w, barHeight, k_BarSelectedOverlayColor);
+                DrawFilledRect(painter, x, overlayTop, w, barHeight, k_HighlightedMethodOverlay);
             }
         }
 
@@ -619,12 +607,10 @@ namespace GCAllocBreakdown.Editor
             float w = contentRect.width;
             if (w < 1f) return -1;
 
-            // Simple division — works regardless of sort order since bars
-            // are uniform width and the controller uses display-position indices.
-            float barWidth = w / m_BarCount;
+            float barWidth = w / m_VisibleSpan;
             if (barWidth < 0.001f) return -1;
 
-            int index = (int)(localPos.x / barWidth);
+            int index = (int)(localPos.x / barWidth + m_FractionalOffset);
             if (index < 0 || index >= m_BarCount) return -1;
             return index;
         }

@@ -103,6 +103,8 @@ namespace GCAllocBreakdown.Editor
         const float k_MinVisibleBars = 10f;
         int m_ViewportStartBucket; // first bucket index visible in the viewport
         int m_TotalBucketCount;    // total buckets before viewport clipping
+        float m_VisibleSpan;       // exact fractional bar count visible in viewport
+        float m_FractionalOffset;  // sub-bar offset for smooth scrolling [0, 1)
 
         // Last known selection bar indices (for context menu access)
         int m_LastSelectionStartBar = -1;
@@ -133,7 +135,7 @@ namespace GCAllocBreakdown.Editor
         // Last known mouse X within the graph, for WASD zoom anchor
         float m_LastMouseNormX = 0.5f;
 
-        // Per-frame scratch buffer
+        // Per-frame scratch buffer for overlay building
         long[] m_PerFrameBuffer;
 
         // Per-bar analyzed mask (reusable, sized to bar count)
@@ -249,6 +251,7 @@ namespace GCAllocBreakdown.Editor
         Button m_YAxisResetBtn;
         VisualElement m_YAxisElement;
         Scroller m_HScroller;
+        Scroller m_VScroller;
         Label m_FloatingTooltip;
 
         // Grid line labels (absolutely positioned over the graph)
@@ -467,14 +470,20 @@ namespace GCAllocBreakdown.Editor
                 ApplySortedOrder(bucketCount);
             // (when !m_OrderByMagnitude the sorted indices are simply not used)
 
-            // ── Viewport range ──
-            int visibleStart = Mathf.FloorToInt(m_ViewportStart * bucketCount);
-            int visibleEnd = Mathf.CeilToInt(m_ViewportEnd * bucketCount);
+            // ── Viewport range (fractional for smooth scrolling) ──
+            float exactStart = m_ViewportStart * bucketCount;
+            float exactEnd = m_ViewportEnd * bucketCount;
+            int visibleStart = Mathf.FloorToInt(exactStart);
+            int visibleEnd = Mathf.CeilToInt(exactEnd);
             visibleStart = Mathf.Clamp(visibleStart, 0, bucketCount - 1);
             visibleEnd = Mathf.Clamp(visibleEnd, visibleStart, bucketCount);
             int visibleCount = visibleEnd - visibleStart;
+            float visibleSpan = exactEnd - exactStart;
+            float fractionalOffset = exactStart - visibleStart;
             m_ViewportStartBucket = visibleStart;
             m_BarCount = visibleCount;
+            m_VisibleSpan = visibleSpan;
+            m_FractionalOffset = fractionalOffset;
 
             // ── Build per-bar analyzed mask (covers all buckets, shared by both elements) ──
             BuildAnalyzedBarMask(m_Bars, 0, bucketCount, ref m_AnalyzedBarMask);
@@ -497,7 +506,7 @@ namespace GCAllocBreakdown.Editor
 
             m_GraphElement.YAxisMax = m_YAxisMax;
             m_GraphElement.YPanOffset = m_YPanOffset;
-            m_GraphElement.SetBarData(m_Bars, visibleStart, visibleCount);
+            m_GraphElement.SetBarData(m_Bars, visibleStart, visibleCount, visibleSpan, fractionalOffset);
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
             m_GraphElement.SetAnalyzedMask(m_AnalyzedBarMask);
             m_GraphElement.SetSegmentData(
@@ -526,10 +535,6 @@ namespace GCAllocBreakdown.Editor
             m_LastTooltipY = -1f;
             HideFloatingTooltip();
 
-            // ── Clear overlay bar count (stale data) ──
-            m_OverlayBarCount = 0;
-            m_GraphElement.SetOverlayData(m_OverlayBars, 0);
-
             // ── Re-apply overlay for currently selected marker ──
             int selectedIdx = m_GetSelectedMarkerIndex != null ? m_GetSelectedMarkerIndex() : -1;
             if (m_FilteredGroups != null &&
@@ -537,10 +542,11 @@ namespace GCAllocBreakdown.Editor
                 selectedIdx < m_FilteredGroups.Count)
                 UpdateOverlay(m_FilteredGroups[selectedIdx]);
             else
-                m_GraphOverlayLabel.text = "";
+                ClearOverlay();
 
-            // ── Update horizontal scroller ──
+            // ── Update scrollers ──
             UpdateHorizontalScroller();
+            UpdateVerticalScroller();
 
             // ── Restore selection from frame coordinates ──
             RestoreSelectionFromFrames();
@@ -550,7 +556,7 @@ namespace GCAllocBreakdown.Editor
         }
 
         /// <summary>
-        /// Show overlay bars for a specific callsite group.
+        /// Highlight segments matching a specific callsite group's method.
         /// </summary>
         public void UpdateOverlay(CallsiteGroup group)
         {
@@ -560,64 +566,30 @@ namespace GCAllocBreakdown.Editor
                 return;
             }
 
-            if (m_Snapshot == null || m_Snapshot.PerFrameBytes == null) return;
-            if (m_BarCount == 0) return;
-            if (m_FrameStore == null) return;
-
-            int snapshotFrameCount = m_Snapshot.PerFrameBytes.Length;
-
-            // ── Build per-frame bytes for this group (within analyzed range) ──
-            EnsurePerFrameBuffer(snapshotFrameCount);
-            for (int i = 0; i < group.Allocations.Count; i++)
+            if (m_FramesPerBucket == 1)
             {
-                var alloc = group.Allocations[i];
-                int idx = alloc.FrameIndex - m_Snapshot.FrameStart;
-                if (idx >= 0 && idx < snapshotFrameCount)
-                    m_PerFrameBuffer[idx] += alloc.Bytes;
-            }
+                // 1:1 zoom — tint matching segments inline
+                m_OverlayBarCount = 0;
+                m_GraphElement.SetOverlayData(m_OverlayBars, 0);
 
-            // ── Bucket the group's per-frame data over the full range ──
-            int fullFrameCount = m_FrameStore.FullFrameBytes.Length;
-            EnsureBarCapacity(ref m_OverlayBars, m_BarCount);
-            m_OverlayBarCount = m_BarCount;
-
-            for (int b = 0; b < m_BarCount; b++)
-            {
-                int origBucket = m_OrderByMagnitude
-                    ? m_SortedBarIndices[b + m_ViewportStartBucket]
-                    : b + m_ViewportStartBucket;
-                int startIdx = origBucket * m_FramesPerBucket;
-                int endIdx = Mathf.Min(startIdx + m_FramesPerBucket, fullFrameCount);
-
-                long bucketMax = 0;
-                for (int i = startIdx; i < endIdx; i++)
+                int methodIdx = -1;
+                if (m_HasSegmentData && group.Allocations.Count > 0)
                 {
-                    // Map full-range index to snapshot-relative index
-                    int snapshotIdx = (m_FrameStore.FullFrameStart + i) - m_Snapshot.FrameStart;
-                    if (snapshotIdx >= 0 && snapshotIdx < snapshotFrameCount)
-                    {
-                        if (m_PerFrameBuffer[snapshotIdx] > bucketMax)
-                            bucketMax = m_PerFrameBuffer[snapshotIdx];
-                    }
+                    string key = group.Allocations[0].DisplayName;
+                    if (string.IsNullOrEmpty(key))
+                        key = group.Allocations[0].ParentMethod;
+                    methodIdx = m_MethodPalette.GetIndex(key);
                 }
-
-                m_OverlayBars[b] = new BarData { Value = bucketMax };
+                m_GraphElement.SetHighlightedMethod(methodIdx);
             }
-
-            // ── Resolve method index for segment-aligned overlay ──
-            int methodIdx = -1;
-            if (m_HasSegmentData && m_FramesPerBucket == 1 && group.Allocations.Count > 0)
+            else
             {
-                string key = group.Allocations[0].DisplayName;
-                if (string.IsNullOrEmpty(key))
-                    key = group.Allocations[0].ParentMethod;
-                methodIdx = m_MethodPalette.GetIndex(key);
+                // Bucketed — build proportional overlay bars
+                m_GraphElement.SetHighlightedMethod(-1);
+                BuildOverlayBars(group);
+                m_GraphElement.SetOverlayData(m_OverlayBars, m_OverlayBarCount);
             }
 
-            // ── Push overlay to GraphElement ──
-            m_GraphElement.SetOverlayData(m_OverlayBars, m_OverlayBarCount, methodIdx);
-
-            // ── Update overlay label ──
             m_GraphOverlayLabel.text = group.DisplayName;
         }
 
@@ -709,7 +681,61 @@ namespace GCAllocBreakdown.Editor
         {
             m_OverlayBarCount = 0;
             m_GraphElement.SetOverlayData(m_OverlayBars, 0);
+            m_GraphElement.SetHighlightedMethod(-1);
             m_GraphOverlayLabel.text = "";
+        }
+
+        void BuildOverlayBars(CallsiteGroup group)
+        {
+            if (m_Snapshot == null || m_Snapshot.PerFrameBytes == null) return;
+            if (m_BarCount == 0 || m_FrameStore == null) return;
+
+            int snapshotFrameCount = m_Snapshot.PerFrameBytes.Length;
+            int fullFrameCount = m_FrameStore.FullFrameBytes.Length;
+
+            // Sum group's allocations into per-frame buffer
+            EnsurePerFrameBuffer(snapshotFrameCount);
+            for (int i = 0; i < group.Allocations.Count; i++)
+            {
+                var alloc = group.Allocations[i];
+                int idx = alloc.FrameIndex - m_Snapshot.FrameStart;
+                if (idx >= 0 && idx < snapshotFrameCount)
+                    m_PerFrameBuffer[idx] += alloc.Bytes;
+            }
+
+            // Bucket into overlay bars matching the viewport
+            EnsureBarCapacity(ref m_OverlayBars, m_BarCount);
+            m_OverlayBarCount = m_BarCount;
+
+            for (int b = 0; b < m_BarCount; b++)
+            {
+                int origBucket = m_OrderByMagnitude
+                    ? m_SortedBarIndices[b + m_ViewportStartBucket]
+                    : b + m_ViewportStartBucket;
+                int startIdx = origBucket * m_FramesPerBucket;
+                int endIdx = Mathf.Min(startIdx + m_FramesPerBucket, fullFrameCount);
+
+                long bucketMax = 0;
+                for (int i = startIdx; i < endIdx; i++)
+                {
+                    int snapshotIdx = (m_FrameStore.FullFrameStart + i) - m_Snapshot.FrameStart;
+                    if (snapshotIdx >= 0 && snapshotIdx < snapshotFrameCount)
+                    {
+                        if (m_PerFrameBuffer[snapshotIdx] > bucketMax)
+                            bucketMax = m_PerFrameBuffer[snapshotIdx];
+                    }
+                }
+
+                m_OverlayBars[b] = new BarData { Value = bucketMax };
+            }
+        }
+
+        void EnsurePerFrameBuffer(int frameCount)
+        {
+            if (m_PerFrameBuffer == null || m_PerFrameBuffer.Length < frameCount)
+                m_PerFrameBuffer = new long[frameCount];
+            else
+                Array.Clear(m_PerFrameBuffer, 0, frameCount);
         }
 
         // ═══════════════════════════════════════════════════
@@ -1011,6 +1037,18 @@ namespace GCAllocBreakdown.Editor
             chartColumn.Add(xAxis);
 
             m_GraphRoot.Add(chartColumn);
+
+            // ── Vertical scroller (visible when Y-zoomed) ──
+            m_VScroller = new Scroller(0, 1, OnVScrollerChanged, SliderDirection.Vertical)
+            {
+                style =
+                {
+                    width = 14,
+                    display = DisplayStyle.None
+                }
+            };
+            m_GraphRoot.Add(m_VScroller);
+
             m_GraphSection.Add(m_GraphRoot);
         }
 
@@ -1025,6 +1063,18 @@ namespace GCAllocBreakdown.Editor
             m_ViewportEnd = value + span;
             ClampViewport();
             RebuildGraph();
+        }
+
+        void OnVScrollerChanged(float value)
+        {
+            if (!m_HasCustomYScale || m_AutoYAxisMax <= m_YAxisMax) return;
+            long maxOffset = m_AutoYAxisMax - m_YAxisMax;
+            // Invert: scroller top (0) = high data, scroller bottom (max) = low data
+            float highValue = Mathf.Max(0, 1f - (float)m_YAxisMax / m_AutoYAxisMax);
+            m_YPanOffset = (long)((highValue - value) * maxOffset / highValue);
+            if (m_YPanOffset < 0) m_YPanOffset = 0;
+            if (m_YPanOffset > maxOffset) m_YPanOffset = maxOffset;
+            ApplyYAxisScale();
         }
 
         void OnGraphGeometryChanged(GeometryChangedEvent evt)
@@ -1188,6 +1238,7 @@ namespace GCAllocBreakdown.Editor
             PositionGridLineLabels();
 
             m_YAxisResetBtn.SetEnabled(m_HasCustomYScale);
+            UpdateVerticalScroller();
 
             m_LastTooltipBar = -1;
             m_LastTooltipY = -1f;
@@ -1286,6 +1337,7 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
 
             PositionGridLineLabels();
+            UpdateVerticalScroller();
 
             m_LastTooltipBar = -1;
             m_LastTooltipY = -1f;
@@ -1761,6 +1813,36 @@ namespace GCAllocBreakdown.Editor
                 m_HScroller.Adjust(span);
         }
 
+        void UpdateVerticalScroller()
+        {
+            if (m_VScroller == null) return;
+
+            if (!m_HasCustomYScale || m_AutoYAxisMax <= 0)
+            {
+                m_VScroller.style.display = DisplayStyle.None;
+                return;
+            }
+
+            bool wasHidden = m_VScroller.resolvedStyle.display == DisplayStyle.None;
+            m_VScroller.style.display = DisplayStyle.Flex;
+
+            float span = (float)m_YAxisMax / m_AutoYAxisMax;
+            float highValue = Mathf.Max(0, 1f - span);
+            // Invert: scroller top (0) = high data, scroller bottom (max) = low data
+            long maxOffset = m_AutoYAxisMax - m_YAxisMax;
+            float normalizedPos = maxOffset > 0 ? highValue - highValue * m_YPanOffset / maxOffset : 0f;
+
+            m_VScroller.lowValue = 0;
+            m_VScroller.highValue = highValue;
+            m_VScroller.slider.pageSize = span;
+            m_VScroller.slider.SetValueWithoutNotify(normalizedPos);
+
+            if (wasHidden)
+                m_VScroller.schedule.Execute(() => m_VScroller.Adjust(span));
+            else
+                m_VScroller.Adjust(span);
+        }
+
         void UpdateResetButtonVisibility()
         {
             if (m_ResetBtn == null || m_FrameStore == null) return;
@@ -2019,14 +2101,6 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.SetSegmentData(null, null, false, null);
         }
 
-        void EnsurePerFrameBuffer(int frameCount)
-        {
-            if (m_PerFrameBuffer == null || m_PerFrameBuffer.Length < frameCount)
-                m_PerFrameBuffer = new long[frameCount];
-            else
-                Array.Clear(m_PerFrameBuffer, 0, frameCount);
-        }
-
         static void EnsureBarCapacity(ref BarData[] array, int needed)
         {
             if (array == null || array.Length < needed)
@@ -2087,10 +2161,10 @@ namespace GCAllocBreakdown.Editor
             float areaWidth = m_GraphElement.contentRect.width;
             if (float.IsNaN(areaWidth) || areaWidth < 1f) return -1;
 
-            float barWidth = areaWidth / m_BarCount;
+            float barWidth = areaWidth / m_VisibleSpan;
             if (barWidth < 0.001f) return -1;
 
-            int index = (int)(localX / barWidth);
+            int index = (int)(localX / barWidth + m_FractionalOffset);
             if (index < 0) return -1;
             if (index >= m_BarCount) return -1;
             return index;
