@@ -83,6 +83,7 @@ namespace GCAllocBreakdown.Editor
         int m_AnalyzedStartBar = -1;
         int m_AnalyzedEndBar   = -1;
         bool[] m_AnalyzedBarMask; // per-bar mask for non-contiguous analyzed ranges
+        long[] m_AnalyzedBarValues; // max GC of selected frames per bar (for partial brightness)
 
         // Stacked bar segment data
         BarSegment[] m_Segments;
@@ -233,6 +234,17 @@ namespace GCAllocBreakdown.Editor
         public void SetAnalyzedMask(bool[] mask)
         {
             m_AnalyzedBarMask = mask;
+            MarkDirtyRepaint();
+        }
+
+        /// <summary>
+        /// Set per-bar values for partial-height brightness. When a bar contains
+        /// both selected and unselected frames, this value caps the bright portion
+        /// so only the selected frames' magnitude is rendered bright.
+        /// </summary>
+        public void SetAnalyzedValues(long[] values)
+        {
+            m_AnalyzedBarValues = values;
             MarkDirtyRepaint();
         }
 
@@ -509,15 +521,39 @@ namespace GCAllocBreakdown.Editor
                 else
                 {
                     // Solid bar (bucketed, un-analyzed, single method, or no segment data)
-                    Color color;
+                    //
+                    // When a bar contains both selected and unselected frames, draw
+                    // the full bar dimmed then a partial bright bar up to the selected
+                    // frames' max GC value. This prevents tall bars with a single small
+                    // selected frame from appearing fully bright.
                     if (isSelected)
-                        color = k_SelectionAreaBarColor;
+                    {
+                        DrawFilledRect(painter, x, barTop, w, barHeight, k_SelectionAreaBarColor);
+                    }
                     else if (!inAnalyzed)
-                        color = k_BarDimmed;
+                    {
+                        DrawFilledRect(painter, x, barTop, w, barHeight, k_BarDimmed);
+                    }
+                    else if (m_AnalyzedBarValues != null && srcIdx < m_AnalyzedBarValues.Length
+                        && m_AnalyzedBarValues[srcIdx] < barValue)
+                    {
+                        // Partial brightness: full bar dimmed, bright portion at selected value
+                        DrawFilledRect(painter, x, barTop, w, barHeight, k_BarDimmed);
+                        long selectedValue = m_AnalyzedBarValues[srcIdx];
+                        if (selectedValue > m_YPanOffset)
+                        {
+                            float brightTop = m_YAxisMax > 0
+                                ? areaHeight - (float)(selectedValue - m_YPanOffset) / m_YAxisMax * areaHeight
+                                : areaHeight;
+                            float brightHeight = barBottom - brightTop;
+                            if (brightHeight > 0f)
+                                DrawFilledRect(painter, x, brightTop, w, brightHeight, k_BarNormal);
+                        }
+                    }
                     else
-                        color = k_BarNormal;
-
-                    DrawFilledRect(painter, x, barTop, w, barHeight, color);
+                    {
+                        DrawFilledRect(painter, x, barTop, w, barHeight, k_BarNormal);
+                    }
 
                     // Tint if this bar contains the highlighted method
                     if (m_HighlightedMethodIndex >= 0 && inAnalyzed && segEnd > segStart)

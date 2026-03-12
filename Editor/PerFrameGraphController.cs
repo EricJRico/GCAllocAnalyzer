@@ -155,6 +155,7 @@ namespace GCAllocBreakdown.Editor
 
         // Per-bar analyzed mask (reusable, sized to bar count)
         bool[] m_AnalyzedBarMask;
+        long[] m_AnalyzedBarValues; // max GC of selected frames per bar
 
         // Stacked bar segment data
         BarSegment[] m_Segments;
@@ -543,7 +544,7 @@ namespace GCAllocBreakdown.Editor
             m_FractionalOffset = fractionalOffset;
 
             // ── Build per-bar analyzed mask (covers all buckets, shared by both elements) ──
-            BuildAnalyzedBarMask(m_Bars, 0, bucketCount, ref m_AnalyzedBarMask);
+            BuildAnalyzedBarMask(m_Bars, 0, bucketCount, ref m_AnalyzedBarMask, ref m_AnalyzedBarValues);
 
             // ── DIAGNOSTIC: remove after debugging ──
             LogMaskDiag(m_Bars, 0, bucketCount, m_AnalyzedBarMask);
@@ -561,6 +562,7 @@ namespace GCAllocBreakdown.Editor
             m_OverviewElement.SetBarData(m_Bars, 0, bucketCount);
             m_OverviewElement.SetAnalyzedRange(-1, -1);
             m_OverviewElement.SetAnalyzedMask(m_AnalyzedBarMask);
+            m_OverviewElement.SetAnalyzedValues(m_AnalyzedBarValues);
             m_OverviewElement.HasData = true;
             UpdateViewportRect();
 
@@ -569,6 +571,7 @@ namespace GCAllocBreakdown.Editor
             m_GraphElement.SetBarData(m_Bars, visibleStart, visibleCount, visibleSpan, fractionalOffset);
             m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
             m_GraphElement.SetAnalyzedMask(m_AnalyzedBarMask);
+            m_GraphElement.SetAnalyzedValues(m_AnalyzedBarValues);
             m_GraphElement.SetSegmentData(
                 showSegments ? m_Segments : null,
                 showSegments ? m_SegmentOffsets : null,
@@ -2022,7 +2025,8 @@ namespace GCAllocBreakdown.Editor
         /// range. Works for both contiguous (frame-order) and non-contiguous
         /// (sorted) views. mask[i] == true means bar i is at full brightness.
         /// </summary>
-        void BuildAnalyzedBarMask(BarData[] bars, int offset, int barCount, ref bool[] mask)
+        void BuildAnalyzedBarMask(BarData[] bars, int offset, int barCount,
+            ref bool[] mask, ref long[] values)
         {
             int totalNeeded = offset + barCount;
 
@@ -2032,6 +2036,11 @@ namespace GCAllocBreakdown.Editor
             else
                 Array.Clear(mask, offset, barCount);
 
+            if (values == null || values.Length < totalNeeded)
+                values = new long[Mathf.Max(totalNeeded, 64)];
+            else
+                Array.Clear(values, offset, barCount);
+
             if (m_FrameStore == null || barCount == 0) return;
 
             // No analysis active, or full range is analyzed — all bars at full brightness
@@ -2040,7 +2049,10 @@ namespace GCAllocBreakdown.Editor
                     && m_AnalyzedFrameEnd == m_FrameStore.FullFrameEnd))
             {
                 for (int i = 0; i < barCount; i++)
+                {
                     mask[offset + i] = true;
+                    values[offset + i] = bars[offset + i].Value;
+                }
                 return;
             }
 
@@ -2054,20 +2066,27 @@ namespace GCAllocBreakdown.Editor
                 brightStart = Mathf.Clamp(brightStart, 0, barCount);
                 brightEnd = Mathf.Clamp(brightEnd, 0, barCount);
                 for (int i = brightStart; i < brightEnd; i++)
+                {
                     mask[offset + i] = true;
+                    values[offset + i] = bars[offset + i].Value;
+                }
                 return;
             }
 
-            // Frame-order with a frame buffer: check each bar's frames against the buffer
-            // for precise per-bar dimming.
+            // Frame-order with a frame buffer: check each bar's frames against the buffer.
+            // Track the max GC value of only the selected frames so the renderer can draw
+            // the bright portion at the correct height (not the full bucket max).
             if (m_HasFrameSelection)
             {
                 int baseFrame = m_SelectedFrameBaseFrame;
                 int bufLen = m_SelectedFrameBuffer.Length;
+                long[] perFrame = m_FrameStore.FullFrameBytes;
+                int fullStart = m_FrameStore.FullFrameStart;
                 for (int i = 0; i < barCount; i++)
                 {
                     int sf = bars[offset + i].StartFrame;
                     int ef = bars[offset + i].EndFrame;
+                    long maxSelected = 0;
                     bool any = false;
                     for (int f = sf; f <= ef; f++)
                     {
@@ -2075,19 +2094,24 @@ namespace GCAllocBreakdown.Editor
                         if (idx >= 0 && idx < bufLen && m_SelectedFrameBuffer[idx])
                         {
                             any = true;
-                            break;
+                            int pfIdx = f - fullStart;
+                            if (pfIdx >= 0 && pfIdx < perFrame.Length && perFrame[pfIdx] > maxSelected)
+                                maxSelected = perFrame[pfIdx];
                         }
                     }
                     mask[offset + i] = any;
+                    values[offset + i] = any ? maxSelected : 0;
                 }
                 return;
             }
 
-            // Bar overlaps analyzed frame range
+            // Bar overlaps analyzed frame range — values = full bar value
             for (int i = 0; i < barCount; i++)
             {
-                mask[offset + i] = bars[offset + i].StartFrame <= m_AnalyzedFrameEnd
+                bool overlap = bars[offset + i].StartFrame <= m_AnalyzedFrameEnd
                     && bars[offset + i].EndFrame >= m_AnalyzedFrameStart;
+                mask[offset + i] = overlap;
+                values[offset + i] = overlap ? bars[offset + i].Value : 0;
             }
         }
 
