@@ -509,6 +509,10 @@ namespace GCAllocBreakdown.Editor
         public bool ShowAssembly;
         public bool IsLoadedSnapshot;
 
+        // Foldouts
+        public bool DataSummaryOpen;
+        public bool TopOffendersOpen;
+
         public static WindowState Default => new WindowState
         {
             Graph = GraphControllerState.Default,
@@ -521,7 +525,9 @@ namespace GCAllocBreakdown.Editor
             SelectedMarkerIndex = -1,
             SelectedAllocIndex = -1,
             ShowAssembly = false,
-            IsLoadedSnapshot = false
+            IsLoadedSnapshot = false,
+            DataSummaryOpen = true,
+            TopOffendersOpen = true
         };
 
         /// <summary>

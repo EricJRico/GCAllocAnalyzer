@@ -101,7 +101,8 @@ namespace GCAllocBreakdown.Editor
         VisualElement m_MarkerSummaryRoot;
         Label m_NoDataLabel;
 
-        // Top Offenders
+        // Foldouts
+        Foldout m_DataSummaryFoldout;
         Foldout m_TopOffendersFoldout;
         VisualElement m_TopByTotalContainer;
         VisualElement m_TopSpikesContainer;
@@ -319,7 +320,9 @@ namespace GCAllocBreakdown.Editor
                 SelectedMarkerIndex = m_MarkerListView.selectedIndex,
                 SelectedAllocIndex = m_AllocListView.selectedIndex,
                 ShowAssembly = m_ShowAssembly,
-                IsLoadedSnapshot = m_IsLoadedSnapshot
+                IsLoadedSnapshot = m_IsLoadedSnapshot,
+                DataSummaryOpen = m_DataSummaryFoldout.value,
+                TopOffendersOpen = m_TopOffendersFoldout.value
             };
 
             // Serialize thread selection (HashSet not serializable).
@@ -384,11 +387,15 @@ namespace GCAllocBreakdown.Editor
                 m_AllocListView.selectedIndex = state.SelectedAllocIndex;
             }
 
-            // ── 7. Loaded snapshot label ──
+            // ── 7. Foldouts ──
+            m_DataSummaryFoldout.value = state.DataSummaryOpen;
+            m_TopOffendersFoldout.value = state.TopOffendersOpen;
+
+            // ── 8. Loaded snapshot label ──
             if (m_IsLoadedSnapshot)
                 m_LoadedSnapshotLabel.style.display = DisplayStyle.Flex;
 
-            // ── 8. Frame range UI ──
+            // ── 9. Frame range UI ──
             m_StartFrameField.value = GCAllocUtils.DisplayFrame(m_Snapshot.FrameStart);
             m_EndFrameField.value = GCAllocUtils.DisplayFrame(m_Snapshot.FrameEnd);
             UpdateFrameRangeInfo();
@@ -683,6 +690,12 @@ namespace GCAllocBreakdown.Editor
             // Display
             if (m_ShowAssembly != expected.ShowAssembly)
                 Fail($"ShowAssembly: live={m_ShowAssembly} expected={expected.ShowAssembly}");
+
+            // Foldouts
+            if (m_DataSummaryFoldout.value != expected.DataSummaryOpen)
+                Fail($"DataSummaryOpen: live={m_DataSummaryFoldout.value} expected={expected.DataSummaryOpen}");
+            if (m_TopOffendersFoldout.value != expected.TopOffendersOpen)
+                Fail($"TopOffendersOpen: live={m_TopOffendersFoldout.value} expected={expected.TopOffendersOpen}");
 
             // ── Alloc-phase invariants ──
             if (phase == "allocs")
@@ -1547,9 +1560,9 @@ namespace GCAllocBreakdown.Editor
             };
 
             // Data Summary
-            var summaryFoldout = MakeSectionFoldout("Data Summary");
-            summaryFoldout.style.flexShrink = 0;
-            summaryFoldout.style.marginTop = 0;
+            m_DataSummaryFoldout = MakeSectionFoldout("Data Summary");
+            m_DataSummaryFoldout.style.flexShrink = 0;
+            m_DataSummaryFoldout.style.marginTop = 0;
 
             m_FrameCountLabel = new Label("Frame Count: —") { style = { fontSize = 11, marginBottom = 1 } };
             m_FrameRangeLabel = new Label("Frame Range: —") { style = { fontSize = 11, marginBottom = 1 } };
@@ -1557,12 +1570,12 @@ namespace GCAllocBreakdown.Editor
             m_TotalAllocsLabel = new Label("Total Allocs: —") { style = { fontSize = 11, marginBottom = 1 } };
             m_UniqueSitesLabel = new Label("Unique Sites: —") { style = { fontSize = 11, marginBottom = 1 } };
 
-            summaryFoldout.Add(m_FrameCountLabel);
-            summaryFoldout.Add(m_FrameRangeLabel);
-            summaryFoldout.Add(m_TotalGcLabel);
-            summaryFoldout.Add(m_TotalAllocsLabel);
-            summaryFoldout.Add(m_UniqueSitesLabel);
-            right.Add(summaryFoldout);
+            m_DataSummaryFoldout.Add(m_FrameCountLabel);
+            m_DataSummaryFoldout.Add(m_FrameRangeLabel);
+            m_DataSummaryFoldout.Add(m_TotalGcLabel);
+            m_DataSummaryFoldout.Add(m_TotalAllocsLabel);
+            m_DataSummaryFoldout.Add(m_UniqueSitesLabel);
+            right.Add(m_DataSummaryFoldout);
 
             // No-data placeholder
             m_NoDataLabel = new Label("Pull Data from the Profiler, set frame range, then click Analyze.")
@@ -2857,6 +2870,7 @@ namespace GCAllocBreakdown.Editor
                 target.Add(new CallsiteGroup
                 {
                     Key = src.Key,
+                    GroupIndex = i,
                     ResolvedCallStack = src.ResolvedCallStack
                 });
             }

@@ -126,6 +126,15 @@ namespace GCAllocBreakdown.Editor
         int m_BufferFrameStart = -1;
         int m_BufferFrameEnd = -1;
 
+        // Magnitude-mode selection: bar position fractions for zoom-independent dimming.
+        // In magnitude mode, frame-based dimming scatters at different zoom levels because
+        // re-bucketing shuffles which bars contain the selected frames. Instead, track the
+        // selection as a fractional position range (e.g. top 8.6% of bars) which stays
+        // visually stable across zoom levels.
+        bool m_HasMagnitudeSelection;
+        float m_MagnitudeSelStartFrac;
+        float m_MagnitudeSelEndFrac;
+
         /// <summary>
         /// After a drag-completed event, contains a boolean buffer where
         /// buffer[frameIndex - SelectedFrameBaseFrame] == true for selected frames.
@@ -536,6 +545,9 @@ namespace GCAllocBreakdown.Editor
             // ── Build per-bar analyzed mask (covers all buckets, shared by both elements) ──
             BuildAnalyzedBarMask(m_Bars, 0, bucketCount, ref m_AnalyzedBarMask);
 
+            // ── DIAGNOSTIC: remove after debugging ──
+            LogMaskDiag(m_Bars, 0, bucketCount, m_AnalyzedBarMask);
+
             // ── Stacked bar segments: built once in SetData(), gated here by zoom level ──
             bool showSegments = m_HasSegmentData && m_FramesPerBucket == 1;
 
@@ -661,6 +673,7 @@ namespace GCAllocBreakdown.Editor
         public void ClearFrameSelection()
         {
             m_HasFrameSelection = false;
+            m_HasMagnitudeSelection = false;
             m_BufferFrameStart = -1;
             m_BufferFrameEnd = -1;
         }
@@ -746,14 +759,33 @@ namespace GCAllocBreakdown.Editor
             EnsurePerFrameBuffer(snapshotFrameCount);
             int groupIdx = group.GroupIndex;
             var allocs = m_Snapshot.RawAllocations;
+            int matchCount = 0;
             for (int i = 0; i < allocs.Count; i++)
             {
                 var alloc = allocs[i];
                 int matchIdx = m_GroupByCallsite ? alloc.FullCallstackGroupIndex : alloc.TopFrameGroupIndex;
                 if (matchIdx != groupIdx) continue;
+                matchCount++;
                 int idx = alloc.FrameIndex - m_Snapshot.FrameStart;
                 if (idx >= 0 && idx < snapshotFrameCount)
                     m_PerFrameBuffer[idx] += alloc.Bytes;
+            }
+
+            // ── DIAGNOSTIC: remove after debugging ──
+            {
+                int nonZero = 0;
+                for (int i = 0; i < snapshotFrameCount; i++)
+                    if (m_PerFrameBuffer[i] > 0) nonZero++;
+                var sb = new System.Text.StringBuilder(256);
+                sb.Append("[OverlayDiag] group='").Append(group.DisplayName)
+                  .Append("' groupIdx=").Append(groupIdx)
+                  .Append(" groupCount=").Append(group.Count)
+                  .Append(" totalAllocs=").Append(allocs.Count)
+                  .Append(" matched=").Append(matchCount)
+                  .Append(" byCallsite=").Append(m_GroupByCallsite)
+                  .Append(" nonZeroFrames=").Append(nonZero)
+                  .Append(" fpb=").Append(m_FramesPerBucket);
+                Debug.Log(sb.ToString());
             }
 
             // Bucket into overlay bars matching the viewport
@@ -2012,8 +2044,22 @@ namespace GCAllocBreakdown.Editor
                 return;
             }
 
-            // With a frame buffer, check each bar's frames against the buffer
-            // for precise per-bar dimming. Works in both sorted and frame-order modes.
+            // Magnitude mode with position-based selection: mark the same fractional
+            // range of bars as bright regardless of zoom level. This keeps the bright
+            // block stable when re-bucketing changes which bars contain which frames.
+            if (m_HasFrameSelection && m_OrderByMagnitude && m_HasMagnitudeSelection)
+            {
+                int brightStart = Mathf.RoundToInt(m_MagnitudeSelStartFrac * barCount);
+                int brightEnd = Mathf.RoundToInt(m_MagnitudeSelEndFrac * barCount);
+                brightStart = Mathf.Clamp(brightStart, 0, barCount);
+                brightEnd = Mathf.Clamp(brightEnd, 0, barCount);
+                for (int i = brightStart; i < brightEnd; i++)
+                    mask[offset + i] = true;
+                return;
+            }
+
+            // Frame-order with a frame buffer: check each bar's frames against the buffer
+            // for precise per-bar dimming.
             if (m_HasFrameSelection)
             {
                 int baseFrame = m_SelectedFrameBaseFrame;
@@ -2043,6 +2089,65 @@ namespace GCAllocBreakdown.Editor
                 mask[offset + i] = bars[offset + i].StartFrame <= m_AnalyzedFrameEnd
                     && bars[offset + i].EndFrame >= m_AnalyzedFrameStart;
             }
+        }
+
+        // ── DIAGNOSTIC: remove after debugging ──
+        void LogMaskDiag(BarData[] bars, int offset, int barCount, bool[] mask)
+        {
+            var sb = new System.Text.StringBuilder(1024);
+            sb.Append("[MaskDiag] fpb=").Append(m_FramesPerBucket)
+              .Append(" bars=").Append(barCount)
+              .Append(" sorted=").Append(m_OrderByMagnitude)
+              .Append(" hasFrameSel=").Append(m_HasFrameSelection)
+              .Append(" analyzed=").Append(m_AnalyzedFrameStart)
+              .Append("..").Append(m_AnalyzedFrameEnd).AppendLine();
+
+            if (m_HasFrameSelection && m_SelectedFrameBuffer != null)
+            {
+                int bufTrue = 0, bufFirst = -1, bufLast = -1;
+                for (int i = 0; i < m_SelectedFrameBuffer.Length; i++)
+                {
+                    if (m_SelectedFrameBuffer[i])
+                    {
+                        bufTrue++;
+                        if (bufFirst < 0) bufFirst = i;
+                        bufLast = i;
+                    }
+                }
+                sb.Append("  buffer: true=").Append(bufTrue)
+                  .Append(" firstIdx=").Append(bufFirst)
+                  .Append(" lastIdx=").Append(bufLast)
+                  .Append(" base=").Append(m_SelectedFrameBaseFrame)
+                  .Append(" → frames ").Append(m_SelectedFrameBaseFrame + bufFirst)
+                  .Append("..").Append(m_SelectedFrameBaseFrame + bufLast).AppendLine();
+                // Check contiguous
+                bool contiguous = true;
+                for (int i = bufFirst; i <= bufLast && contiguous; i++)
+                    if (!m_SelectedFrameBuffer[i]) contiguous = false;
+                sb.Append("  contiguous=").Append(contiguous).AppendLine();
+            }
+
+            int maskTrue = 0;
+            for (int i = 0; i < barCount; i++)
+                if (mask[offset + i]) maskTrue++;
+
+            // Compare: what would range fallback give?
+            int rangeTrue = 0;
+            if (m_AnalyzedFrameStart >= 0 && m_AnalyzedFrameEnd >= 0)
+            {
+                for (int i = 0; i < barCount; i++)
+                {
+                    bool overlap = bars[offset + i].StartFrame <= m_AnalyzedFrameEnd
+                        && bars[offset + i].EndFrame >= m_AnalyzedFrameStart;
+                    if (overlap) rangeTrue++;
+                }
+            }
+
+            sb.Append("  maskTrue(buffer)=").Append(maskTrue)
+              .Append(" maskTrue(rangeFallback)=").Append(rangeTrue)
+              .Append(" diff=").Append(rangeTrue - maskTrue).AppendLine();
+
+            Debug.Log(sb.ToString());
         }
 
         // ═══════════════════════════════════════════════════
@@ -2346,6 +2451,19 @@ namespace GCAllocBreakdown.Editor
             m_HasFrameSelection = true;
             m_BufferFrameStart = m_SelectionFrameStart;
             m_BufferFrameEnd = m_SelectionFrameEnd;
+
+            // Record position fractions for magnitude-mode zoom-independent dimming
+            if (m_OrderByMagnitude && m_BarCount > 0)
+            {
+                int totalBars = m_TotalBucketCount;
+                m_MagnitudeSelStartFrac = (float)(m_ViewportStartBucket + startBar) / totalBars;
+                m_MagnitudeSelEndFrac = (float)(m_ViewportStartBucket + endBar + 1) / totalBars;
+                m_HasMagnitudeSelection = true;
+            }
+            else
+            {
+                m_HasMagnitudeSelection = false;
+            }
         }
 
         // ═══════════════════════════════════════════════════
