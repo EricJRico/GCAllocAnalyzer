@@ -126,14 +126,14 @@ namespace GCAllocBreakdown.Editor
         int m_BufferFrameStart = -1;
         int m_BufferFrameEnd = -1;
 
-        // Magnitude-mode selection: bar position fractions for zoom-independent dimming.
+        // Magnitude-mode selection: value range for zoom-independent dimming.
         // In magnitude mode, frame-based dimming scatters at different zoom levels because
         // re-bucketing shuffles which bars contain the selected frames. Instead, track the
-        // selection as a fractional position range (e.g. top 8.6% of bars) which stays
-        // visually stable across zoom levels.
+        // selection as a value range (min/max bytes) which stays visually stable across
+        // zoom levels — the same bars stay bright regardless of bucket count changes.
         bool m_HasMagnitudeSelection;
-        float m_MagnitudeSelStartFrac;
-        float m_MagnitudeSelEndFrac;
+        long m_MagnitudeSelMinValue;
+        long m_MagnitudeSelMaxValue;
 
         /// <summary>
         /// After a drag-completed event, contains a boolean buffer where
@@ -2056,19 +2056,17 @@ namespace GCAllocBreakdown.Editor
                 return;
             }
 
-            // Magnitude mode with position-based selection: mark the same fractional
-            // range of bars as bright regardless of zoom level. This keeps the bright
-            // block stable when re-bucketing changes which bars contain which frames.
+            // Magnitude mode with value-range selection: mark bars whose value falls
+            // within the selected range as bright. This keeps the bright block stable
+            // across zoom levels because the value range is bucket-count-independent.
             if (m_HasFrameSelection && m_OrderByMagnitude && m_HasMagnitudeSelection)
             {
-                int brightStart = Mathf.RoundToInt(m_MagnitudeSelStartFrac * barCount);
-                int brightEnd = Mathf.RoundToInt(m_MagnitudeSelEndFrac * barCount);
-                brightStart = Mathf.Clamp(brightStart, 0, barCount);
-                brightEnd = Mathf.Clamp(brightEnd, 0, barCount);
-                for (int i = brightStart; i < brightEnd; i++)
+                for (int i = 0; i < barCount; i++)
                 {
-                    mask[offset + i] = true;
-                    values[offset + i] = bars[offset + i].Value;
+                    long v = bars[offset + i].Value;
+                    bool inRange = v >= m_MagnitudeSelMinValue && v <= m_MagnitudeSelMaxValue;
+                    mask[offset + i] = inRange;
+                    values[offset + i] = inRange ? v : 0;
                 }
                 return;
             }
@@ -2476,12 +2474,22 @@ namespace GCAllocBreakdown.Editor
             m_BufferFrameStart = m_SelectionFrameStart;
             m_BufferFrameEnd = m_SelectionFrameEnd;
 
-            // Record position fractions for magnitude-mode zoom-independent dimming
+            // Record value range for magnitude-mode zoom-independent dimming.
+            // The min/max byte values of the selected bars stay stable across zoom
+            // levels — unlike position fractions which drift when re-bucketing changes
+            // the bar count.
             if (m_OrderByMagnitude && m_BarCount > 0)
             {
-                int totalBars = m_TotalBucketCount;
-                m_MagnitudeSelStartFrac = (float)(m_ViewportStartBucket + startBar) / totalBars;
-                m_MagnitudeSelEndFrac = (float)(m_ViewportStartBucket + endBar + 1) / totalBars;
+                long minVal = long.MaxValue;
+                long maxVal = long.MinValue;
+                for (int i = startBar; i <= endBar; i++)
+                {
+                    long v = m_Bars[m_ViewportStartBucket + i].Value;
+                    if (v < minVal) minVal = v;
+                    if (v > maxVal) maxVal = v;
+                }
+                m_MagnitudeSelMinValue = minVal;
+                m_MagnitudeSelMaxValue = maxVal;
                 m_HasMagnitudeSelection = true;
             }
             else
