@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using BarGraph.Core;
 using UnityEngine;
 
 namespace GCAllocBreakdown.Editor
@@ -272,12 +273,6 @@ namespace GCAllocBreakdown.Editor
     //  STACKED BAR SEGMENT DATA
     // ═══════════════════════════════════════════════════
 
-    internal struct BarSegment
-    {
-        public int MethodIndex;   // index into MethodColorPalette (k_OthersIndex = "Others")
-        public long Bytes;
-    }
-
     internal class MethodColorPalette
     {
         public const int k_OthersIndex = -1;
@@ -446,41 +441,6 @@ namespace GCAllocBreakdown.Editor
     }
 
     // ═══════════════════════════════════════════════════
-    //  GRAPH CONTROLLER STATE — serializable subset of
-    //  PerFrameGraphController state that must survive
-    //  domain reload.
-    // ═══════════════════════════════════════════════════
-
-    [Serializable]
-    internal struct GraphControllerState
-    {
-        public bool OrderByMagnitude;
-        public float ViewportStart;
-        public float ViewportEnd;
-        public bool HasFrameSelection;
-        public int SelectionFrameStart;
-        public int SelectionFrameEnd;
-        public int HighlightedFrame;
-        public long UserYAxisMax;
-        public bool HasCustomYScale;
-        public long YPanOffset;
-
-        public static GraphControllerState Default => new GraphControllerState
-        {
-            OrderByMagnitude = false,
-            ViewportStart = 0f,
-            ViewportEnd = 1f,
-            HasFrameSelection = false,
-            SelectionFrameStart = -1,
-            SelectionFrameEnd = -1,
-            HighlightedFrame = -1,
-            UserYAxisMax = 0,
-            HasCustomYScale = false,
-            YPanOffset = 0
-        };
-    }
-
-    // ═══════════════════════════════════════════════════
     //  WindowState — all user-visible state that must survive
     //  domain reload, captured as a single unit.
     // ═══════════════════════════════════════════════════
@@ -489,7 +449,7 @@ namespace GCAllocBreakdown.Editor
     internal struct WindowState
     {
         // Graph
-        public GraphControllerState Graph;
+        public BarGraphViewSnapshot Graph;
 
         // Filters
         public string NameFilter;
@@ -515,7 +475,7 @@ namespace GCAllocBreakdown.Editor
 
         public static WindowState Default => new WindowState
         {
-            Graph = GraphControllerState.Default,
+            Graph = default,
             NameFilter = "",
             ExcludeFilter = "",
             GroupByCallsite = true,

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using BarGraph.Core;
 using UnityEditor;
 using UnityEditor.Profiling;
 using UnityEditorInternal;
@@ -488,6 +489,7 @@ namespace GCAllocBreakdown.Editor
             m_MarkerListView.RefreshItems();
             if (m_Snapshot != null && m_Snapshot.HasData)
                 PopulateTopOffendersUI();
+            m_GraphController.ApplySettings();
         }
 
         /// <summary>
@@ -668,23 +670,12 @@ namespace GCAllocBreakdown.Editor
             {
                 var live = m_GraphController.CaptureState();
                 ref readonly var eg = ref expected.Graph;
-                if (Mathf.Abs(live.ViewportStart - eg.ViewportStart) > 0.001f)
-                    Fail($"ViewportStart: live={live.ViewportStart:F3} expected={eg.ViewportStart:F3}");
-                if (Mathf.Abs(live.ViewportEnd - eg.ViewportEnd) > 0.001f)
-                    Fail($"ViewportEnd: live={live.ViewportEnd:F3} expected={eg.ViewportEnd:F3}");
-                if (live.OrderByMagnitude != eg.OrderByMagnitude)
-                    Fail($"OrderByMagnitude: live={live.OrderByMagnitude} expected={eg.OrderByMagnitude}");
-                if (live.HasCustomYScale != eg.HasCustomYScale)
-                    Fail($"HasCustomYScale: live={live.HasCustomYScale} expected={eg.HasCustomYScale}");
-                if (live.HasCustomYScale && eg.HasCustomYScale)
-                {
-                    if (live.UserYAxisMax != eg.UserYAxisMax)
-                        Fail($"UserYAxisMax: live={live.UserYAxisMax} expected={eg.UserYAxisMax}");
-                    if (live.YPanOffset != eg.YPanOffset)
-                        Fail($"YPanOffset: live={live.YPanOffset} expected={eg.YPanOffset}");
-                }
-                if (live.HasFrameSelection != eg.HasFrameSelection)
-                    Fail($"HasFrameSelection: live={live.HasFrameSelection} expected={eg.HasFrameSelection}");
+                if (Mathf.Abs(live.ZoomX - eg.ZoomX) > 0.001f)
+                    Fail($"ZoomX: live={live.ZoomX:F3} expected={eg.ZoomX:F3}");
+                if (Mathf.Abs(live.ZoomY - eg.ZoomY) > 0.001f)
+                    Fail($"ZoomY: live={live.ZoomY:F3} expected={eg.ZoomY:F3}");
+                if (live.SortMode != eg.SortMode)
+                    Fail($"SortMode: live={live.SortMode} expected={eg.SortMode}");
             }
 
             // Display
@@ -712,11 +703,11 @@ namespace GCAllocBreakdown.Editor
                 if (m_Snapshot.FrameEnd > m_FrameStore.FullFrameEnd)
                     Fail($"FrameEnd ({m_Snapshot.FrameEnd}) > FullFrameEnd ({m_FrameStore.FullFrameEnd})");
 
-                // Frame selection buffer consistency
-                if (m_GraphController != null)
+                // Frame selection consistency
+                if (m_GraphController != null && m_GraphController.HasFrameSelection)
                 {
-                    if (m_GraphController.HasFrameSelection && m_GraphController.SelectedFrameBuffer == null)
-                        Fail("HasFrameSelection=true but SelectedFrameBuffer is null");
+                    if (!m_GraphController.GetSelectedFrameBuffer(out _, out _))
+                        Fail("HasFrameSelection=true but GetSelectedFrameBuffer returned false");
                 }
             }
 
@@ -1200,10 +1191,9 @@ namespace GCAllocBreakdown.Editor
             {
                 // Use the frame buffer for precise filtering (handles both
                 // contiguous frame-order and non-contiguous sorted selections)
-                var buffer = m_GraphController?.SelectedFrameBuffer;
-                if (buffer != null)
-                    RebuildFromCacheWithBuffer(buffer, m_GraphController.SelectedFrameBaseFrame,
-                        startFrame, endFrame);
+                if (m_GraphController != null
+                    && m_GraphController.GetSelectedFrameBuffer(out bool[] buffer, out int baseFrame))
+                    RebuildFromCacheWithBuffer(buffer, baseFrame, startFrame, endFrame);
                 else
                     RebuildFromCache(startFrame, endFrame);
 
@@ -1224,7 +1214,6 @@ namespace GCAllocBreakdown.Editor
         void OnGraphResetRequested()
         {
             if (!m_FrameStore.HasCachedAnalysis) return;
-            m_GraphController?.ClearFrameSelection();
             RebuildFromCache(m_FrameStore.FullFrameStart, m_FrameStore.FullFrameEnd);
             m_GraphController?.ClearSelection();
         }
