@@ -265,23 +265,27 @@ namespace GCAllocBreakdown.Editor
             // Input handlers
             m_BarGraph.SetInputSource(new BarGraphUIToolkitInput());
             m_BarGraph.AddHandler(new BarGraphHoverHandler());
-            m_BarGraph.AddHandler(new BarGraphSelectionHandler());
+            var selHandler = new ProfilerSelectionHandler();
+            m_BarGraph.AddHandler(selHandler);
             m_BarGraph.AddHandler(new BarGraphPanHandler());
             m_BarGraph.AddHandler(new BarGraphZoomHandler());
             m_BarGraph.AddHandler(new BarGraphKeyboardNavigationHandler());
+            m_BarGraph.AddHandler(new BarGraphKeyboardSelectionHandler());
             m_BarGraph.AddHandler(new BarGraphYAxisDragHandler());
             m_BarGraph.AddHandler(new BarGraphScrollbarHandler());
 
             // Y-axis label formatter
             m_BarGraph.FormatYLabel = v => GCAllocUtils.FormatBytes((long)v);
 
-            // Subscribe to events
-            m_BarGraph.BarClicked += OnBarClicked;
+            // Subscribe to handler events (input interpretation)
+            selHandler.BarClicked += OnBarClicked;
+            selHandler.SegmentClicked += OnSegmentClicked;
+            selHandler.DragCompleted += OnDragCompletedInternal;
+
+            // Subscribe to element events (state notifications)
             m_BarGraph.SelectionChanged += OnSelectionChangedInternal;
-            m_BarGraph.DragCompleted += OnDragCompletedInternal;
             m_BarGraph.HoverChanged += OnHoverChanged;
             m_BarGraph.SegmentHoverChanged += OnSegmentHoverChanged;
-            m_BarGraph.SegmentClicked += OnSegmentClicked;
             m_BarGraph.ViewChanged += OnViewChanged;
 
             // Context menu
@@ -759,18 +763,9 @@ namespace GCAllocBreakdown.Editor
                 return;
             }
 
-            // Build and set overlay values.
-            // SetOverlay fires DataChanged which clears segment selection,
-            // so preserve and restore it across the call.
-            int savedSegBar = m_BarGraph.ViewState.SelectedSegmentBar;
-            int savedSegIdx = m_BarGraph.ViewState.SelectedSegmentIndex;
-
             BuildOverlayValues(group);
             if (m_OverlayValues != null)
                 m_BarGraph.SetOverlay(m_OverlayValues);
-
-            m_BarGraph.ViewState.SelectedSegmentBar = savedSegBar;
-            m_BarGraph.ViewState.SelectedSegmentIndex = savedSegIdx;
 
             m_GraphOverlayLabel.text = group.DisplayName;
         }
@@ -787,10 +782,8 @@ namespace GCAllocBreakdown.Editor
 
         public void ClearSelection()
         {
-            m_BarGraph.ViewState.SelectedBars.Clear();
-            m_BarGraph.ViewState.FocusedBarIndex = -1;
+            m_BarGraph.ClearSelection();
             m_HighlightedFrame = -1;
-            m_BarGraph.MarkDirtyRepaint();
         }
 
         /// <summary>
@@ -878,7 +871,30 @@ namespace GCAllocBreakdown.Editor
             int frameIndex = m_FrameStore.FullFrameStart + args.DataIndex;
             m_HighlightedFrame = frameIndex;
 
-            m_OnFrameSelected?.Invoke(frameIndex, null);
+            string methodName = null;
+            if (m_HasSegmentData && args.DataIndex < m_BarEntryCount)
+            {
+                ref readonly BarEntry bar = ref m_BarEntries[args.DataIndex];
+                if (bar.SegmentCount > 1)
+                {
+                    int bestSeg = 0;
+                    float bestVal = 0f;
+                    for (int s = 0; s < bar.SegmentCount; s++)
+                    {
+                        float v = m_BarSegments[bar.SegmentStart + s].Value;
+                        if (v > bestVal) { bestVal = v; bestSeg = s; }
+                    }
+                    m_BarGraph.SelectSegment(args.DataIndex, bestSeg);
+                    int tag = m_BarSegments[bar.SegmentStart + bestSeg].Tag;
+                    if (tag >= 0) methodName = m_MethodPalette.GetMethodName(tag);
+                }
+                else
+                {
+                    m_BarGraph.ClearSelection();
+                }
+            }
+
+            m_OnFrameSelected?.Invoke(frameIndex, methodName);
         }
 
         void OnSegmentClicked(SegmentEventArgs args)
@@ -990,14 +1006,7 @@ namespace GCAllocBreakdown.Editor
 
         void OnContextSelectAll(DropdownMenuAction _)
         {
-            var selected = m_BarGraph.ViewState.SelectedBars;
-            selected.Clear();
-            for (int i = 0; i < m_BarEntryCount; i++)
-                selected.Add(i);
-            m_BarGraph.MarkDirtyRepaint();
-
-            if (GetSelectedFrameRange(out int sf, out int ef))
-                OnSelectionChanged?.Invoke(sf, ef);
+            m_BarGraph.SelectAll();
         }
 
         void OnContextClearSelection(DropdownMenuAction _) => ClearSelection();
@@ -1043,12 +1052,7 @@ namespace GCAllocBreakdown.Editor
                 }
             }
 
-            // Select and focus the extreme bar
-            var selected = m_BarGraph.ViewState.SelectedBars;
-            selected.Clear();
-            selected.Add(extremeIdx);
-            m_BarGraph.ViewState.FocusedBarIndex = extremeIdx;
-            m_BarGraph.MarkDirtyRepaint();
+            m_BarGraph.SelectBar(extremeIdx);
 
             int frameIndex = m_FrameStore.FullFrameStart + extremeIdx;
             m_HighlightedFrame = frameIndex;
