@@ -814,43 +814,6 @@ namespace GCAllocBreakdown.Editor
 
             sw.Stop();
 
-            // Diagnostic: thread filter state after restore
-            {
-                int countWith0 = 0;
-                int nullCount = 0;
-                for (int gi = 0; gi < m_ActiveGroups.Count; gi++)
-                {
-                    var ag = m_ActiveGroups[gi];
-                    if (ag.ThreadIndices == null) nullCount++;
-                    else if (ag.ThreadIndices.Contains(0)) countWith0++;
-                }
-                m_SharedSB.Clear();
-                m_SharedSB.Append("[GCAllocAnalyzer] Restore thread diag: ");
-                m_SharedSB.Append(countWith0);
-                m_SharedSB.Append('/');
-                m_SharedSB.Append(m_ActiveGroups.Count);
-                m_SharedSB.Append(" groups have idx0 | null=");
-                m_SharedSB.Append(nullCount);
-                m_SharedSB.Append(" | ThreadIndexNames=");
-                m_SharedSB.Append(m_ThreadIndexNames.Count);
-                m_SharedSB.Append(" | SelectedThreads={");
-                foreach (string s in m_SelectedThreads)
-                {
-                    m_SharedSB.Append('\'');
-                    m_SharedSB.Append(s);
-                    m_SharedSB.Append("', ");
-                }
-                m_SharedSB.Append("} | FilteredGroups=");
-                m_SharedSB.Append(m_FilteredGroups.Count);
-                if (m_ThreadIndexNames.Count > 0)
-                {
-                    m_SharedSB.Append(" | idx0='");
-                    m_SharedSB.Append(m_ThreadIndexNames[0]);
-                    m_SharedSB.Append('\'');
-                }
-                Debug.Log(m_SharedSB.ToString());
-            }
-
             m_SharedSB.Clear();
             m_SharedSB.Append("[GCAllocAnalyzer] Alloc restore complete in ");
             m_SharedSB.Append(sw.ElapsedMilliseconds);
@@ -881,6 +844,11 @@ namespace GCAllocBreakdown.Editor
             m_StatusLabel.text = m_SharedSB.ToString();
 
             ValidateState("allocs");
+
+            // Force repaint — OnAllocsRestoredFromFile runs via EditorApplication.delayCall
+            // which is outside the normal UIElements update cycle, so the window won't
+            // repaint until the next input event without this.
+            Repaint();
         }
 
         // ═══════════════════════════════════════════════════
@@ -3383,7 +3351,6 @@ namespace GCAllocBreakdown.Editor
             string nameFilter = m_NameFilter != null ? m_NameFilter.value : "";
             string excludeFilter = m_ExcludeFilter != null ? m_ExcludeFilter.value : "";
             bool allThreads = m_SelectedThreads.Count == 0;
-            m_ThreadFilterDiagLogged = false;
 
             m_FilteredGroups.Clear();
             for (int i = 0; i < m_ActiveGroups.Count; i++)
@@ -3428,50 +3395,8 @@ namespace GCAllocBreakdown.Editor
                     && m_SelectedThreads.Contains(m_ThreadIndexNames[threadIdx]))
                     return true;
             }
-            // Diagnostic: log first failure to understand the mismatch
-            if (!m_ThreadFilterDiagLogged)
-            {
-                m_ThreadFilterDiagLogged = true;
-                m_SharedSB.Clear();
-                m_SharedSB.Append("[GCAllocAnalyzer] ThreadFilter FAIL for '");
-                m_SharedSB.Append(g.DisplayName);
-                m_SharedSB.Append("' | ThreadIndices: {");
-                foreach (int ti in g.ThreadIndices)
-                {
-                    m_SharedSB.Append(ti);
-                    if (ti < m_ThreadIndexNames.Count)
-                    {
-                        m_SharedSB.Append("='");
-                        m_SharedSB.Append(m_ThreadIndexNames[ti]);
-                        m_SharedSB.Append('\'');
-                    }
-                    m_SharedSB.Append(", ");
-                }
-                m_SharedSB.Append("} | SelectedThreads: {");
-                foreach (string s in m_SelectedThreads)
-                {
-                    m_SharedSB.Append('\'');
-                    m_SharedSB.Append(s);
-                    m_SharedSB.Append("', ");
-                }
-                m_SharedSB.Append("} | ThreadIndexNames.Count=");
-                m_SharedSB.Append(m_ThreadIndexNames.Count);
-                m_SharedSB.Append(" | ActiveGroups with idx0: ");
-                int countWith0 = 0;
-                for (int gi = 0; gi < m_ActiveGroups.Count; gi++)
-                {
-                    var ag = m_ActiveGroups[gi];
-                    if (ag.ThreadIndices != null && ag.ThreadIndices.Contains(0))
-                        countWith0++;
-                }
-                m_SharedSB.Append(countWith0);
-                m_SharedSB.Append('/');
-                m_SharedSB.Append(m_ActiveGroups.Count);
-                Debug.LogWarning(m_SharedSB.ToString());
-            }
             return false;
         }
-        bool m_ThreadFilterDiagLogged;
 
         // Static sort comparisons — pre-allocated to avoid closure allocations on every sort
         static int CmpBytesAsc(CallsiteGroup a, CallsiteGroup b) => a.TotalBytes.CompareTo(b.TotalBytes);
