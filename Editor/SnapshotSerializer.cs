@@ -19,7 +19,8 @@ namespace GCAllocBreakdown.Editor
         //  WRITE (skeleton + heavy data)
         // ═══════════════════════════════════════════════════
 
-        public static void Write(string path, AnalysisSnapshot snapshot, GraphFrameStore store)
+        public static void Write(string path, AnalysisSnapshot snapshot, GraphFrameStore store,
+            List<string> threadIndexNames = null)
         {
             using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, k_IOBuffer);
             using var w = new BinaryWriter(fs, System.Text.Encoding.UTF8);
@@ -56,9 +57,11 @@ namespace GCAllocBreakdown.Editor
                 w.Write(fbBuf);
             }
 
-            // Groups (both groupings)
-            WriteGroupList(w, snapshot.GroupsByFullCallstack);
-            WriteGroupList(w, snapshot.GroupsByTopFrame);
+            // Groups (both groupings) — pass thread index names (extraction order)
+            // for ThreadIndices serialization. Falls back to SortedThreadNames if not provided.
+            var tiNames = threadIndexNames ?? snapshot.SortedThreadNames;
+            WriteGroupList(w, snapshot.GroupsByFullCallstack, tiNames);
+            WriteGroupList(w, snapshot.GroupsByTopFrame, tiNames);
 
             // Alloc data offset placeholder — record position, write 0, fill in later
             long offsetPos = fs.Position;
@@ -229,10 +232,10 @@ namespace GCAllocBreakdown.Editor
                 Buffer.BlockCopy(fbBuf, 0, store.FullFrameBytes, 0, fbBuf.Length);
             }
 
-            // Groups
+            // Groups — pass thread names for ThreadIndices reconstruction
             snapshot.EnsureNonSerializedLists();
-            ReadGroupList(r, snapshot.GroupsByFullCallstack);
-            ReadGroupList(r, snapshot.GroupsByTopFrame);
+            ReadGroupList(r, snapshot.GroupsByFullCallstack, snapshot.SortedThreadNames);
+            ReadGroupList(r, snapshot.GroupsByTopFrame, snapshot.SortedThreadNames);
 
             // Alloc data offset
             allocDataOffset = r.ReadInt64();
@@ -356,15 +359,15 @@ namespace GCAllocBreakdown.Editor
         //  GROUP SERIALIZATION
         // ═══════════════════════════════════════════════════
 
-        static void WriteGroupList(BinaryWriter w, List<CallsiteGroup> groups)
+        static void WriteGroupList(BinaryWriter w, List<CallsiteGroup> groups, List<string> threadNames)
         {
             int count = groups?.Count ?? 0;
             w.Write(count);
             for (int i = 0; i < count; i++)
-                WriteGroup(w, groups[i]);
+                WriteGroup(w, groups[i], threadNames);
         }
 
-        static void WriteGroup(BinaryWriter w, CallsiteGroup g)
+        static void WriteGroup(BinaryWriter w, CallsiteGroup g, List<string> threadNames)
         {
             w.Write(g.Key ?? "");
             w.Write(g.DisplayName ?? "");
@@ -428,19 +431,35 @@ namespace GCAllocBreakdown.Editor
             w.Write(ftwCount);
             for (int t = 0; t < ftwCount; t++)
                 w.Write(g.FormattedTopWorst[t] ?? "");
+
+            // Thread names that contributed to this group — stored as strings
+            // so indices are independent of first-seen vs alphabetical ordering.
+            // Tiny: typically 1-3 names per group, ~400 groups.
+            int tiCount = g.ThreadIndices?.Count ?? 0;
+            w.Write(tiCount);
+            if (tiCount > 0 && threadNames != null)
+            {
+                foreach (int ti in g.ThreadIndices)
+                {
+                    if (ti >= 0 && ti < threadNames.Count)
+                        w.Write(threadNames[ti]);
+                    else
+                        w.Write("");
+                }
+            }
         }
 
-        static void ReadGroupList(BinaryReader r, List<CallsiteGroup> target)
+        static void ReadGroupList(BinaryReader r, List<CallsiteGroup> target, List<string> threadNames)
         {
             int count = r.ReadInt32();
             target.Clear();
             if (target.Capacity < count)
                 target.Capacity = count;
             for (int i = 0; i < count; i++)
-                target.Add(ReadGroup(r));
+                target.Add(ReadGroup(r, threadNames));
         }
 
-        static CallsiteGroup ReadGroup(BinaryReader r)
+        static CallsiteGroup ReadGroup(BinaryReader r, List<string> threadNames)
         {
             var g = new CallsiteGroup
             {
@@ -519,6 +538,26 @@ namespace GCAllocBreakdown.Editor
                 g.FormattedTopWorst = new string[ftwCount];
                 for (int t = 0; t < ftwCount; t++)
                     g.FormattedTopWorst[t] = r.ReadString();
+            }
+
+            // Thread names → rebuild ThreadIndices using position in threadNames list
+            int tiCount = r.ReadInt32();
+            if (tiCount > 0 && threadNames != null)
+            {
+                g.ThreadIndices = new HashSet<int>(tiCount);
+                for (int t = 0; t < tiCount; t++)
+                {
+                    string name = r.ReadString();
+                    int idx = threadNames.IndexOf(name);
+                    if (idx >= 0)
+                        g.ThreadIndices.Add(idx);
+                }
+            }
+            else
+            {
+                // Skip bytes if no thread names available
+                for (int t = 0; t < tiCount; t++)
+                    r.ReadString();
             }
 
             return g;

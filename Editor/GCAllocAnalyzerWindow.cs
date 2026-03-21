@@ -118,6 +118,9 @@ namespace GCAllocBreakdown.Editor
         // Loaded snapshot — Profiler sync is invalid for loaded snapshots
         bool m_IsLoadedSnapshot;
 
+        // Suppress Profiler CPU module sync during domain reload restore
+        bool m_IsRestoringState;
+
         // ═══════════════════════════════════════════════════
         //  SORT
         // ═══════════════════════════════════════════════════
@@ -160,6 +163,8 @@ namespace GCAllocBreakdown.Editor
         int[] m_ThreadAllocCountBuf;
         int[] m_ThreadDenseIdxBuf;
 
+        // Reusable lookup for RebuildGroupThreadIndices (thread display name → dense index)
+        readonly Dictionary<string, int> m_ThreadNameToIdx = new(32);
 
         // Reusable buffers
         readonly StringBuilder m_SharedSB = new(1024);
@@ -420,7 +425,7 @@ namespace GCAllocBreakdown.Editor
                 if (string.IsNullOrEmpty(m_SnapshotFilePath))
                     m_SnapshotFilePath = GetSnapshotFilePath();
                 var sw = Stopwatch.StartNew();
-                SnapshotSerializer.Write(m_SnapshotFilePath, m_Snapshot, m_FrameStore);
+                SnapshotSerializer.Write(m_SnapshotFilePath, m_Snapshot, m_FrameStore, m_ThreadIndexNames);
                 Debug.Log($"[GCAllocAnalyzer] OnDisable sync write: {sw.ElapsedMilliseconds}ms ({m_Snapshot.TotalCount} allocs)");
                 m_SnapshotDirty = false;
             }
@@ -461,13 +466,14 @@ namespace GCAllocBreakdown.Editor
 
             var store = m_FrameStore;
             string path = m_SnapshotFilePath;
+            var writeThreadNames = new List<string>(m_ThreadIndexNames);
 
             m_BackgroundWriteInProgress = true;
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
                 try
                 {
-                    SnapshotSerializer.Write(path, writeSnapshot, store);
+                    SnapshotSerializer.Write(path, writeSnapshot, store, writeThreadNames);
                 }
                 catch (Exception ex)
                 {
@@ -535,11 +541,19 @@ namespace GCAllocBreakdown.Editor
                 m_FrameStore.FullFrameBytes = fileStore.FullFrameBytes;
             }
 
-            // Rebuild thread HashSet from serialized sorted list
+            // Rebuild thread state from serialized sorted list.
+            // m_ThreadIndexNames must be populated before ApplyWindowState so
+            // PassesThreadFilter can map ThreadIndices → thread names.
+            // After reload, ThreadIndices are stored relative to SortedThreadNames
+            // (written by serializer using threadIndexNames, read via SortedThreadNames.IndexOf).
             m_AllThreadNames.Clear();
             m_ThreadAllocCounts.Clear();
+            m_ThreadIndexNames.Clear();
             for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
+            {
                 m_AllThreadNames.Add(m_Snapshot.SortedThreadNames[i]);
+                m_ThreadIndexNames.Add(m_Snapshot.SortedThreadNames[i]);
+            }
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
@@ -547,8 +561,11 @@ namespace GCAllocBreakdown.Editor
             UpdateDataSummary();
             ShowNoDataState(m_ActiveGroups.Count == 0);
 
+            // Suppress Profiler sync — CPU module isn't ready during domain reload
+            m_IsRestoringState = true;
             RebuildGraph();
             ApplyWindowState(false);
+            m_IsRestoringState = false;
 
             long msSkeleton = sw.ElapsedMilliseconds;
 
@@ -717,6 +734,7 @@ namespace GCAllocBreakdown.Editor
 
         void OnAllocsRestoredFromFile(List<RawAllocation> allocs)
         {
+            var sw = Stopwatch.StartNew();
             m_Snapshot.RawAllocations = allocs;
 
             // Detect sub-range: serialized FrameStart/End may differ from full range
@@ -735,19 +753,22 @@ namespace GCAllocBreakdown.Editor
 
             // Rebuild state that depends on raw allocations
             EnsureGroupingIds();
-            RebuildGroupThreadIndices();
-            RebuildThreadAllocCounts();
-            UpdateThreadButtonLabel();
+            long msGroupIds = sw.ElapsedMilliseconds;
 
             // Rebuild m_ThreadIndexNames from sorted thread names.
             // This list is normally populated during RunAnalysis extraction. After domain
-            // reload it's empty (readonly initializer). RebuildFromCache uses its Count
-            // for int[]-indexed thread counting — without this, thread counts are all zero.
+            // reload it's empty (readonly initializer).
             m_ThreadIndexNames.Clear();
             for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
                 m_ThreadIndexNames.Add(m_Snapshot.SortedThreadNames[i]);
             if (m_ThreadCountBuffer == null || m_ThreadCountBuffer.Length < m_ThreadIndexNames.Count)
                 m_ThreadCountBuffer = new int[m_ThreadIndexNames.Count];
+
+            // ThreadIndices are now serialized in .gcas skeleton — no rebuild needed
+            long msThreadIndices = 0;
+
+            RebuildThreadAllocCounts();
+            UpdateThreadButtonLabel();
 
             // Rebuild frame store caches for sub-range analysis
             m_FrameStore.CachedSortedThreadNames = new List<string>(m_Snapshot.SortedThreadNames);
@@ -756,6 +777,7 @@ namespace GCAllocBreakdown.Editor
             m_FrameStore.CachedRawAllocations = new List<RawAllocation>(allocs.Count);
             for (int i = 0; i < allocs.Count; i++)
                 m_FrameStore.CachedRawAllocations.Add(allocs[i]);
+            long msCaches = sw.ElapsedMilliseconds - msGroupIds - msThreadIndices;
 
             // Compute per-frame bytes from allocs (full range) and copy to FullFrameBytes
             ComputeSnapshotPerFrameBytes();
@@ -766,22 +788,88 @@ namespace GCAllocBreakdown.Editor
                 m_FrameStore.FullFrameBytes = new long[count];
                 Array.Copy(m_Snapshot.PerFrameBytes, m_FrameStore.FullFrameBytes, count);
             }
+            long msPerFrame = sw.ElapsedMilliseconds - msGroupIds - msThreadIndices - msCaches;
 
             // Rebuild top offenders now that allocs are available
             BuildTopOffenders();
 
+            long msPreGraph = sw.ElapsedMilliseconds;
             // Full graph rebuild with SetData — now that CachedRawAllocations
             // is available, SetData will build segment data and method palette.
             RebuildGraph();
+            long msGraph = sw.ElapsedMilliseconds - msPreGraph;
 
             // Re-apply sub-range analysis now that the cache is populated
             if (isSubRange)
                 RebuildFromCache(subRangeStart, subRangeEnd);
 
+            long msPreApply = sw.ElapsedMilliseconds;
+            m_IsRestoringState = true;
             ApplyWindowState(true);
+            m_IsRestoringState = false;
+            long msApply = sw.ElapsedMilliseconds - msPreApply;
 
             m_SaveBtn.SetEnabled(true);
             m_ExportBtn.SetEnabled(true);
+
+            sw.Stop();
+
+            // Diagnostic: thread filter state after restore
+            {
+                int countWith0 = 0;
+                int nullCount = 0;
+                for (int gi = 0; gi < m_ActiveGroups.Count; gi++)
+                {
+                    var ag = m_ActiveGroups[gi];
+                    if (ag.ThreadIndices == null) nullCount++;
+                    else if (ag.ThreadIndices.Contains(0)) countWith0++;
+                }
+                m_SharedSB.Clear();
+                m_SharedSB.Append("[GCAllocAnalyzer] Restore thread diag: ");
+                m_SharedSB.Append(countWith0);
+                m_SharedSB.Append('/');
+                m_SharedSB.Append(m_ActiveGroups.Count);
+                m_SharedSB.Append(" groups have idx0 | null=");
+                m_SharedSB.Append(nullCount);
+                m_SharedSB.Append(" | ThreadIndexNames=");
+                m_SharedSB.Append(m_ThreadIndexNames.Count);
+                m_SharedSB.Append(" | SelectedThreads={");
+                foreach (string s in m_SelectedThreads)
+                {
+                    m_SharedSB.Append('\'');
+                    m_SharedSB.Append(s);
+                    m_SharedSB.Append("', ");
+                }
+                m_SharedSB.Append("} | FilteredGroups=");
+                m_SharedSB.Append(m_FilteredGroups.Count);
+                if (m_ThreadIndexNames.Count > 0)
+                {
+                    m_SharedSB.Append(" | idx0='");
+                    m_SharedSB.Append(m_ThreadIndexNames[0]);
+                    m_SharedSB.Append('\'');
+                }
+                Debug.Log(m_SharedSB.ToString());
+            }
+
+            m_SharedSB.Clear();
+            m_SharedSB.Append("[GCAllocAnalyzer] Alloc restore complete in ");
+            m_SharedSB.Append(sw.ElapsedMilliseconds);
+            m_SharedSB.Append("ms  (");
+            m_SharedSB.Append(allocs.Count);
+            m_SharedSB.Append(" allocs)\n  EnsureGroupingIds:      ");
+            m_SharedSB.Append(msGroupIds);
+            m_SharedSB.Append("ms\n  RebuildThreadIndices:   ");
+            m_SharedSB.Append(msThreadIndices);
+            m_SharedSB.Append("ms\n  CacheAnalysis:          ");
+            m_SharedSB.Append(msCaches);
+            m_SharedSB.Append("ms\n  ComputePerFrame:        ");
+            m_SharedSB.Append(msPerFrame);
+            m_SharedSB.Append("ms\n  RebuildGraph:           ");
+            m_SharedSB.Append(msGraph);
+            m_SharedSB.Append("ms\n  ApplyWindowState:       ");
+            m_SharedSB.Append(msApply);
+            m_SharedSB.Append("ms");
+            Debug.Log(m_SharedSB.ToString());
 
             m_SharedSB.Clear();
             m_SharedSB.Append("Restored: ");
@@ -1366,17 +1454,16 @@ namespace GCAllocBreakdown.Editor
         }
 
         // ═══════════════════════════════════════════════════
-        //  THREAD FILTER — GenericMenu (closures unavoidable in GenericMenu API,
-        //  but only created on click, not per-frame)
+        //  THREAD FILTER
         // ═══════════════════════════════════════════════════
 
         void ShowThreadFilterMenu()
         {
-            var menu = new GenericMenu();
+            var menu = new GenericDropdownMenu();
             bool allSelected = m_SelectedThreads.Count == 0 ||
                                m_SelectedThreads.Count == m_AllThreadNames.Count;
 
-            menu.AddItem(new GUIContent("All Threads"), allSelected, OnThreadMenuAll);
+            menu.AddItem("All Threads", allSelected, OnThreadMenuAll);
 
             // Quick-select shortcuts for common threads
             for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
@@ -1385,7 +1472,7 @@ namespace GCAllocBreakdown.Editor
                 if (t == k_MainThread || t == k_RenderThread)
                 {
                     bool on = m_SelectedThreads.Count == 1 && m_SelectedThreads.Contains(t);
-                    menu.AddItem(new GUIContent(string.Concat(t, " Only")), on, OnThreadMenuSolo, t);
+                    menu.AddItem(string.Concat(t, " Only"), on, () => OnThreadMenuSolo(t));
                 }
             }
 
@@ -1405,10 +1492,11 @@ namespace GCAllocBreakdown.Editor
                     m_SharedSB.Append(count.ToString("N0"));
                     m_SharedSB.Append(" allocs)");
                 }
-                menu.AddItem(new GUIContent(m_SharedSB.ToString()), on, OnThreadMenuToggle, thread);
+                string label = m_SharedSB.ToString();
+                menu.AddItem(label, on, () => OnThreadMenuToggle(thread));
             }
 
-            menu.ShowAsContext();
+            menu.DropDown(m_ThreadFilterBtn.worldBound, m_ThreadFilterBtn, DropdownMenuSizeMode.Content);
         }
 
         void OnThreadMenuAll()
@@ -1418,18 +1506,16 @@ namespace GCAllocBreakdown.Editor
             ApplyFilters();
         }
 
-        void OnThreadMenuSolo(object userData)
+        void OnThreadMenuSolo(string thread)
         {
-            string thread = (string)userData;
             m_SelectedThreads.Clear();
             m_SelectedThreads.Add(thread);
             UpdateThreadButtonLabel();
             ApplyFilters();
         }
 
-        void OnThreadMenuToggle(object userData)
+        void OnThreadMenuToggle(string thread)
         {
-            string thread = (string)userData;
 
             if (m_SelectedThreads.Count == 0)
             {
@@ -1529,10 +1615,12 @@ namespace GCAllocBreakdown.Editor
 
         void ShowExportMenu()
         {
-            var menu = new GenericMenu();
-            menu.AddItem(new GUIContent("Marker Table CSV"), false, () => GCAllocExporter.ExportMarkerTableCSV(m_FilteredGroups));
-            menu.AddItem(new GUIContent("Individual Allocations CSV"), false, () => GCAllocExporter.ExportAllocationsCSV(m_Snapshot));
-            menu.ShowAsContext();
+            var menu = new GenericDropdownMenu();
+            menu.AddItem("Marker Table CSV", false, () => GCAllocExporter.ExportMarkerTableCSV(m_FilteredGroups));
+            menu.AddItem("Individual Allocations CSV", false, () => GCAllocExporter.ExportAllocationsCSV(m_Snapshot));
+            menu.AddSeparator("");
+            menu.AddItem("Open Compare Tool", false, GCAllocExporter.OpenCompareTool);
+            menu.DropDown(m_ExportBtn.worldBound, m_ExportBtn, DropdownMenuSizeMode.Content);
         }
 
         // ═══════════════════════════════════════════════════
@@ -2982,7 +3070,7 @@ namespace GCAllocBreakdown.Editor
                 else
                     alloc.TopFrameGroupIndex = g.GroupIndex;
 
-                g.ThreadIndices.Add(alloc.ThreadIndex);
+                g.ThreadIndices.Add(alloc.ThreadAllocCountIndex);
                 g.TotalBytes += alloc.Bytes;
                 g.Count++;
             }
@@ -3058,12 +3146,20 @@ namespace GCAllocBreakdown.Editor
         /// Rebuild ThreadIndices on all groups from raw allocations.
         /// Called after domain reload when groups are restored from skeleton
         /// but ThreadIndices (NonSerialized) are null.
+        /// Uses ThreadDisplayName → index lookup because ThreadAllocCountIndex
+        /// was stamped in first-seen order but m_ThreadIndexNames is rebuilt
+        /// from SortedThreadNames (alphabetical) after domain reload.
         /// </summary>
         void RebuildGroupThreadIndices()
         {
             var allocs = m_Snapshot.RawAllocations;
             var fullGroups = m_Snapshot.GroupsByFullCallstack;
             var topGroups = m_Snapshot.GroupsByTopFrame;
+
+            // Build name → dense index map from current m_ThreadIndexNames
+            m_ThreadNameToIdx.Clear();
+            for (int i = 0; i < m_ThreadIndexNames.Count; i++)
+                m_ThreadNameToIdx[m_ThreadIndexNames[i]] = i;
 
             for (int i = 0; i < fullGroups.Count; i++)
                 fullGroups[i].ThreadIndices = new HashSet<int>();
@@ -3073,12 +3169,13 @@ namespace GCAllocBreakdown.Editor
             for (int i = 0; i < allocs.Count; i++)
             {
                 var a = allocs[i];
+                if (!m_ThreadNameToIdx.TryGetValue(a.ThreadDisplayName, out int tidx)) continue;
                 int fIdx = a.FullCallstackGroupIndex;
                 if (fIdx >= 0 && fIdx < fullGroups.Count)
-                    fullGroups[fIdx].ThreadIndices.Add(a.ThreadIndex);
+                    fullGroups[fIdx].ThreadIndices.Add(tidx);
                 int tIdx = a.TopFrameGroupIndex;
                 if (tIdx >= 0 && tIdx < topGroups.Count)
-                    topGroups[tIdx].ThreadIndices.Add(a.ThreadIndex);
+                    topGroups[tIdx].ThreadIndices.Add(tidx);
             }
         }
 
@@ -3286,6 +3383,7 @@ namespace GCAllocBreakdown.Editor
             string nameFilter = m_NameFilter != null ? m_NameFilter.value : "";
             string excludeFilter = m_ExcludeFilter != null ? m_ExcludeFilter.value : "";
             bool allThreads = m_SelectedThreads.Count == 0;
+            m_ThreadFilterDiagLogged = false;
 
             m_FilteredGroups.Clear();
             for (int i = 0; i < m_ActiveGroups.Count; i++)
@@ -3330,8 +3428,50 @@ namespace GCAllocBreakdown.Editor
                     && m_SelectedThreads.Contains(m_ThreadIndexNames[threadIdx]))
                     return true;
             }
+            // Diagnostic: log first failure to understand the mismatch
+            if (!m_ThreadFilterDiagLogged)
+            {
+                m_ThreadFilterDiagLogged = true;
+                m_SharedSB.Clear();
+                m_SharedSB.Append("[GCAllocAnalyzer] ThreadFilter FAIL for '");
+                m_SharedSB.Append(g.DisplayName);
+                m_SharedSB.Append("' | ThreadIndices: {");
+                foreach (int ti in g.ThreadIndices)
+                {
+                    m_SharedSB.Append(ti);
+                    if (ti < m_ThreadIndexNames.Count)
+                    {
+                        m_SharedSB.Append("='");
+                        m_SharedSB.Append(m_ThreadIndexNames[ti]);
+                        m_SharedSB.Append('\'');
+                    }
+                    m_SharedSB.Append(", ");
+                }
+                m_SharedSB.Append("} | SelectedThreads: {");
+                foreach (string s in m_SelectedThreads)
+                {
+                    m_SharedSB.Append('\'');
+                    m_SharedSB.Append(s);
+                    m_SharedSB.Append("', ");
+                }
+                m_SharedSB.Append("} | ThreadIndexNames.Count=");
+                m_SharedSB.Append(m_ThreadIndexNames.Count);
+                m_SharedSB.Append(" | ActiveGroups with idx0: ");
+                int countWith0 = 0;
+                for (int gi = 0; gi < m_ActiveGroups.Count; gi++)
+                {
+                    var ag = m_ActiveGroups[gi];
+                    if (ag.ThreadIndices != null && ag.ThreadIndices.Contains(0))
+                        countWith0++;
+                }
+                m_SharedSB.Append(countWith0);
+                m_SharedSB.Append('/');
+                m_SharedSB.Append(m_ActiveGroups.Count);
+                Debug.LogWarning(m_SharedSB.ToString());
+            }
             return false;
         }
+        bool m_ThreadFilterDiagLogged;
 
         // Static sort comparisons — pre-allocated to avoid closure allocations on every sort
         static int CmpBytesAsc(CallsiteGroup a, CallsiteGroup b) => a.TotalBytes.CompareTo(b.TotalBytes);
@@ -3597,7 +3737,7 @@ namespace GCAllocBreakdown.Editor
             if (group == null) { ClearMarkerSummary(); ClearGraphOverlay(); return; }
             UpdateMarkerSummary(group);
             UpdateGraphOverlay(group);
-            if (!m_IsLoadedSnapshot && group.Count > 0)
+            if (!m_IsLoadedSnapshot && !m_IsRestoringState && group.Count > 0)
                 SelectInCpuModuleFromGroup(group);
         }
 

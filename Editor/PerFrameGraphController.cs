@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -82,6 +84,11 @@ namespace GCAllocBreakdown.Editor
         long[] m_SegmentSortValues;
         bool m_HasSegmentData;
         MethodColorPalette m_MethodPalette = new();
+
+        // Timing from last SetData — reported in RebuildGraph log
+        long m_LastMsPalette;
+        long m_LastMsSegments;
+        readonly StringBuilder m_LogSB = new(256);
 
         // Per-frame scratch buffer for overlay building
         long[] m_PerFrameBuffer;
@@ -396,8 +403,12 @@ namespace GCAllocBreakdown.Editor
             if (m_FrameStore != null && m_FrameStore.HasCachedAnalysis
                 && m_FrameStore.HasFullFrameData)
             {
+                var sw = Stopwatch.StartNew();
                 m_MethodPalette.Build(m_FrameStore.CachedRawAllocations);
+                m_LastMsPalette = sw.ElapsedMilliseconds;
                 BuildSegmentData();
+                m_LastMsSegments = sw.ElapsedMilliseconds - m_LastMsPalette;
+                sw.Stop();
             }
             else
             {
@@ -451,11 +462,14 @@ namespace GCAllocBreakdown.Editor
             m_GraphSection.style.display = DisplayStyle.Flex;
 
             // Build bar entries with baked colors
+            var sw = Stopwatch.StartNew();
             BuildBarEntries();
+            long msBarEntries = sw.ElapsedMilliseconds;
 
             // Push data to chart and overview
             m_BarGraph.SetData(m_BarEntries, m_BarEntryCount, m_BarSegments, m_BarSegmentCount);
             m_OverviewStrip.SetData(m_BarEntries, m_BarEntryCount, m_BarSegments, m_BarSegmentCount);
+            long msPush = sw.ElapsedMilliseconds - msBarEntries;
 
             // Allow zooming down to ~5 visible bars regardless of frame count
             m_BarGraph.ViewState.MaxZoomX = Mathf.Max(50f, m_BarEntryCount / 5f);
@@ -488,6 +502,23 @@ namespace GCAllocBreakdown.Editor
 
             // Update button states
             UpdateResetButtonVisibility();
+
+            sw.Stop();
+            m_LogSB.Clear();
+            m_LogSB.Append("[GCAllocAnalyzer] Graph: palette ");
+            m_LogSB.Append(m_LastMsPalette);
+            m_LogSB.Append("ms | segments ");
+            m_LogSB.Append(m_LastMsSegments);
+            m_LogSB.Append("ms | barEntries ");
+            m_LogSB.Append(msBarEntries);
+            m_LogSB.Append("ms | push ");
+            m_LogSB.Append(msPush);
+            m_LogSB.Append("ms | total ");
+            m_LogSB.Append(m_LastMsPalette + m_LastMsSegments + sw.ElapsedMilliseconds);
+            m_LogSB.Append("ms");
+            UnityEngine.Debug.Log(m_LogSB.ToString());
+            m_LastMsPalette = 0;
+            m_LastMsSegments = 0;
         }
 
         // ═══════════════════════════════════════════════════
