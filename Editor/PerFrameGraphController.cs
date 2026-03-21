@@ -1,18 +1,20 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
+using BarGraph.Core;
+using BarGraph.Events;
+using BarGraph.Input;
+using BarGraph.Input.Handlers;
 
 namespace GCAllocBreakdown.Editor
 {
     // ═══════════════════════════════════════════════════
     //  PER-FRAME GRAPH CONTROLLER
-    //  Manages the per-frame bar graph using a custom-drawn
-    //  GraphElement instead of one VisualElement per bar.
-    //  The main window creates an instance and delegates
-    //  all graph operations to it.
+    //  Manages the per-frame bar graph using BarGraphElement
+    //  from ui-toolkit-extensions. The main window creates
+    //  an instance and delegates all graph operations to it.
     // ═══════════════════════════════════════════════════
 
     internal class PerFrameGraphController
@@ -21,14 +23,9 @@ namespace GCAllocBreakdown.Editor
         //  CONSTANTS
         // ═══════════════════════════════════════════════════
 
-        const float k_GraphHeight = 120f;
-        const float k_GraphYAxisWidth = 52f;
+        const float k_OverviewHeight = 24f;
         const float k_GraphXAxisHeight = 16f;
-        const int k_InitialBarCapacity = 512;
-        const int k_InitialGridLineCapacity = 8;
-        const int k_MaxGridLineLabels = 16;
-        const long k_MinGridStep = 1024; // 1 KB
-
+        const float k_MinGraphHeight = 100f;
         // ═══════════════════════════════════════════════════
         //  COLORS
         // ═══════════════════════════════════════════════════
@@ -60,209 +57,62 @@ namespace GCAllocBreakdown.Editor
         AnalysisSnapshot m_Snapshot;
         List<CallsiteGroup> m_FilteredGroups;
         GraphFrameStore m_FrameStore;
-        int m_AnalyzedFrameStart = -1;
-        int m_AnalyzedFrameEnd = -1;
+        bool m_GroupByCallsite;
 
         // ═══════════════════════════════════════════════════
-        //  BAR COMPUTATION BUFFERS
+        //  BAR DATA BUFFERS
         // ═══════════════════════════════════════════════════
 
-        BarData[] m_Bars;
-        BarData[] m_OverlayBars;
-        BarData[] m_SortScratch; // scratch buffer for rearranging bars during sort
-        int m_BarCount;
-        int m_OverlayBarCount;
-        GridLine[] m_GridLines;
-        int m_GridLineCount;
+        BarEntry[] m_BarEntries;
+        BarSegment[] m_BarSegments;
+        int m_BarEntryCount;
+        int m_BarSegmentCount;
 
-        // Bucketing state
-        int m_FramesPerBucket;
-        long m_YAxisMax;
+        // Per-bar selection buffer for baked dimming (reusable, never freed)
+        bool[] m_SelectionBuffer;
+        bool m_HasSelection;
 
-        // Y-axis zoom
-        long m_AutoYAxisMax;
-        long m_UserYAxisMax;
-        bool m_HasCustomYScale;
+        // Overlay values (one float per bar for method highlight)
+        float[] m_OverlayValues;
 
-        // Y-axis drag state
-        bool m_YAxisDragging;
-        float m_YAxisDragStartY;
-        long m_YAxisDragStartMax;
-
-        // XY pan state (middle-mouse drag)
-        long m_YPanOffset;
-        bool m_Panning;
-        float m_YPanStartMouseY;
-        long m_YPanStartOffset;
-        float m_XPanStartMouseX;
-        float m_XPanStartViewportStart;
-
-        // Viewport state: normalized range [0,1] over the full bar set
-        float m_ViewportStart;
-        float m_ViewportEnd = 1f;
-        const float k_MinVisibleBars = 10f;
-        int m_ViewportStartBucket; // first bucket index visible in the viewport
-        int m_TotalBucketCount;    // total buckets before viewport clipping
-        float m_VisibleSpan;       // exact fractional bar count visible in viewport
-        float m_FractionalOffset;  // sub-bar offset for smooth scrolling [0, 1)
-
-        // Last known selection bar indices (for context menu access)
-        int m_LastSelectionStartBar = -1;
-        int m_LastSelectionEndBar = -1;
-
-        // Selection stored as frame indices so it survives viewport changes
-        int m_SelectionFrameStart = -1;
-        int m_SelectionFrameEnd = -1;
-        int m_HighlightedFrame = -1;
-
-        // Reusable buffer marking which frames are in the drag selection
-        bool[] m_SelectedFrameBuffer;
-        bool m_HasFrameSelection;
-        int m_SelectedFrameBaseFrame;
-
-        /// <summary>
-        /// After a drag-completed event, contains a boolean buffer where
-        /// buffer[frameIndex - SelectedFrameBaseFrame] == true for selected frames.
-        /// Check HasFrameSelection before accessing.
-        /// </summary>
-        public bool[] SelectedFrameBuffer => m_HasFrameSelection ? m_SelectedFrameBuffer : null;
-        public bool HasFrameSelection => m_HasFrameSelection;
-        public int SelectedFrameBaseFrame => m_SelectedFrameBaseFrame;
-
-        // Cached tooltip bar index to avoid per-move string allocations
-        int m_LastTooltipBar = -1;
-
-        // Last known mouse X within the graph, for WASD zoom anchor
-        float m_LastMouseNormX = 0.5f;
+        // Segment data built from cached analysis
+        // m_SegmentFlatArray[frameRelativeIndex * methodCount + methodIndex] = bytes
+        long[] m_SegmentFlatArray;
+        int[] m_SegmentSortIndices;
+        long[] m_SegmentSortValues;
+        bool m_HasSegmentData;
+        MethodColorPalette m_MethodPalette = new();
 
         // Per-frame scratch buffer for overlay building
         long[] m_PerFrameBuffer;
 
-        // Per-bar analyzed mask (reusable, sized to bar count)
-        bool[] m_AnalyzedBarMask;
-
-        // Stacked bar segment data
-        BarSegment[] m_Segments;
-        int[] m_SegmentOffsets;           // per-bar offset into m_Segments (length = totalBuckets + 1)
-        bool m_HasSegmentData;
-        MethodColorPalette m_MethodPalette = new();
-        long[] m_SegmentFlatArray;           // flat [frameCount * methodCount] accumulator
-        int[] m_SegmentSortIndices;          // reusable per-frame sort buffer
-        long[] m_SegmentSortValues;          // reusable per-frame sort buffer
-        float m_LastTooltipY;
-
-        // Overview strip
-        const float k_OverviewHeight = 24f;
-        GraphElement m_OverviewElement;
-        VisualElement m_ViewportRect;
-        bool m_OverviewDragging;
-        float m_OverviewDragStartX;
-        float m_OverviewDragStartVP;
-
-        // ═══════════════════════════════════════════════════
-        //  SORTING
-        // ═══════════════════════════════════════════════════
-
-        bool m_OrderByMagnitude;
-        int[] m_SortedBarIndices; // maps display position -> original bar index
-
-        /// <summary>
-        /// When true, bars are sorted by magnitude (descending) instead of frame order.
-        /// </summary>
-        public bool OrderByMagnitude
-        {
-            get => m_OrderByMagnitude;
-            set
-            {
-                if (m_OrderByMagnitude == value) return;
-                m_OrderByMagnitude = value;
-                RebuildGraph();
-            }
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  VIEWPORT — zoom / pan
-        // ═══════════════════════════════════════════════════
-
-        /// <summary>Current viewport normalized start [0,1].</summary>
-        public float ViewportStart => m_ViewportStart;
-
-        /// <summary>Current viewport normalized end [0,1].</summary>
-        public float ViewportEnd => m_ViewportEnd;
-
-        /// <summary>True when the detail view is zoomed in.</summary>
-        public bool IsZoomedIn => m_ViewportEnd - m_ViewportStart < 0.999f;
-
-        public void ResetViewport()
-        {
-            m_ViewportStart = 0f;
-            m_ViewportEnd = 1f;
-            RebuildGraph();
-        }
-
-        void ZoomViewport(float zoomFactor, float anchorNormalized)
-        {
-            float span = m_ViewportEnd - m_ViewportStart;
-            float newSpan = Mathf.Clamp(span * zoomFactor, k_MinVisibleBars / Mathf.Max(1, m_TotalBucketCount), 1f);
-            float anchor = m_ViewportStart + span * anchorNormalized;
-
-            m_ViewportStart = anchor - newSpan * anchorNormalized;
-            m_ViewportEnd = m_ViewportStart + newSpan;
-            ClampViewport();
-            RebuildGraph();
-        }
-
-        void PanViewport(float delta)
-        {
-            float span = m_ViewportEnd - m_ViewportStart;
-            m_ViewportStart += delta;
-            m_ViewportEnd = m_ViewportStart + span;
-            ClampViewport();
-            RebuildGraph();
-        }
-
-        void ClampViewport()
-        {
-            float span = m_ViewportEnd - m_ViewportStart;
-            if (m_ViewportStart < 0f)
-            {
-                m_ViewportStart = 0f;
-                m_ViewportEnd = span;
-            }
-            if (m_ViewportEnd > 1f)
-            {
-                m_ViewportEnd = 1f;
-                m_ViewportStart = 1f - span;
-            }
-            if (m_ViewportStart < 0f) m_ViewportStart = 0f;
-        }
 
         // ═══════════════════════════════════════════════════
         //  UI ELEMENTS
         // ═══════════════════════════════════════════════════
 
         VisualElement m_GraphSection;
-        VisualElement m_GraphRoot;
-        GraphElement m_GraphElement;
+        BarGraphElement m_BarGraph;
+        BarGraphOverviewStrip m_OverviewStrip;
         Label m_GraphXStart, m_GraphXEnd;
         Label m_GraphOverlayLabel;
         Button m_SortToggleBtn;
         Button m_ResetBtn;
         Button m_YAxisResetBtn;
-        VisualElement m_YAxisElement;
-        Scroller m_HScroller;
-        Scroller m_VScroller;
         Label m_FloatingTooltip;
 
-        // Grid line labels (absolutely positioned over the graph)
-        Label[] m_GridLineLabels;
-        int m_GridLineLabelCount;
+        // Cached tooltip state
+        int m_LastTooltipBar = -1;
+        Vector2 m_LastPointerLocalPos;
+
+        // Frame tracking
+        int m_HighlightedFrame = -1;
 
         // ═══════════════════════════════════════════════════
-        //  PUBLIC API
+        //  PUBLIC PROPERTIES
         // ═══════════════════════════════════════════════════
 
-        /// <summary>The root Foldout element -- add this to the parent layout.</summary>
+        /// <summary>The root element — add this to the parent layout.</summary>
         public VisualElement Root => m_GraphSection;
 
         /// <summary>
@@ -271,475 +121,44 @@ namespace GCAllocBreakdown.Editor
         /// </summary>
         public VisualElement TooltipElement => m_FloatingTooltip;
 
-        float ActualGraphHeight
+        /// <summary>True when the view is zoomed in (ZoomX > 1).</summary>
+        public bool IsZoomedIn => m_BarGraph != null && m_BarGraph.ViewState.ZoomX > 1.01f;
+
+        /// <summary>Enable or disable the Order by Size button.</summary>
+        public void SetSortEnabled(bool enabled)
         {
-            get
+            if (!enabled)
+                OrderByMagnitude = false;
+            m_SortToggleBtn.SetEnabled(enabled);
+        }
+
+        /// <summary>When true, bars are sorted by magnitude (descending).</summary>
+        public bool OrderByMagnitude
+        {
+            get => m_BarGraph != null && m_BarGraph.ViewState.SortMode == SortMode.ByValue;
+            set
             {
-                float h = m_GraphElement.contentRect.height;
-                return float.IsNaN(h) || h < 1f ? k_GraphHeight : h;
+                if (m_BarGraph == null) return;
+                var mode = value ? SortMode.ByValue : SortMode.None;
+                if (m_BarGraph.ViewState.SortMode == mode) return;
+                m_BarGraph.SetSortMode(mode, descending: true);
+                UpdateSortToggleLabel();
             }
         }
+
+        // ═══════════════════════════════════════════════════
+        //  CONSTRUCTOR
+        // ═══════════════════════════════════════════════════
 
         public PerFrameGraphController(Action<int, string> onFrameSelected, Func<int> getSelectedMarkerIndex)
         {
             m_OnFrameSelected = onFrameSelected;
             m_GetSelectedMarkerIndex = getSelectedMarkerIndex;
-
-            m_Bars = new BarData[k_InitialBarCapacity];
-            m_OverlayBars = new BarData[k_InitialBarCapacity];
-            m_GridLines = new GridLine[k_InitialGridLineCapacity];
-            m_GridLineLabels = new Label[k_MaxGridLineLabels];
-
             BuildUI();
         }
 
-        /// <summary>
-        /// Store data references after each analysis run or Pull Data.
-        /// </summary>
-        public void SetData(GraphFrameStore frameStore, AnalysisSnapshot snapshot, List<CallsiteGroup> filteredGroups)
-        {
-            m_FrameStore = frameStore;
-            m_Snapshot = snapshot;
-            m_FilteredGroups = filteredGroups;
-
-            // Reset Y-axis zoom on new data
-            m_HasCustomYScale = false;
-            m_UserYAxisMax = 0;
-            m_YPanOffset = 0;
-
-            // Determine analyzed range (if snapshot has data)
-            if (snapshot != null && snapshot.HasData)
-            {
-                m_AnalyzedFrameStart = snapshot.FrameStart;
-                m_AnalyzedFrameEnd = snapshot.FrameEnd;
-            }
-            else
-            {
-                m_AnalyzedFrameStart = -1;
-                m_AnalyzedFrameEnd = -1;
-            }
-
-            // Build method color palette and segment data from cached analysis
-            if (m_FrameStore != null && m_FrameStore.HasCachedAnalysis
-                && m_FrameStore.HasFullFrameData)
-            {
-                m_MethodPalette.Build(m_FrameStore.CachedRawAllocations);
-                BuildSegmentData();
-            }
-            else
-            {
-                m_MethodPalette.Clear();
-                m_HasSegmentData = false;
-            }
-        }
-
-        public GraphControllerState CaptureState()
-        {
-            return new GraphControllerState
-            {
-                OrderByMagnitude = m_OrderByMagnitude,
-                ViewportStart = m_ViewportStart,
-                ViewportEnd = m_ViewportEnd,
-                HasFrameSelection = m_HasFrameSelection,
-                SelectedFrameBuffer = m_HasFrameSelection ? m_SelectedFrameBuffer : null,
-                SelectedFrameBaseFrame = m_SelectedFrameBaseFrame,
-                SelectionFrameStart = m_SelectionFrameStart,
-                SelectionFrameEnd = m_SelectionFrameEnd,
-                HighlightedFrame = m_HighlightedFrame,
-                UserYAxisMax = m_UserYAxisMax,
-                HasCustomYScale = m_HasCustomYScale,
-                YPanOffset = m_YPanOffset
-            };
-        }
-
-        public void RestoreState(GraphControllerState state)
-        {
-            m_OrderByMagnitude = state.OrderByMagnitude;
-            m_ViewportStart = state.ViewportStart;
-            m_ViewportEnd = state.ViewportEnd;
-            m_HasFrameSelection = state.HasFrameSelection;
-            m_SelectedFrameBuffer = state.SelectedFrameBuffer;
-            m_SelectedFrameBaseFrame = state.SelectedFrameBaseFrame;
-            m_SelectionFrameStart = state.SelectionFrameStart;
-            m_SelectionFrameEnd = state.SelectionFrameEnd;
-            m_HighlightedFrame = state.HighlightedFrame;
-            m_UserYAxisMax = state.UserYAxisMax;
-            m_HasCustomYScale = state.HasCustomYScale;
-            m_YPanOffset = state.YPanOffset;
-            UpdateSortToggleLabel();
-        }
-
-        /// <summary>
-        /// Lightweight update for sub-range re-analysis. Updates the analyzed range and
-        /// filtered groups without rebuilding the method palette or segment data (which
-        /// are derived from the full cached dataset and don't change on sub-range selection).
-        /// </summary>
-        public void UpdateAnalyzedRange(AnalysisSnapshot snapshot, List<CallsiteGroup> filteredGroups)
-        {
-            m_Snapshot = snapshot;
-            m_FilteredGroups = filteredGroups;
-
-            if (snapshot != null && snapshot.HasData)
-            {
-                m_AnalyzedFrameStart = snapshot.FrameStart;
-                m_AnalyzedFrameEnd = snapshot.FrameEnd;
-            }
-            else
-            {
-                m_AnalyzedFrameStart = -1;
-                m_AnalyzedFrameEnd = -1;
-            }
-        }
-
-        /// <summary>
-        /// Rebuild the entire graph from current frame store data.
-        /// </summary>
-        public void RebuildGraph()
-        {
-            if (m_FrameStore == null || !m_FrameStore.HasFullFrameData)
-            {
-                m_GraphSection.style.display = DisplayStyle.None;
-                return;
-            }
-
-            var perFrame = m_FrameStore.FullFrameBytes;
-            int frameCount = perFrame.Length;
-
-            m_GraphSection.style.display = DisplayStyle.Flex;
-
-            float areaWidth = m_GraphElement.contentRect.width;
-            if (float.IsNaN(areaWidth) || areaWidth < 1f) areaWidth = 400f;
-
-            // ── Bucketing (based on visible frame count so zoom gives finer resolution) ──
-            int visibleFrameCount = Mathf.Max(1, Mathf.RoundToInt((m_ViewportEnd - m_ViewportStart) * frameCount));
-            m_FramesPerBucket = 1;
-            if (visibleFrameCount > (int)areaWidth)
-                m_FramesPerBucket = Mathf.CeilToInt((float)visibleFrameCount / Mathf.Max(1f, areaWidth));
-
-            int bucketCount = Mathf.CeilToInt((float)frameCount / m_FramesPerBucket);
-            m_TotalBucketCount = bucketCount;
-
-            // ── Ensure bar buffer capacity ──
-            EnsureBarCapacity(ref m_Bars, bucketCount);
-
-            // ── Fill buckets and find max (over ALL buckets for consistent Y axis) ──
-            long maxValue = 0;
-            for (int b = 0; b < bucketCount; b++)
-            {
-                int startIdx = b * m_FramesPerBucket;
-                int endIdx = Mathf.Min(startIdx + m_FramesPerBucket, frameCount);
-                long bucketMax = 0;
-                for (int i = startIdx; i < endIdx; i++)
-                {
-                    if (perFrame[i] > bucketMax) bucketMax = perFrame[i];
-                }
-
-                int frameStart = m_FrameStore.FullFrameStart + startIdx;
-                int frameEnd = m_FrameStore.FullFrameStart + endIdx - 1;
-
-                m_Bars[b] = new BarData
-                {
-                    Value = bucketMax,
-                    StartFrame = frameStart,
-                    EndFrame = frameEnd
-                };
-
-                if (bucketMax > maxValue) maxValue = bucketMax;
-            }
-
-            m_AutoYAxisMax = maxValue;
-            if (m_HasCustomYScale)
-            {
-                if (m_UserYAxisMax > m_AutoYAxisMax)
-                    m_UserYAxisMax = m_AutoYAxisMax;
-                m_YAxisMax = m_UserYAxisMax;
-            }
-            else
-            {
-                m_YAxisMax = maxValue;
-            }
-
-            // Clamp pan offset for current zoom level
-            long maxOffset = m_AutoYAxisMax - m_YAxisMax;
-            if (maxOffset < 0) maxOffset = 0;
-            if (m_YPanOffset > maxOffset) m_YPanOffset = maxOffset;
-            if (!m_HasCustomYScale) m_YPanOffset = 0;
-
-            // ── Sorted view (order by magnitude) ──
-            if (m_OrderByMagnitude)
-                ApplySortedOrder(bucketCount);
-            // (when !m_OrderByMagnitude the sorted indices are simply not used)
-
-            // ── Viewport range (fractional for smooth scrolling) ──
-            float exactStart = m_ViewportStart * bucketCount;
-            float exactEnd = m_ViewportEnd * bucketCount;
-            int visibleStart = Mathf.FloorToInt(exactStart);
-            int visibleEnd = Mathf.CeilToInt(exactEnd);
-            visibleStart = Mathf.Clamp(visibleStart, 0, bucketCount - 1);
-            visibleEnd = Mathf.Clamp(visibleEnd, visibleStart, bucketCount);
-            int visibleCount = visibleEnd - visibleStart;
-            float visibleSpan = exactEnd - exactStart;
-            float fractionalOffset = exactStart - visibleStart;
-            m_ViewportStartBucket = visibleStart;
-            m_BarCount = visibleCount;
-            m_VisibleSpan = visibleSpan;
-            m_FractionalOffset = fractionalOffset;
-
-            // ── Build per-bar analyzed mask (covers all buckets, shared by both elements) ──
-            BuildAnalyzedBarMask(m_Bars, 0, bucketCount, ref m_AnalyzedBarMask);
-
-            // ── Stacked bar segments: built once in SetData(), gated here by zoom level ──
-            bool showSegments = m_HasSegmentData && m_FramesPerBucket == 1;
-
-            // ── Grid lines ──
-            ComputeGridLines(m_YPanOffset, m_YAxisMax, ActualGraphHeight);
-
-            // ── Push data to overview (full range) and main graph (viewport slice) ──
-
-            m_OverviewElement.YAxisMax = m_AutoYAxisMax;
-            m_OverviewElement.YPanOffset = 0;
-            m_OverviewElement.SetBarData(m_Bars, 0, bucketCount);
-            m_OverviewElement.SetAnalyzedRange(-1, -1);
-            m_OverviewElement.SetAnalyzedMask(m_AnalyzedBarMask);
-            m_OverviewElement.HasData = true;
-            UpdateViewportRect();
-
-            m_GraphElement.YAxisMax = m_YAxisMax;
-            m_GraphElement.YPanOffset = m_YPanOffset;
-            m_GraphElement.SetBarData(m_Bars, visibleStart, visibleCount, visibleSpan, fractionalOffset);
-            m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
-            m_GraphElement.SetAnalyzedMask(m_AnalyzedBarMask);
-            m_GraphElement.SetSegmentData(
-                showSegments ? m_Segments : null,
-                showSegments ? m_SegmentOffsets : null,
-                showSegments,
-                showSegments ? m_MethodPalette : null,
-                showSegments && m_OrderByMagnitude ? m_SortedBarIndices : null);
-            m_GraphElement.HasData = true;
-
-            // ── Update axis labels ──
-            if (visibleCount > 0)
-            {
-                m_GraphXStart.text = GCAllocUtils.DisplayFrame(m_Bars[visibleStart].StartFrame).ToString();
-                m_GraphXEnd.text = GCAllocUtils.DisplayFrame(m_Bars[visibleStart + visibleCount - 1].EndFrame).ToString();
-            }
-
-            // ── Position grid line labels ──
-            PositionGridLineLabels();
-
-            // ── Y-axis reset button visibility ──
-            m_YAxisResetBtn.SetEnabled(m_HasCustomYScale);
-
-            // ── Reset tooltip cache (stale after rebuild) ──
-            m_LastTooltipBar = -1;
-            m_LastTooltipY = -1f;
-            HideFloatingTooltip();
-
-            // ── Re-apply overlay for currently selected marker ──
-            int selectedIdx = m_GetSelectedMarkerIndex != null ? m_GetSelectedMarkerIndex() : -1;
-            if (m_FilteredGroups != null &&
-                selectedIdx >= 0 &&
-                selectedIdx < m_FilteredGroups.Count)
-                UpdateOverlay(m_FilteredGroups[selectedIdx]);
-            else
-                ClearOverlay();
-
-            // ── Update scrollers ──
-            UpdateHorizontalScroller();
-            UpdateVerticalScroller();
-
-            // ── Restore selection from frame coordinates ──
-            RestoreSelectionFromFrames();
-
-            // ── Show/hide reset button ──
-            UpdateResetButtonVisibility();
-        }
-
-        /// <summary>
-        /// Highlight segments matching a specific callsite group's method.
-        /// </summary>
-        public void UpdateOverlay(CallsiteGroup group)
-        {
-            if (group == null)
-            {
-                ClearOverlay();
-                return;
-            }
-
-            if (m_FramesPerBucket == 1)
-            {
-                // 1:1 zoom — tint matching segments inline
-                m_OverlayBarCount = 0;
-                m_GraphElement.SetOverlayData(m_OverlayBars, 0);
-
-                int methodIdx = -1;
-                if (m_HasSegmentData && group.Allocations.Count > 0)
-                {
-                    string key = group.Allocations[0].DisplayName;
-                    if (string.IsNullOrEmpty(key))
-                        key = group.Allocations[0].ParentMethod;
-                    methodIdx = m_MethodPalette.GetIndex(key);
-                }
-                m_GraphElement.SetHighlightedMethod(methodIdx);
-            }
-            else
-            {
-                // Bucketed — build proportional overlay bars
-                m_GraphElement.SetHighlightedMethod(-1);
-                BuildOverlayBars(group);
-                m_GraphElement.SetOverlayData(m_OverlayBars, m_OverlayBarCount);
-            }
-
-            m_GraphOverlayLabel.text = group.DisplayName;
-        }
-
-        /// <summary>
-        /// Clear the visual selection and highlighted bar.
-        /// The frame buffer is preserved so dimming stays correct across mode switches.
-        /// </summary>
-        public void ClearSelection()
-        {
-            m_GraphElement.SetSelection(-1, -1);
-            m_GraphElement.SetHighlightedBar(-1);
-            m_LastSelectionStartBar = -1;
-            m_LastSelectionEndBar = -1;
-            m_SelectionFrameStart = -1;
-            m_SelectionFrameEnd = -1;
-            m_HighlightedFrame = -1;
-        }
-
-        /// <summary>
-        /// Clear the frame selection buffer used for per-bar dimming.
-        /// Call when resetting to full range or starting a fresh analysis.
-        /// </summary>
-        public void ClearFrameSelection()
-        {
-            m_HasFrameSelection = false;
-        }
-
-        /// <summary>
-        /// Remap frame-based selection/highlight to current visible bar indices.
-        /// Called after every RebuildGraph to keep visual selection in sync.
-        /// </summary>
-        void RestoreSelectionFromFrames()
-        {
-            if (m_BarCount == 0)
-            {
-                m_GraphElement.SetSelection(-1, -1);
-                m_GraphElement.SetHighlightedBar(-1);
-                m_LastSelectionStartBar = -1;
-                m_LastSelectionEndBar = -1;
-                return;
-            }
-
-            // Restore range selection
-            if (m_SelectionFrameStart >= 0 && m_SelectionFrameEnd >= 0)
-            {
-                int sBar = FindBarContainingFrame(m_SelectionFrameStart);
-                int eBar = FindBarContainingFrame(m_SelectionFrameEnd);
-
-                // If selection is partially off-screen, clamp to visible bars
-                if (sBar < 0 && eBar >= 0) sBar = 0;
-                if (eBar < 0 && sBar >= 0) eBar = m_BarCount - 1;
-
-                if (sBar >= 0 && eBar >= 0)
-                {
-                    m_GraphElement.SetSelection(sBar, eBar);
-                    m_LastSelectionStartBar = sBar;
-                    m_LastSelectionEndBar = eBar;
-                }
-                else
-                {
-                    m_GraphElement.SetSelection(-1, -1);
-                    m_LastSelectionStartBar = -1;
-                    m_LastSelectionEndBar = -1;
-                }
-            }
-            else
-            {
-                m_GraphElement.SetSelection(-1, -1);
-                m_LastSelectionStartBar = -1;
-                m_LastSelectionEndBar = -1;
-            }
-
-            // Restore single-bar highlight
-            if (m_HighlightedFrame >= 0)
-            {
-                int hBar = FindBarContainingFrame(m_HighlightedFrame);
-                m_GraphElement.SetHighlightedBar(hBar);
-            }
-            else
-            {
-                m_GraphElement.SetHighlightedBar(-1);
-            }
-        }
-
-        /// <summary>
-        /// Clear all overlay bars and the overlay label.
-        /// </summary>
-        public void ClearOverlay()
-        {
-            m_OverlayBarCount = 0;
-            m_GraphElement.SetOverlayData(m_OverlayBars, 0);
-            m_GraphElement.SetHighlightedMethod(-1);
-            m_GraphOverlayLabel.text = "";
-        }
-
-        void BuildOverlayBars(CallsiteGroup group)
-        {
-            if (m_Snapshot == null || m_Snapshot.PerFrameBytes == null) return;
-            if (m_BarCount == 0 || m_FrameStore == null) return;
-
-            int snapshotFrameCount = m_Snapshot.PerFrameBytes.Length;
-            int fullFrameCount = m_FrameStore.FullFrameBytes.Length;
-
-            // Sum group's allocations into per-frame buffer
-            EnsurePerFrameBuffer(snapshotFrameCount);
-            for (int i = 0; i < group.Allocations.Count; i++)
-            {
-                var alloc = group.Allocations[i];
-                int idx = alloc.FrameIndex - m_Snapshot.FrameStart;
-                if (idx >= 0 && idx < snapshotFrameCount)
-                    m_PerFrameBuffer[idx] += alloc.Bytes;
-            }
-
-            // Bucket into overlay bars matching the viewport
-            EnsureBarCapacity(ref m_OverlayBars, m_BarCount);
-            m_OverlayBarCount = m_BarCount;
-
-            for (int b = 0; b < m_BarCount; b++)
-            {
-                int origBucket = m_OrderByMagnitude
-                    ? m_SortedBarIndices[b + m_ViewportStartBucket]
-                    : b + m_ViewportStartBucket;
-                int startIdx = origBucket * m_FramesPerBucket;
-                int endIdx = Mathf.Min(startIdx + m_FramesPerBucket, fullFrameCount);
-
-                long bucketMax = 0;
-                for (int i = startIdx; i < endIdx; i++)
-                {
-                    int snapshotIdx = (m_FrameStore.FullFrameStart + i) - m_Snapshot.FrameStart;
-                    if (snapshotIdx >= 0 && snapshotIdx < snapshotFrameCount)
-                    {
-                        if (m_PerFrameBuffer[snapshotIdx] > bucketMax)
-                            bucketMax = m_PerFrameBuffer[snapshotIdx];
-                    }
-                }
-
-                m_OverlayBars[b] = new BarData { Value = bucketMax };
-            }
-        }
-
-        void EnsurePerFrameBuffer(int frameCount)
-        {
-            if (m_PerFrameBuffer == null || m_PerFrameBuffer.Length < frameCount)
-                m_PerFrameBuffer = new long[frameCount];
-            else
-                Array.Clear(m_PerFrameBuffer, 0, frameCount);
-        }
-
         // ═══════════════════════════════════════════════════
-        //  UI CONSTRUCTION
+        //  BUILD UI
         // ═══════════════════════════════════════════════════
 
         void BuildUI()
@@ -751,11 +170,12 @@ namespace GCAllocBreakdown.Editor
                     flexGrow = 1,
                     marginLeft = 4,
                     marginRight = 4,
-                    minHeight = k_GraphHeight + k_GraphXAxisHeight + k_OverviewHeight + 40,
-                    display = DisplayStyle.None // hidden until data
+                    minHeight = k_MinGraphHeight + k_GraphXAxisHeight + k_OverviewHeight + 40,
+                    display = DisplayStyle.None
                 }
             };
 
+            // ── Header row ──
             var headerRow = new VisualElement
             {
                 style =
@@ -789,10 +209,8 @@ namespace GCAllocBreakdown.Editor
                 style =
                 {
                     fontSize = 10,
-                    paddingLeft = 4,
-                    paddingRight = 4,
-                    paddingTop = 1,
-                    paddingBottom = 1,
+                    paddingLeft = 4, paddingRight = 4,
+                    paddingTop = 1, paddingBottom = 1,
                     marginRight = 4
                 }
             };
@@ -806,26 +224,26 @@ namespace GCAllocBreakdown.Editor
                 style =
                 {
                     fontSize = 10,
-                    paddingLeft = 4,
-                    paddingRight = 4,
-                    paddingTop = 1,
-                    paddingBottom = 1,
+                    paddingLeft = 4, paddingRight = 4,
+                    paddingTop = 1, paddingBottom = 1,
                     marginRight = 4
                 }
             };
             headerRow.Add(m_SortToggleBtn);
 
-            m_ResetBtn = new Button(() => { ResetYAxisScale(); ResetViewport(); OnResetRequested?.Invoke(); })
+            m_ResetBtn = new Button(() =>
+            {
+                ResetYAxisScale();
+                OnResetRequested?.Invoke();
+            })
             {
                 text = "Reset to Full Range",
                 tooltip = "Restore full-range analysis from cache (instant)",
                 style =
                 {
                     fontSize = 10,
-                    paddingLeft = 4,
-                    paddingRight = 4,
-                    paddingTop = 1,
-                    paddingBottom = 1
+                    paddingLeft = 4, paddingRight = 4,
+                    paddingTop = 1, paddingBottom = 1
                 }
             };
             m_ResetBtn.SetEnabled(false);
@@ -833,128 +251,72 @@ namespace GCAllocBreakdown.Editor
 
             m_GraphSection.Add(headerRow);
 
-            // ── Overview strip (separate row above main graph) ──
-            var overviewRow = new VisualElement
+            // ── BarGraphElement ──
+            m_BarGraph = new BarGraphElement();
+            m_BarGraph.AddToClassList("gc-alloc-bar-graph");
+            m_BarGraph.style.flexGrow = 1;
+            m_BarGraph.style.flexShrink = 1;
+            m_BarGraph.style.minHeight = k_MinGraphHeight;
+
+            // Load USS overrides
+            var uss = Resources.Load<StyleSheet>("GCAllocAnalyzer");
+            if (uss != null) m_BarGraph.styleSheets.Add(uss);
+
+            // Apply bar spacing from EditorPrefs
+            m_BarGraph.SetBarSpacingRatio(GCAllocSettings.GraphBarSpacing);
+
+            // Configure settings
+            m_BarGraph.Settings.EnableMouseZoomX = true;
+            m_BarGraph.Settings.EnableMouseZoomY = true;
+            m_BarGraph.Settings.EnableMousePan = true;
+            m_BarGraph.Settings.EnableYPan = true;
+            m_BarGraph.Settings.EnableSelection = true;
+            m_BarGraph.Settings.ShowSegmentHighlightInLod = true;
+
+            // Input handlers
+            m_BarGraph.SetInputSource(new BarGraphUIToolkitInput());
+            m_BarGraph.AddHandler(new BarGraphHoverHandler());
+            var selHandler = new ProfilerSelectionHandler();
+            m_BarGraph.AddHandler(selHandler);
+            m_BarGraph.AddHandler(new BarGraphPanHandler());
+            m_BarGraph.AddHandler(new BarGraphZoomHandler());
+            m_BarGraph.AddHandler(new BarGraphKeyboardNavigationHandler());
+            m_BarGraph.AddHandler(new BarGraphYAxisDragHandler());
+            m_BarGraph.AddHandler(new BarGraphScrollbarHandler());
+
+            // Y-axis label formatter
+            m_BarGraph.FormatYLabel = v => GCAllocUtils.FormatBytes((long)v);
+
+            // Subscribe to handler events (input interpretation)
+            selHandler.BarClicked += OnBarClicked;
+            selHandler.SegmentClicked += OnSegmentClicked;
+            selHandler.DragCompleted += OnDragCompletedInternal;
+
+            // Subscribe to element events (state notifications)
+            m_BarGraph.SelectionChanged += OnSelectionChangedInternal;
+            m_BarGraph.HoverChanged += OnHoverChanged;
+            m_BarGraph.SegmentHoverChanged += OnSegmentHoverChanged;
+            m_BarGraph.ViewChanged += OnViewChanged;
+
+            // Context menu
+            m_BarGraph.AddManipulator(new ContextualMenuManipulator(OnGraphContextMenu));
+
+            // Focus on hover for keyboard input
+            m_BarGraph.focusable = true;
+            m_BarGraph.RegisterCallback<PointerEnterEvent>(evt => m_BarGraph.Focus());
+            m_BarGraph.RegisterCallback<PointerMoveEvent>(evt => m_LastPointerLocalPos = evt.localPosition);
+
+            // ── Overview strip ──
+            m_OverviewStrip = new BarGraphOverviewStrip
             {
-                style =
-                {
-                    flexDirection = FlexDirection.Row,
-                    marginBottom = 2
-                }
+                style = { height = k_OverviewHeight, marginBottom = 2 }
             };
-            // Spacer to align overview with the chart column (same width as Y-axis)
-            overviewRow.Add(new VisualElement { style = { width = k_GraphYAxisWidth, flexShrink = 0 } });
+            m_OverviewStrip.BindTo(m_BarGraph);
 
-            var overviewContainer = new VisualElement
-            {
-                style =
-                {
-                    height = k_OverviewHeight,
-                    flexGrow = 1,
-                    flexShrink = 1
-                }
-            };
+            m_GraphSection.Add(m_OverviewStrip);
+            m_GraphSection.Add(m_BarGraph);
 
-            m_OverviewElement = new GraphElement
-            {
-                style =
-                {
-                    height = k_OverviewHeight,
-                    flexGrow = 1
-                }
-            };
-            m_OverviewElement.pickingMode = PickingMode.Ignore;
-
-            m_ViewportRect = new VisualElement
-            {
-                style =
-                {
-                    position = Position.Absolute,
-                    top = 0,
-                    bottom = 0,
-                    backgroundColor = new Color(1f, 1f, 1f, 0.15f),
-                    borderLeftWidth = 1, borderRightWidth = 1,
-                    borderLeftColor = new Color(1f, 1f, 1f, 0.5f),
-                    borderRightColor = new Color(1f, 1f, 1f, 0.5f)
-                }
-            };
-
-            overviewContainer.Add(m_OverviewElement);
-            overviewContainer.Add(m_ViewportRect);
-            overviewContainer.RegisterCallback<PointerDownEvent>(OnOverviewPointerDown);
-            overviewContainer.RegisterCallback<PointerMoveEvent>(OnOverviewPointerMove);
-            overviewContainer.RegisterCallback<PointerUpEvent>(OnOverviewPointerUp);
-
-            overviewRow.Add(overviewContainer);
-            m_GraphSection.Add(overviewRow);
-
-            // ── Main graph area ──
-            m_GraphRoot = new VisualElement
-            {
-                style =
-                {
-                    flexDirection = FlexDirection.Row,
-                    flexGrow = 1,
-                    flexShrink = 1
-                }
-            };
-
-            // ── Y-axis labels (left column) ──
-            var yAxis = new VisualElement
-            {
-                style =
-                {
-                    width = k_GraphYAxisWidth,
-                    overflow = Overflow.Hidden
-                }
-            };
-
-            // ── Y-axis drag zone for vertical zoom ──
-            m_YAxisElement = yAxis;
-            m_YAxisElement.pickingMode = PickingMode.Position;
-            m_YAxisElement.tooltip = "Drag to scale Y-axis";
-            SetSystemCursor(m_YAxisElement, MouseCursor.ResizeVertical);
-            m_YAxisElement.RegisterCallback<PointerDownEvent>(OnYAxisPointerDown);
-            m_YAxisElement.RegisterCallback<PointerMoveEvent>(OnYAxisPointerMove);
-            m_YAxisElement.RegisterCallback<PointerUpEvent>(OnYAxisPointerUp);
-
-            m_GraphRoot.Add(yAxis);
-
-            // ── Chart area (right side, fills remaining width) ──
-            var chartColumn = new VisualElement { style = { flexGrow = 1, flexShrink = 1 } };
-
-            // ── GraphElement — custom-drawn bars ──
-            m_GraphElement = new GraphElement
-            {
-                style =
-                {
-                    flexGrow = 1,
-                    flexShrink = 1
-                }
-            };
-            m_GraphElement.RegisterCallback<GeometryChangedEvent>(OnGraphGeometryChanged);
-            m_GraphElement.RegisterCallback<PointerMoveEvent>(OnGraphPointerMove);
-            m_GraphElement.AddManipulator(new ContextualMenuManipulator(OnGraphContextMenu));
-
-            // Make focusable for keyboard input; auto-focus on hover
-            m_GraphElement.focusable = true;
-            m_GraphElement.RegisterCallback<PointerEnterEvent, GraphElement>(
-                OnGraphPointerEnter, m_GraphElement);
-            m_GraphElement.RegisterCallback<KeyDownEvent>(OnGraphKeyDown);
-            m_GraphElement.RegisterCallback<WheelEvent>(OnGraphWheel);
-
-            // Subscribe to GraphElement events
-            m_GraphElement.BarClicked += OnBarClicked;
-            m_GraphElement.SelectionChanged += OnSelectionChangedInternal;
-            m_GraphElement.DragCompleted += OnDragCompletedInternal;
-
-            m_GraphElement.RegisterCallback<PointerDownEvent>(OnGraphPanPointerDown);
-            m_GraphElement.RegisterCallback<PointerMoveEvent>(OnGraphPanPointerMove);
-            m_GraphElement.RegisterCallback<PointerUpEvent>(OnGraphPanPointerUp);
-
-            chartColumn.Add(m_GraphElement);
-
-            // ── Floating tooltip (positioned at mouse cursor) ──
+            // ── Floating tooltip ──
             m_FloatingTooltip = new Label
             {
                 pickingMode = PickingMode.Ignore,
@@ -964,18 +326,12 @@ namespace GCAllocBreakdown.Editor
                     backgroundColor = k_TooltipBg,
                     color = Color.white,
                     fontSize = 11,
-                    paddingLeft = 4,
-                    paddingRight = 4,
-                    paddingTop = 2,
-                    paddingBottom = 2,
-                    borderTopLeftRadius = 2,
-                    borderTopRightRadius = 2,
-                    borderBottomLeftRadius = 2,
-                    borderBottomRightRadius = 2,
-                    borderTopWidth = 1,
-                    borderBottomWidth = 1,
-                    borderLeftWidth = 1,
-                    borderRightWidth = 1,
+                    paddingLeft = 4, paddingRight = 4,
+                    paddingTop = 2, paddingBottom = 2,
+                    borderTopLeftRadius = 2, borderTopRightRadius = 2,
+                    borderBottomLeftRadius = 2, borderBottomRightRadius = 2,
+                    borderTopWidth = 1, borderBottomWidth = 1,
+                    borderLeftWidth = 1, borderRightWidth = 1,
                     borderTopColor = k_TooltipBorder,
                     borderBottomColor = k_TooltipBorder,
                     borderLeftColor = k_TooltipBorder,
@@ -983,21 +339,8 @@ namespace GCAllocBreakdown.Editor
                     display = DisplayStyle.None
                 }
             };
-            // Tooltip added to rootVisualElement by caller via TooltipElement property
-            m_GraphElement.RegisterCallback<PointerLeaveEvent>(OnGraphPointerLeave);
 
-            // ── Horizontal scroller (visible when zoomed) ──
-            m_HScroller = new Scroller(0, 1, OnScrollerChanged, SliderDirection.Horizontal)
-            {
-                style =
-                {
-                    height = 14,
-                    display = DisplayStyle.None
-                }
-            };
-            chartColumn.Add(m_HScroller);
-
-            // ── X-axis labels row ──
+            // ── X-axis labels ──
             var xAxis = new VisualElement
             {
                 style =
@@ -1007,7 +350,7 @@ namespace GCAllocBreakdown.Editor
                     height = k_GraphXAxisHeight
                 }
             };
-            m_GraphXStart = new Label("\u2014")
+            m_GraphXStart = new Label("—")
             {
                 style = { fontSize = 10, color = k_DimGray, flexShrink = 0 }
             };
@@ -1015,1033 +358,226 @@ namespace GCAllocBreakdown.Editor
             {
                 style =
                 {
-                    flexGrow = 1,
-                    flexShrink = 1,
-                    fontSize = 10,
-                    color = k_DimGray,
+                    flexGrow = 1, flexShrink = 1,
+                    fontSize = 10, color = k_DimGray,
                     unityTextAlign = TextAnchor.MiddleCenter,
                     overflow = Overflow.Hidden,
                     textOverflow = TextOverflow.Ellipsis,
                     whiteSpace = WhiteSpace.NoWrap,
-                    marginLeft = 8,
-                    marginRight = 8
+                    marginLeft = 8, marginRight = 8
                 }
             };
-            m_GraphXEnd = new Label("\u2014")
+            m_GraphXEnd = new Label("—")
             {
                 style = { fontSize = 10, color = k_DimGray, flexShrink = 0 }
             };
             xAxis.Add(m_GraphXStart);
             xAxis.Add(m_GraphOverlayLabel);
             xAxis.Add(m_GraphXEnd);
-            chartColumn.Add(xAxis);
 
-            m_GraphRoot.Add(chartColumn);
-
-            // ── Vertical scroller (visible when Y-zoomed) ──
-            m_VScroller = new Scroller(0, 1, OnVScrollerChanged, SliderDirection.Vertical)
-            {
-                style =
-                {
-                    width = 14,
-                    display = DisplayStyle.None
-                }
-            };
-            m_GraphRoot.Add(m_VScroller);
-
-            m_GraphSection.Add(m_GraphRoot);
+            m_GraphSection.Add(xAxis);
         }
 
         // ═══════════════════════════════════════════════════
-        //  EVENT HANDLERS
+        //  PUBLIC API — DATA
         // ═══════════════════════════════════════════════════
 
-        void OnScrollerChanged(float value)
+        /// <summary>
+        /// Store data references after each analysis run or Pull Data.
+        /// </summary>
+        public void SetData(GraphFrameStore frameStore, AnalysisSnapshot snapshot,
+            List<CallsiteGroup> filteredGroups, bool groupByCallsite)
         {
-            float span = m_ViewportEnd - m_ViewportStart;
-            m_ViewportStart = value;
-            m_ViewportEnd = value + span;
-            ClampViewport();
-            RebuildGraph();
-        }
+            m_FrameStore = frameStore;
+            m_Snapshot = snapshot;
+            m_FilteredGroups = filteredGroups;
+            m_GroupByCallsite = groupByCallsite;
 
-        void OnVScrollerChanged(float value)
-        {
-            if (!m_HasCustomYScale || m_AutoYAxisMax <= m_YAxisMax) return;
-            long maxOffset = m_AutoYAxisMax - m_YAxisMax;
-            // Invert: scroller top (0) = high data, scroller bottom (max) = low data
-            float highValue = Mathf.Max(0, 1f - (float)m_YAxisMax / m_AutoYAxisMax);
-            m_YPanOffset = (long)((highValue - value) * maxOffset / highValue);
-            if (m_YPanOffset < 0) m_YPanOffset = 0;
-            if (m_YPanOffset > maxOffset) m_YPanOffset = maxOffset;
-            ApplyYAxisScale();
-        }
-
-        void OnGraphGeometryChanged(GeometryChangedEvent evt)
-        {
-            if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
-            bool widthChanged = Mathf.Abs(evt.newRect.width - evt.oldRect.width) >= 2f;
-            bool heightChanged = Mathf.Abs(evt.newRect.height - evt.oldRect.height) >= 2f;
-            if (!widthChanged && !heightChanged) return;
-
-            if (widthChanged)
+            if (m_FrameStore != null && m_FrameStore.HasCachedAnalysis
+                && m_FrameStore.HasFullFrameData)
             {
-                RebuildGraph();
+                m_MethodPalette.Build(m_FrameStore.CachedRawAllocations);
+                BuildSegmentData();
             }
             else
             {
-                // Height-only change (split view resize): recompute grid lines + reposition labels
-                ComputeGridLines(m_YPanOffset, m_YAxisMax, ActualGraphHeight);
-                m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
-                PositionGridLineLabels();
-                m_GraphElement.MarkDirtyRepaint();
+                m_MethodPalette.Clear();
+                m_HasSegmentData = false;
             }
-        }
-
-        void OnGraphKeyDown(KeyDownEvent evt)
-        {
-            if (m_TotalBucketCount == 0) return;
-            bool handled = false;
-            float span = m_ViewportEnd - m_ViewportStart;
-            float panStep = span * 0.15f;
-
-            switch (evt.keyCode)
-            {
-                case KeyCode.W:
-                    ZoomViewport(0.7f, m_LastMouseNormX);
-                    handled = true;
-                    break;
-                case KeyCode.S:
-                    ZoomViewport(1.4f, m_LastMouseNormX);
-                    handled = true;
-                    break;
-                case KeyCode.A:
-                    PanViewport(-panStep);
-                    handled = true;
-                    break;
-                case KeyCode.D:
-                    PanViewport(panStep);
-                    handled = true;
-                    break;
-            }
-
-            if (handled)
-                evt.StopPropagation();
-        }
-
-        void OnGraphWheel(WheelEvent evt)
-        {
-            if (m_TotalBucketCount == 0) return;
-
-            // Ctrl/Cmd + scroll = Y-axis zoom
-            if (evt.actionKey && m_AutoYAxisMax > 0)
-            {
-                float zoomFactor = evt.delta.y > 0 ? 1.3f : 1f / 1.3f;
-                long newMax = (long)(m_YAxisMax * zoomFactor);
-                if (newMax < 1024L) newMax = 1024L;
-                if (newMax >= m_AutoYAxisMax)
-                {
-                    newMax = m_AutoYAxisMax;
-                    m_HasCustomYScale = false;
-                    m_UserYAxisMax = 0;
-                    m_YPanOffset = 0;
-                }
-                else
-                {
-                    m_UserYAxisMax = newMax;
-                    m_HasCustomYScale = true;
-                }
-                ApplyYAxisScale();
-                evt.StopPropagation();
-                return;
-            }
-
-            // Plain scroll = X-axis zoom
-            float localX = evt.localMousePosition.x;
-            float areaWidth = m_GraphElement.contentRect.width;
-            float anchor = areaWidth > 0 ? Mathf.Clamp01(localX / areaWidth) : 0.5f;
-
-            float xZoomFactor = evt.delta.y > 0 ? 1.2f : 0.8f;
-            ZoomViewport(xZoomFactor, anchor);
-            evt.StopPropagation();
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  Y-AXIS ZOOM INTERACTION
-        // ═══════════════════════════════════════════════════
-
-        void OnYAxisPointerDown(PointerDownEvent evt)
-        {
-            if (evt.button != 0 || m_AutoYAxisMax <= 0) return;
-            m_YAxisDragStartY = evt.localPosition.y;
-            m_YAxisDragStartMax = m_YAxisMax;
-            m_YAxisDragging = true;
-            m_YAxisElement.CapturePointer(evt.pointerId);
-            evt.StopPropagation();
-        }
-
-        void OnYAxisPointerMove(PointerMoveEvent evt)
-        {
-            if (!m_YAxisDragging) return;
-            float deltaY = evt.localPosition.y - m_YAxisDragStartY;
-            // Drag down (positive deltaY) = zoom in (decrease max)
-            // Exponential scaling for natural feel: ~100px drag = 2x zoom
-            float factor = Mathf.Pow(2f, -deltaY * 0.01f);
-            long newMax = (long)(m_YAxisDragStartMax * factor);
-            if (newMax < 1024L) newMax = 1024L;
-            if (newMax >= m_AutoYAxisMax)
-            {
-                newMax = m_AutoYAxisMax;
-                m_HasCustomYScale = false;
-                m_UserYAxisMax = 0;
-                m_YPanOffset = 0;
-            }
-            else
-            {
-                m_UserYAxisMax = newMax;
-                m_HasCustomYScale = true;
-            }
-            ApplyYAxisScale();
-        }
-
-        void OnYAxisPointerUp(PointerUpEvent evt)
-        {
-            if (evt.button != 0) return;
-            m_YAxisElement.ReleasePointer(evt.pointerId);
-            m_YAxisDragging = false;
-        }
-
-        void ResetYAxisScale()
-        {
-            m_HasCustomYScale = false;
-            m_UserYAxisMax = 0;
-            m_YPanOffset = 0;
-            ApplyYAxisScale();
-        }
-
-        void ApplyYAxisScale()
-        {
-            long effectiveMax = m_HasCustomYScale ? m_UserYAxisMax : m_AutoYAxisMax;
-            m_YAxisMax = effectiveMax;
-
-            long maxOffset = m_AutoYAxisMax - m_YAxisMax;
-            if (maxOffset < 0) maxOffset = 0;
-            if (m_YPanOffset > maxOffset) m_YPanOffset = maxOffset;
-            if (!m_HasCustomYScale) m_YPanOffset = 0;
-
-            ComputeGridLines(m_YPanOffset, effectiveMax, ActualGraphHeight);
-
-            m_GraphElement.YAxisMax = effectiveMax;
-            m_GraphElement.YPanOffset = m_YPanOffset;
-            m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
-
-            PositionGridLineLabels();
-
-            m_YAxisResetBtn.SetEnabled(m_HasCustomYScale);
-            UpdateVerticalScroller();
-
-            m_LastTooltipBar = -1;
-            m_LastTooltipY = -1f;
-            HideFloatingTooltip();
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  XY PAN (MIDDLE-MOUSE DRAG)
-        // ═══════════════════════════════════════════════════
-
-        void OnGraphPanPointerDown(PointerDownEvent evt)
-        {
-            if (evt.button != 2) return;
-            if (!m_HasCustomYScale && !IsZoomedIn) return;
-            if (m_GraphElement.HasPointerCapture(evt.pointerId)) return;
-            m_YPanStartMouseY = evt.localPosition.y;
-            m_YPanStartOffset = m_YPanOffset;
-            m_XPanStartMouseX = evt.localPosition.x;
-            m_XPanStartViewportStart = m_ViewportStart;
-            m_Panning = true;
-            m_GraphElement.CapturePointer(evt.pointerId);
-            SetSystemCursor(m_GraphElement, MouseCursor.Pan);
-            evt.StopPropagation();
-        }
-
-        void OnGraphPanPointerMove(PointerMoveEvent evt)
-        {
-            if (!m_Panning) return;
-
-            bool needsRebuild = false;
-
-            // Y-axis panning (only when Y-zoomed)
-            if (m_HasCustomYScale)
-            {
-                float deltaY = evt.localPosition.y - m_YPanStartMouseY;
-                float areaHeight = m_GraphElement.contentRect.height;
-                if (areaHeight >= 1f)
-                {
-                    long deltaByte = (long)(deltaY / areaHeight * m_YAxisMax);
-                    long newOffset = m_YPanStartOffset + deltaByte;
-
-                    long maxOffset = m_AutoYAxisMax - m_YAxisMax;
-                    if (maxOffset < 0) maxOffset = 0;
-                    if (newOffset < 0) newOffset = 0;
-                    if (newOffset > maxOffset) newOffset = maxOffset;
-
-                    m_YPanOffset = newOffset;
-                    ApplyYPan();
-                }
-            }
-
-            // X-axis panning (only when X-zoomed)
-            if (IsZoomedIn)
-            {
-                float deltaX = evt.localPosition.x - m_XPanStartMouseX;
-                float areaWidth = m_GraphElement.contentRect.width;
-                if (areaWidth >= 1f)
-                {
-                    float span = m_ViewportEnd - m_ViewportStart;
-                    float viewportDelta = -deltaX / areaWidth * span;
-                    float newStart = m_XPanStartViewportStart + viewportDelta;
-                    float newEnd = newStart + span;
-
-                    if (newStart < 0f) { newStart = 0f; newEnd = span; }
-                    if (newEnd > 1f) { newEnd = 1f; newStart = 1f - span; }
-                    if (newStart < 0f) newStart = 0f;
-
-                    if (m_ViewportStart != newStart)
-                    {
-                        m_ViewportStart = newStart;
-                        m_ViewportEnd = newEnd;
-                        needsRebuild = true;
-                    }
-                }
-            }
-
-            if (needsRebuild)
-                RebuildGraph();
-        }
-
-        void OnGraphPanPointerUp(PointerUpEvent evt)
-        {
-            if (evt.button != 2) return;
-            if (!m_Panning) return;
-            m_GraphElement.ReleasePointer(evt.pointerId);
-            m_Panning = false;
-            m_GraphElement.style.cursor = StyleKeyword.Null;
-            evt.StopPropagation();
-        }
-
-        void ApplyYPan()
-        {
-            m_GraphElement.YPanOffset = m_YPanOffset;
-
-            ComputeGridLines(m_YPanOffset, m_YAxisMax, ActualGraphHeight);
-            m_GraphElement.SetGridLines(m_GridLines, m_GridLineCount);
-
-            PositionGridLineLabels();
-            UpdateVerticalScroller();
-
-            m_LastTooltipBar = -1;
-            m_LastTooltipY = -1f;
-            HideFloatingTooltip();
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  BAR CLICK / PROFILER NAVIGATION
-        // ═══════════════════════════════════════════════════
-
-        void OnBarClicked(int barIndex, float localY)
-        {
-            if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
-            var perFrame = m_FrameStore.FullFrameBytes;
-            if (barIndex < 0 || barIndex >= m_BarCount) return;
-
-            int srcIdx = barIndex + m_ViewportStartBucket;
-
-            // Resolve the actual bar index, accounting for viewport offset and sorting
-            int resolvedIndex = m_OrderByMagnitude
-                ? m_SortedBarIndices[srcIdx]
-                : srcIdx;
-
-            // Find the frame with max allocation in this bucket
-            int startIdx = resolvedIndex * m_FramesPerBucket;
-            int endIdx = Mathf.Min(startIdx + m_FramesPerBucket, perFrame.Length);
-
-            int maxIdx = startIdx;
-            long maxVal = 0;
-            for (int i = startIdx; i < endIdx; i++)
-            {
-                if (perFrame[i] > maxVal) { maxVal = perFrame[i]; maxIdx = i; }
-            }
-
-            int frameIndex = m_FrameStore.FullFrameStart + maxIdx;
-            m_HighlightedFrame = frameIndex;
-
-            // Segment hit-test: determine which method was clicked (1:1 zoom only)
-            string methodName = null;
-            if (localY >= 0f)
-            {
-                int segIdx = HitTestSegment(srcIdx, localY);
-                if (segIdx >= 0)
-                    methodName = m_MethodPalette.GetMethodName(m_Segments[segIdx].MethodIndex);
-            }
-
-            if (m_OnFrameSelected != null)
-                m_OnFrameSelected(frameIndex, methodName);
-        }
-
-        void OnSelectionChangedInternal(int startBar, int endBar)
-        {
-            m_LastSelectionStartBar = startBar;
-            m_LastSelectionEndBar = endBar;
-            MapBarRangeToFrameRange(startBar, endBar, out int startFrame, out int endFrame);
-            m_SelectionFrameStart = startFrame;
-            m_SelectionFrameEnd = endFrame;
-            if (OnSelectionChanged != null)
-                OnSelectionChanged(startFrame, endFrame);
-        }
-
-        void OnDragCompletedInternal(int startBar, int endBar)
-        {
-            m_LastSelectionStartBar = startBar;
-            m_LastSelectionEndBar = endBar;
-            MapBarRangeToFrameRange(startBar, endBar, out int startFrame, out int endFrame);
-            m_SelectionFrameStart = startFrame;
-            m_SelectionFrameEnd = endFrame;
-            BuildSelectedFrameBuffer(startBar, endBar);
-            if (OnDragCompleted != null)
-                OnDragCompleted(startFrame, endFrame);
-        }
-
-        static void OnGraphPointerEnter(PointerEnterEvent evt, GraphElement graph) => graph.Focus();
-
-        void OnGraphPointerLeave(PointerLeaveEvent evt)
-        {
-            m_LastTooltipBar = -1;
-            m_GraphElement.SetHighlightedBar(-1);
-            HideFloatingTooltip();
-        }
-
-        void ShowFloatingTooltip(string text, float localX, float localY)
-        {
-            m_FloatingTooltip.text = text;
-            m_FloatingTooltip.style.display = DisplayStyle.Flex;
-            m_FloatingTooltip.BringToFront();
-
-            // Convert from graph-local coords to the tooltip parent's coords
-            var worldPos = m_GraphElement.LocalToWorld(new Vector2(localX, localY));
-            var tooltipParent = m_FloatingTooltip.parent;
-            var pos = tooltipParent != null ? tooltipParent.WorldToLocal(worldPos) : worldPos;
-
-            const float offsetX = 12f;
-            float x = pos.x + offsetX;
-            float y = pos.y - 28f;
-
-            if (y < 0f) y = pos.y + 16f;
-
-            m_FloatingTooltip.style.left = x;
-            m_FloatingTooltip.style.top = y;
-        }
-
-        void HideFloatingTooltip()
-        {
-            m_FloatingTooltip.style.display = DisplayStyle.None;
-        }
-
-        void OnGraphPointerMove(PointerMoveEvent evt)
-        {
-            // Track mouse position for WASD zoom anchor
-            float areaW = m_GraphElement.contentRect.width;
-            if (areaW > 0f)
-                m_LastMouseNormX = Mathf.Clamp01(evt.localPosition.x / areaW);
-
-            if (m_BarCount == 0 || m_FrameStore == null)
-            {
-                m_LastTooltipBar = -1;
-                m_GraphElement.SetHighlightedBar(-1);
-                HideFloatingTooltip();
-                return;
-            }
-
-            float localX = evt.localPosition.x;
-            float localY = evt.localPosition.y;
-            int barIndex = FindBarAtX(localX);
-            if (barIndex < 0 || barIndex >= m_BarCount)
-            {
-                m_LastTooltipBar = -1;
-                m_GraphElement.SetHighlightedBar(-1);
-                HideFloatingTooltip();
-                return;
-            }
-
-            int srcIdx = m_ViewportStartBucket + barIndex;
-
-            // Segment tooltip: hit-test Y position within stacked bar.
-            int segIdx = HitTestSegment(srcIdx, localY);
-            if (segIdx >= 0)
-            {
-                m_LastTooltipBar = barIndex;
-                m_LastTooltipY = localY;
-                m_GraphElement.SetHighlightedBar(barIndex, segIdx);
-                string methodName = m_MethodPalette.GetMethodName(m_Segments[segIdx].MethodIndex);
-                long totalForFrame = m_Bars[srcIdx].Value;
-                int pct = totalForFrame > 0
-                    ? (int)(m_Segments[segIdx].Bytes * 100 / totalForFrame)
-                    : 0;
-                ShowFloatingTooltip(string.Concat(
-                    methodName.Replace("  —  ", "\n— "),
-                    ": ", GCAllocUtils.FormatBytes(m_Segments[segIdx].Bytes),
-                    " (", pct.ToString(), "%)"), localX, localY);
-                return;
-            }
-
-            // Standard tooltip (non-segment mode)
-            m_GraphElement.SetHighlightedBar(barIndex);
-            m_LastTooltipBar = barIndex;
-
-            long val = m_Bars[srcIdx].Value;
-            int frameStart = m_Bars[srcIdx].StartFrame;
-            int frameEnd = m_Bars[srcIdx].EndFrame;
-
-            if (m_FramesPerBucket == 1)
-            {
-                ShowFloatingTooltip(string.Concat(
-                    "Frame ", GCAllocUtils.DisplayFrame(frameStart).ToString(),
-                    ": ", GCAllocUtils.FormatBytes(val)), localX, localY);
-            }
-            else
-            {
-                ShowFloatingTooltip(string.Concat(
-                    "Frames ", GCAllocUtils.DisplayFrame(frameStart).ToString(),
-                    "\u2013", GCAllocUtils.DisplayFrame(frameEnd).ToString(),
-                    ": ", GCAllocUtils.FormatBytes(val), " (max)"), localX, localY);
-            }
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  SORTED VIEW TOGGLE
-        // ═══════════════════════════════════════════════════
-
-        void OnSortToggleClicked()
-        {
-            OrderByMagnitude = !OrderByMagnitude;
-            UpdateSortToggleLabel();
-        }
-
-        void UpdateSortToggleLabel()
-        {
-            if (m_SortToggleBtn == null) return;
-            m_SortToggleBtn.text = m_OrderByMagnitude ? "Order by Frame" : "Order by Size";
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  CONTEXT MENU
-        // ═══════════════════════════════════════════════════
-
-        void OnGraphContextMenu(ContextualMenuPopulateEvent evt)
-        {
-            bool hasData = m_GraphElement != null && m_BarCount > 0;
-            bool hasActiveSelection = m_LastSelectionStartBar >= 0 && m_LastSelectionEndBar >= 0;
-
-            evt.menu.AppendAction("Select All", OnContextSelectAll,
-                hasData ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
-
-            evt.menu.AppendAction("Clear Selection", OnContextClearSelection,
-                hasActiveSelection ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
-
-            evt.menu.AppendSeparator();
-
-            evt.menu.AppendAction("Select Frame with Max GC", OnContextSelectMaxGC,
-                hasData ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
-
-            evt.menu.AppendAction("Analyze Selection", OnContextAnalyzeSelection,
-                hasActiveSelection ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
-
-            evt.menu.AppendSeparator();
-
-            evt.menu.AppendAction("Reset Zoom", OnContextResetZoom,
-                IsZoomedIn ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
-
-            evt.menu.AppendAction(
-                m_OrderByMagnitude ? "Order by Frame" : "Order by Size",
-                OnContextToggleSort,
-                hasData ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
-        }
-
-        void OnContextSelectAll(DropdownMenuAction _)
-        {
-            m_GraphElement.SetSelection(0, m_BarCount - 1);
-            m_LastSelectionStartBar = 0;
-            m_LastSelectionEndBar = m_BarCount - 1;
-            if (m_BarCount > 0)
-            {
-                m_SelectionFrameStart = m_Bars[m_ViewportStartBucket].StartFrame;
-                m_SelectionFrameEnd = m_Bars[m_ViewportStartBucket + m_BarCount - 1].EndFrame;
-            }
-            NotifySelectionChanged(0, m_BarCount - 1);
-        }
-
-        void OnContextClearSelection(DropdownMenuAction _)
-        {
-            ClearSelection();
-        }
-
-        void OnContextSelectMaxGC(DropdownMenuAction _) => SelectExtremeFrame(true);
-
-        void OnContextAnalyzeSelection(DropdownMenuAction _)
-        {
-            if (m_LastSelectionStartBar < 0 || m_LastSelectionEndBar < 0) return;
-            MapBarRangeToFrameRange(m_LastSelectionStartBar, m_LastSelectionEndBar,
-                out int rangeStart, out int rangeEnd);
-            BuildSelectedFrameBuffer(m_LastSelectionStartBar, m_LastSelectionEndBar);
-            if (OnDragCompleted != null)
-                OnDragCompleted(rangeStart, rangeEnd);
-        }
-
-        void OnContextResetZoom(DropdownMenuAction _) => ResetViewport();
-
-        void OnContextToggleSort(DropdownMenuAction _) => OnSortToggleClicked();
-
-        void SelectExtremeFrame(bool selectMax)
-        {
-            if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
-            if (m_FramesPerBucket <= 0) return;
-
-            var perFrame = m_FrameStore.FullFrameBytes;
-            int extremeIdx = 0;
-            long extremeVal = perFrame[0];
-
-            for (int i = 1; i < perFrame.Length; i++)
-            {
-                if (selectMax ? perFrame[i] > extremeVal : perFrame[i] < extremeVal)
-                {
-                    extremeVal = perFrame[i];
-                    extremeIdx = i;
-                }
-            }
-
-            // Global bucket index for the extreme frame
-            int globalBucketIdx = extremeIdx / m_FramesPerBucket;
-            if (globalBucketIdx >= m_TotalBucketCount)
-                globalBucketIdx = m_TotalBucketCount - 1;
-
-            // If the target bucket is outside the current viewport, pan to include it
-            if (!m_OrderByMagnitude && IsZoomedIn)
-            {
-                float bucketNorm = (float)globalBucketIdx / m_TotalBucketCount;
-                float vpSpan = m_ViewportEnd - m_ViewportStart;
-                if (bucketNorm < m_ViewportStart || bucketNorm >= m_ViewportEnd)
-                {
-                    // Center the viewport on the target bucket
-                    m_ViewportStart = bucketNorm - vpSpan * 0.5f;
-                    m_ViewportEnd = m_ViewportStart + vpSpan;
-                    ClampViewport();
-                    RebuildGraph();
-                }
-            }
-
-            // Convert global bucket to display-local bar index
-            int barIdx = globalBucketIdx - m_ViewportStartBucket;
-            if (barIdx < 0) barIdx = 0;
-            if (barIdx >= m_BarCount) barIdx = m_BarCount - 1;
-
-            // If sorted, find the display position of the original bucket
-            if (m_OrderByMagnitude)
-            {
-                for (int i = 0; i < m_BarCount; i++)
-                {
-                    if (m_SortedBarIndices[i] == globalBucketIdx)
-                    {
-                        barIdx = i;
-                        break;
-                    }
-                }
-            }
-
-            m_GraphElement.SetSelection(barIdx, barIdx);
-            m_GraphElement.SetHighlightedBar(barIdx);
-            m_LastSelectionStartBar = barIdx;
-            m_LastSelectionEndBar = barIdx;
-
-            int frameIndex = m_FrameStore.FullFrameStart + extremeIdx;
-            m_SelectionFrameStart = m_Bars[m_ViewportStartBucket + barIdx].StartFrame;
-            m_SelectionFrameEnd = m_Bars[m_ViewportStartBucket + barIdx].EndFrame;
-            m_HighlightedFrame = frameIndex;
-
-            if (m_OnFrameSelected != null)
-                m_OnFrameSelected(frameIndex, null);
-        }
-
-        void NotifySelectionChanged(int startBar, int endBar)
-        {
-            if (OnSelectionChanged == null) return;
-            MapBarRangeToFrameRange(startBar, endBar, out int startFrame, out int endFrame);
-            OnSelectionChanged(startFrame, endFrame);
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  GRID LINE COMPUTATION
-        // ═══════════════════════════════════════════════════
-
-        void ComputeGridLines(long yMin, long yMax, float graphHeight)
-        {
-            m_GridLineCount = 0;
-            if (yMax <= 0) return;
-
-            // Target ~1 grid line per 45px, minimum 2 lines
-            int targetLines = Mathf.Max(2, Mathf.FloorToInt(graphHeight / 45f));
-
-            // Find a nice step: 1 KB, 2 KB, 4 KB, 8 KB, ... that yields close to targetLines
-            long step = k_MinGridStep; // 1 KB
-            while (yMax / step > targetLines && step < yMax)
-                step *= 2;
-            // If step is too large (fewer lines than target), halve it
-            while (yMax / step < targetLines && step > k_MinGridStep)
-                step /= 2;
-
-            // Generate grid lines at world-space values within [yMin, yMin + yMax]
-            long firstLine = ((yMin / step) + 1) * step;
-            long visibleTop = yMin + yMax;
-            for (long v = firstLine; v < visibleTop; v += step)
-            {
-                EnsureGridLineCapacity();
-                float y = (float)(v - yMin) / yMax * graphHeight;
-                m_GridLines[m_GridLineCount++] = new GridLine
-                {
-                    Y = y,
-                    Value = v,
-                    Label = GCAllocUtils.FormatBytes(v)
-                };
-            }
-        }
-
-        void PositionGridLineLabels()
-        {
-            // Hide all existing labels first
-            for (int i = 0; i < m_GridLineLabelCount; i++)
-            {
-                if (m_GridLineLabels[i] != null)
-                    m_GridLineLabels[i].style.display = DisplayStyle.None;
-            }
-
-            // Use Y-axis element height (matches graph height in the Row layout)
-            float actualHeight = m_YAxisElement.contentRect.height;
-            if (float.IsNaN(actualHeight) || actualHeight < 1f) actualHeight = k_GraphHeight;
-
-            // Position labels for current grid lines
-            for (int i = 0; i < m_GridLineCount && i < k_MaxGridLineLabels; i++)
-            {
-                Label label = EnsureGridLineLabel(i);
-                label.text = m_GridLines[i].Label;
-                label.style.display = DisplayStyle.Flex;
-                float bottomPos = m_YAxisMax > 0
-                    ? (float)(m_GridLines[i].Value - m_YPanOffset) / m_YAxisMax * actualHeight
-                    : m_GridLines[i].Y;
-                if (bottomPos < -6f || bottomPos > actualHeight + 6f)
-                {
-                    label.style.display = DisplayStyle.None;
-                    continue;
-                }
-                label.style.bottom = bottomPos - 6; // center the 12px label on the line
-            }
-
-            m_GridLineLabelCount = Mathf.Min(m_GridLineCount, k_MaxGridLineLabels);
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  SORTING
-        // ═══════════════════════════════════════════════════
-
-        // Non-allocating struct comparer for Array.Sort — sorts bar indices by value descending
-        struct BarValueDescComparer : IComparer<int>
-        {
-            public BarData[] Bars;
-            public int Compare(int a, int b) => Bars[b].Value.CompareTo(Bars[a].Value);
-        }
-
-        void ApplySortedOrder(int count)
-        {
-            // Build index array: maps display position -> original bucket index
-            if (m_SortedBarIndices == null || m_SortedBarIndices.Length < count)
-                m_SortedBarIndices = new int[count];
-
-            for (int i = 0; i < count; i++)
-                m_SortedBarIndices[i] = i;
-
-            // Sort descending by value — O(n log n) via Array.Sort with struct comparer (no allocations)
-            var comparer = new BarValueDescComparer { Bars = m_Bars };
-            Array.Sort(m_SortedBarIndices, 0, count, comparer);
-
-            // Rearrange bars into display order so array index == display position.
-            // This ensures GraphElement's selection (which uses display indices) lines up.
-            EnsureBarCapacity(ref m_SortScratch, count);
-            for (int displayIdx = 0; displayIdx < count; displayIdx++)
-            {
-                int origIdx = m_SortedBarIndices[displayIdx];
-                m_SortScratch[displayIdx] = m_Bars[origIdx];
-            }
-
-            // Swap buffers so m_Bars is now in display order
-            var tmp = m_Bars;
-            m_Bars = m_SortScratch;
-            m_SortScratch = tmp;
-        }
-
-        // ═══════════════════════════════════════════════════
-        //  PRIVATE HELPERS
-        // ═══════════════════════════════════════════════════
-
-        void UpdateHorizontalScroller()
-        {
-            if (m_HScroller == null) return;
-
-            if (!IsZoomedIn)
-            {
-                m_HScroller.style.display = DisplayStyle.None;
-                return;
-            }
-
-            bool wasHidden = m_HScroller.resolvedStyle.display == DisplayStyle.None;
-            m_HScroller.style.display = DisplayStyle.Flex;
-            float span = m_ViewportEnd - m_ViewportStart;
-            m_HScroller.lowValue = 0;
-            m_HScroller.highValue = Mathf.Max(0, 1f - span);
-            m_HScroller.slider.pageSize = span;
-            m_HScroller.slider.SetValueWithoutNotify(m_ViewportStart);
-
-            if (wasHidden)
-                m_HScroller.schedule.Execute(() => m_HScroller.Adjust(span));
-            else
-                m_HScroller.Adjust(span);
-        }
-
-        void UpdateVerticalScroller()
-        {
-            if (m_VScroller == null) return;
-
-            if (!m_HasCustomYScale || m_AutoYAxisMax <= 0)
-            {
-                m_VScroller.style.display = DisplayStyle.None;
-                return;
-            }
-
-            bool wasHidden = m_VScroller.resolvedStyle.display == DisplayStyle.None;
-            m_VScroller.style.display = DisplayStyle.Flex;
-
-            float span = (float)m_YAxisMax / m_AutoYAxisMax;
-            float highValue = Mathf.Max(0, 1f - span);
-            // Invert: scroller top (0) = high data, scroller bottom (max) = low data
-            long maxOffset = m_AutoYAxisMax - m_YAxisMax;
-            float normalizedPos = maxOffset > 0 ? highValue - highValue * m_YPanOffset / maxOffset : 0f;
-
-            m_VScroller.lowValue = 0;
-            m_VScroller.highValue = highValue;
-            m_VScroller.slider.pageSize = span;
-            m_VScroller.slider.SetValueWithoutNotify(normalizedPos);
-
-            if (wasHidden)
-                m_VScroller.schedule.Execute(() => m_VScroller.Adjust(span));
-            else
-                m_VScroller.Adjust(span);
-        }
-
-        void UpdateResetButtonVisibility()
-        {
-            if (m_ResetBtn == null || m_FrameStore == null) return;
-
-            bool isSubRange = m_AnalyzedFrameStart >= 0
-                && m_AnalyzedFrameEnd >= 0
-                && m_FrameStore.HasCachedAnalysis
-                && (m_AnalyzedFrameStart != m_FrameStore.FullFrameStart
-                    || m_AnalyzedFrameEnd != m_FrameStore.FullFrameEnd);
-
-            m_ResetBtn.SetEnabled(isSubRange);
-        }
-
-
-        void UpdateViewportRect()
-        {
-            if (m_ViewportRect == null || m_OverviewElement == null) return;
-
-            // Hide the viewport indicator rect when fully zoomed out
-            m_ViewportRect.style.display = IsZoomedIn ? DisplayStyle.Flex : DisplayStyle.None;
-
-            float overviewWidth = m_OverviewElement.contentRect.width;
-            if (float.IsNaN(overviewWidth) || overviewWidth < 1f) return;
-
-            m_ViewportRect.style.left = m_ViewportStart * overviewWidth;
-            m_ViewportRect.style.width = (m_ViewportEnd - m_ViewportStart) * overviewWidth;
-        }
-
-        void OnOverviewPointerDown(PointerDownEvent evt)
-        {
-            if (evt.button != 0 || m_TotalBucketCount == 0) return;
-
-            float overviewWidth = m_OverviewElement.contentRect.width;
-            if (overviewWidth < 1f) return;
-
-            float clickNorm = evt.localPosition.x / overviewWidth;
-            float span = m_ViewportEnd - m_ViewportStart;
-
-            // Check if clicking within viewport rect -> start drag
-            if (clickNorm >= m_ViewportStart && clickNorm <= m_ViewportEnd)
-            {
-                m_OverviewDragging = true;
-                m_OverviewDragStartX = evt.localPosition.x;
-                m_OverviewDragStartVP = m_ViewportStart;
-                ((VisualElement)evt.target).CapturePointer(evt.pointerId);
-            }
-            else
-            {
-                // Click outside -> jump viewport center to click position
-                float newStart = clickNorm - span * 0.5f;
-                m_ViewportStart = newStart;
-                m_ViewportEnd = newStart + span;
-                ClampViewport();
-                RebuildGraph();
-            }
-
-            evt.StopPropagation();
-        }
-
-        void OnOverviewPointerMove(PointerMoveEvent evt)
-        {
-            if (!m_OverviewDragging) return;
-
-            float overviewWidth = m_OverviewElement.contentRect.width;
-            if (overviewWidth < 1f) return;
-
-            float dx = evt.localPosition.x - m_OverviewDragStartX;
-            float deltaNorm = dx / overviewWidth;
-            float span = m_ViewportEnd - m_ViewportStart;
-
-            m_ViewportStart = m_OverviewDragStartVP + deltaNorm;
-            m_ViewportEnd = m_ViewportStart + span;
-            ClampViewport();
-            RebuildGraph();
-
-            evt.StopPropagation();
-        }
-
-        void OnOverviewPointerUp(PointerUpEvent evt)
-        {
-            if (evt.button != 0) return;
-            if (m_OverviewDragging)
-            {
-                m_OverviewDragging = false;
-                ((VisualElement)evt.target).ReleasePointer(evt.pointerId);
-            }
-            evt.StopPropagation();
         }
 
         /// <summary>
-        /// Build a per-bar boolean mask indicating which bars are in the analyzed
-        /// range. Works for both contiguous (frame-order) and non-contiguous
-        /// (sorted) views. mask[i] == true means bar i is at full brightness.
+        /// Lightweight update for sub-range re-analysis.
         /// </summary>
-        void BuildAnalyzedBarMask(BarData[] bars, int offset, int barCount, ref bool[] mask)
+        public void UpdateAnalyzedRange(AnalysisSnapshot snapshot,
+            List<CallsiteGroup> filteredGroups, bool groupByCallsite)
         {
-            int totalNeeded = offset + barCount;
-
-            // Ensure capacity for the full offset+count range
-            if (mask == null || mask.Length < totalNeeded)
-                mask = new bool[Mathf.Max(totalNeeded, 64)];
-            else
-                Array.Clear(mask, offset, barCount);
-
-            if (m_FrameStore == null || barCount == 0) return;
-
-            // No analysis active, or full range is analyzed — all bars at full brightness
-            if (m_AnalyzedFrameStart < 0 || m_AnalyzedFrameEnd < 0
-                || (m_AnalyzedFrameStart == m_FrameStore.FullFrameStart
-                    && m_AnalyzedFrameEnd == m_FrameStore.FullFrameEnd))
-            {
-                for (int i = 0; i < barCount; i++)
-                    mask[offset + i] = true;
-                return;
-            }
-
-            // With a frame buffer, check each bar's frames against the buffer
-            // for precise per-bar dimming. Works in both sorted and frame-order modes.
-            if (m_HasFrameSelection)
-            {
-                int baseFrame = m_SelectedFrameBaseFrame;
-                int bufLen = m_SelectedFrameBuffer.Length;
-                for (int i = 0; i < barCount; i++)
-                {
-                    int sf = bars[offset + i].StartFrame;
-                    int ef = bars[offset + i].EndFrame;
-                    bool any = false;
-                    for (int f = sf; f <= ef; f++)
-                    {
-                        int idx = f - baseFrame;
-                        if (idx >= 0 && idx < bufLen && m_SelectedFrameBuffer[idx])
-                        {
-                            any = true;
-                            break;
-                        }
-                    }
-                    mask[offset + i] = any;
-                }
-                return;
-            }
-
-            // Bar overlaps analyzed frame range
-            for (int i = 0; i < barCount; i++)
-            {
-                mask[offset + i] = bars[offset + i].StartFrame <= m_AnalyzedFrameEnd
-                    && bars[offset + i].EndFrame >= m_AnalyzedFrameStart;
-            }
+            m_Snapshot = snapshot;
+            m_FilteredGroups = filteredGroups;
+            m_GroupByCallsite = groupByCallsite;
         }
 
         // ═══════════════════════════════════════════════════
-        //  STACKED BAR SEGMENT BUILDING
+        //  REBUILD GRAPH
         // ═══════════════════════════════════════════════════
 
-        void BuildSegmentData()
+        /// <summary>
+        /// Re-read settings (colors, spacing) and refresh.
+        /// Called when EditorPrefs change via the Preferences panel.
+        /// The main graph uses BarVisualProvider (reads colors live),
+        /// but the overview strip uses baked segment colors, so we
+        /// rebuild bar entries and re-push data without recomputing overlays.
+        /// </summary>
+        public void ApplySettings()
         {
-            var allocs = m_FrameStore.CachedRawAllocations;
-            int frameCount = m_FrameStore.FullFrameBytes.Length;
-            int methodCount = m_MethodPalette.Count;
-            int baseFrame = m_FrameStore.FullFrameStart;
+            m_BarGraph.SetBarSpacingRatio(GCAllocSettings.GraphBarSpacing);
+            if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
+            BuildBarEntries();
+            m_BarGraph.SetData(m_BarEntries, m_BarEntryCount, m_BarSegments, m_BarSegmentCount);
+            m_OverviewStrip.SetData(m_BarEntries, m_BarEntryCount, m_BarSegments, m_BarSegmentCount);
+        }
 
-            // Flat array: row = frame relative index, col = SegmentMethodIndex.
-            // Each cell accumulates total bytes for that (frame, method) pair.
-            int flatLen = frameCount * methodCount;
-            if (m_SegmentFlatArray == null || m_SegmentFlatArray.Length < flatLen)
-                m_SegmentFlatArray = new long[Mathf.Max(flatLen, 256)];
-            else
-                Array.Clear(m_SegmentFlatArray, 0, flatLen);
-
-            // Single pass over all allocations — O(1) per alloc via integer indexing.
-            for (int a = 0; a < allocs.Count; a++)
+        /// <summary>
+        /// Rebuild the entire graph from current frame store data.
+        /// </summary>
+        public void RebuildGraph()
+        {
+            if (m_FrameStore == null || !m_FrameStore.HasFullFrameData)
             {
-                int methodIdx = allocs[a].SegmentMethodIndex;
-                if (methodIdx < 0) continue;
-                int frameRel = allocs[a].FrameIndex - baseFrame;
-                m_SegmentFlatArray[frameRel * methodCount + methodIdx] += allocs[a].Bytes;
+                m_GraphSection.style.display = DisplayStyle.None;
+                return;
             }
 
-            // Ensure segment output arrays
-            int estimatedSegments = frameCount * 12;
-            if (m_Segments == null || m_Segments.Length < estimatedSegments)
-                m_Segments = new BarSegment[Mathf.Max(estimatedSegments, 256)];
-            if (m_SegmentOffsets == null || m_SegmentOffsets.Length < frameCount + 1)
-                m_SegmentOffsets = new int[Mathf.Max(frameCount + 1, 64)];
+            m_GraphSection.style.display = DisplayStyle.Flex;
 
-            // Reusable per-frame sort buffers
+            // Build bar entries with baked colors
+            BuildBarEntries();
+
+            // Push data to chart and overview
+            m_BarGraph.SetData(m_BarEntries, m_BarEntryCount, m_BarSegments, m_BarSegmentCount);
+            m_OverviewStrip.SetData(m_BarEntries, m_BarEntryCount, m_BarSegments, m_BarSegmentCount);
+
+            // Allow zooming down to ~5 visible bars regardless of frame count
+            m_BarGraph.ViewState.MaxZoomX = Mathf.Max(50f, m_BarEntryCount / 5f);
+
+            // LOD color: use GraphBarColor for analyzed bars, GraphDimColor for unanalyzed
+            m_BarGraph.BarVisualProvider = GetBarVisualOverride;
+
+            // Update X-axis labels
+            if (m_BarEntryCount > 0)
+            {
+                int firstFrame = m_FrameStore.FullFrameStart;
+                int lastFrame = m_FrameStore.FullFrameEnd;
+                m_GraphXStart.text = GCAllocUtils.DisplayFrame(firstFrame).ToString();
+                m_GraphXEnd.text = GCAllocUtils.DisplayFrame(lastFrame).ToString();
+            }
+
+            // Y-axis reset button
+            m_YAxisResetBtn.SetEnabled(m_BarGraph.ViewState.ZoomY > 1.01f);
+
+            // Reset tooltip cache
+            m_LastTooltipBar = -1;
+            HideFloatingTooltip();
+
+            // Re-apply overlay for currently selected marker
+            int selectedIdx = m_GetSelectedMarkerIndex != null ? m_GetSelectedMarkerIndex() : -1;
+            if (m_FilteredGroups != null && selectedIdx >= 0 && selectedIdx < m_FilteredGroups.Count)
+                UpdateOverlay(m_FilteredGroups[selectedIdx]);
+            else
+                ClearOverlay();
+
+            // Update button states
+            UpdateResetButtonVisibility();
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  BAR VISUAL PROVIDER
+        // ═══════════════════════════════════════════════════
+
+        BarVisualOverride? GetBarVisualOverride(int barIndex)
+        {
+            if (!m_HasSelection || barIndex < 0
+                || m_SelectionBuffer == null || barIndex >= m_SelectionBuffer.Length)
+                return new BarVisualOverride { LodColor = GCAllocSettings.GraphBarColor };
+
+            Color32 lodColor = m_SelectionBuffer[barIndex]
+                ? GCAllocSettings.GraphBarColor
+                : GCAllocSettings.GraphDimColor;
+
+            return new BarVisualOverride { LodColor = lodColor };
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  DATA TRANSFORMS
+        // ═══════════════════════════════════════════════════
+
+        /// <summary>
+        /// Build BarEntry[] and BarSegment[] from frame store data.
+        /// One bar per frame, no bucketing. Colors are baked for analyzed-range dimming.
+        /// </summary>
+        void BuildBarEntries()
+        {
+            var perFrame = m_FrameStore.FullFrameBytes;
+            int frameCount = perFrame.Length;
+            int baseFrame = m_FrameStore.FullFrameStart;
+
+            if (m_HasSegmentData)
+                BuildBarEntriesWithSegments(perFrame, frameCount, baseFrame, !m_HasSelection);
+            else
+                BuildBarEntriesFlat(perFrame, frameCount);
+        }
+
+        void BuildBarEntriesFlat(long[] perFrame, int frameCount)
+        {
+            if (m_BarEntries == null || m_BarEntries.Length < frameCount)
+                m_BarEntries = new BarEntry[frameCount];
+            if (m_BarSegments == null || m_BarSegments.Length < frameCount)
+                m_BarSegments = new BarSegment[frameCount];
+
+            m_BarEntryCount = frameCount;
+            m_BarSegmentCount = frameCount;
+
+            Color32 barColor = GCAllocSettings.GraphBarColor;
+            for (int i = 0; i < frameCount; i++)
+            {
+                float value = perFrame[i];
+                m_BarSegments[i] = new BarSegment(value, barColor);
+                m_BarEntries[i] = new BarEntry(i, 1, value);
+            }
+        }
+
+        void BuildBarEntriesWithSegments(long[] perFrame, int frameCount, int baseFrame, bool isFullRange)
+        {
+            int methodCount = m_MethodPalette.Count;
+
+            // Estimate segments: reuse m_SegmentFlatArray built by BuildSegmentData
+            int estimatedSegs = frameCount * 12;
+            if (m_BarEntries == null || m_BarEntries.Length < frameCount)
+                m_BarEntries = new BarEntry[frameCount];
+            if (m_BarSegments == null || m_BarSegments.Length < estimatedSegs)
+                m_BarSegments = new BarSegment[estimatedSegs];
+
+            // Reuse sort buffers
             if (m_SegmentSortIndices == null || m_SegmentSortIndices.Length < methodCount)
             {
                 m_SegmentSortIndices = new int[Mathf.Max(methodCount, 64)];
                 m_SegmentSortValues = new long[Mathf.Max(methodCount, 64)];
             }
 
+            m_BarEntryCount = frameCount;
             int segIdx = 0;
+
+            Color32 barColor = GCAllocSettings.GraphBarColor;
+            Color32 dimColor = GCAllocSettings.GraphDimColor;
 
             for (int b = 0; b < frameCount; b++)
             {
-                m_SegmentOffsets[b] = segIdx;
+                bool isAnalyzed = isFullRange
+                    || (m_SelectionBuffer != null && b < m_SelectionBuffer.Length && m_SelectionBuffer[b]);
+
+                int rowStart = b * methodCount;
 
                 // Collect non-zero methods for this frame
-                int rowStart = b * methodCount;
                 int nonZero = 0;
                 for (int m = 0; m < methodCount; m++)
                 {
@@ -2054,10 +590,20 @@ namespace GCAllocBreakdown.Editor
                     }
                 }
 
-                if (nonZero == 0) continue;
+                int segStart = segIdx;
 
-                // Sort ascending by bytes (smallest at bottom of stacked bar).
-                // Simple insertion sort — nonZero is typically < 20.
+                if (nonZero == 0)
+                {
+                    float value = perFrame[b];
+                    if (segIdx >= m_BarSegments.Length)
+                        GrowSegmentArray(ref m_BarSegments, segIdx + 1);
+
+                    m_BarSegments[segIdx++] = new BarSegment(value, isAnalyzed ? barColor : dimColor);
+                    m_BarEntries[b] = new BarEntry(segStart, 1, value);
+                    continue;
+                }
+
+                // Sort ascending by bytes (smallest at bottom of stacked bar)
                 for (int i = 1; i < nonZero; i++)
                 {
                     long keyVal = m_SegmentSortValues[i];
@@ -2074,274 +620,515 @@ namespace GCAllocBreakdown.Editor
                 }
 
                 // Emit segments
-                if (segIdx + nonZero > m_Segments.Length)
-                {
-                    var grown = new BarSegment[Mathf.Max(m_Segments.Length * 2, segIdx + nonZero)];
-                    Array.Copy(m_Segments, grown, segIdx);
-                    m_Segments = grown;
-                }
+                if (segIdx + nonZero > m_BarSegments.Length)
+                    GrowSegmentArray(ref m_BarSegments, segIdx + nonZero);
 
+                float total = 0f;
                 for (int m = 0; m < nonZero; m++)
                 {
-                    m_Segments[segIdx++] = new BarSegment
-                    {
-                        MethodIndex = m_SegmentSortIndices[m],
-                        Bytes = m_SegmentSortValues[m]
-                    };
+                    int methodIdx = m_SegmentSortIndices[m];
+                    float val = m_SegmentSortValues[m];
+                    total += val;
+
+                    Color32 segColor = isAnalyzed
+                        ? (Color32)m_MethodPalette.GetColor(methodIdx)
+                        : dimColor;
+                    m_BarSegments[segIdx++] = new BarSegment(val, segColor, methodIdx);
                 }
+
+                m_BarEntries[b] = new BarEntry(segStart, nonZero, total);
             }
 
-            m_SegmentOffsets[frameCount] = segIdx;
+            m_BarSegmentCount = segIdx;
+        }
+
+        static void GrowSegmentArray(ref BarSegment[] arr, int minSize)
+        {
+            var grown = new BarSegment[Mathf.Max(arr.Length * 2, minSize)];
+            Array.Copy(arr, grown, arr.Length);
+            arr = grown;
+        }
+
+
+        /// <summary>
+        /// Build the flat accumulator array from cached raw allocations.
+        /// Called once in SetData; the array is reused in BuildBarEntriesWithSegments.
+        /// </summary>
+        void BuildSegmentData()
+        {
+            var allocs = m_FrameStore.CachedRawAllocations;
+            int frameCount = m_FrameStore.FullFrameBytes.Length;
+            int methodCount = m_MethodPalette.Count;
+            int baseFrame = m_FrameStore.FullFrameStart;
+
+            int flatLen = frameCount * methodCount;
+            if (m_SegmentFlatArray == null || m_SegmentFlatArray.Length < flatLen)
+                m_SegmentFlatArray = new long[Mathf.Max(flatLen, 256)];
+            else
+                Array.Clear(m_SegmentFlatArray, 0, flatLen);
+
+            for (int a = 0; a < allocs.Count; a++)
+            {
+                int methodIdx = allocs[a].SegmentMethodIndex;
+                if (methodIdx < 0) continue;
+                int frameRel = allocs[a].FrameIndex - baseFrame;
+                m_SegmentFlatArray[frameRel * methodCount + methodIdx] += allocs[a].Bytes;
+            }
+
             m_HasSegmentData = true;
         }
 
-        void ClearSegmentData()
-        {
-            m_HasSegmentData = false;
-            m_GraphElement.SetSegmentData(null, null, false, null);
-        }
-
-        static void EnsureBarCapacity(ref BarData[] array, int needed)
-        {
-            if (array == null || array.Length < needed)
-            {
-                int newSize = Mathf.Max(needed, 64);
-                // Grow by doubling to reduce future allocations
-                if (array != null && array.Length * 2 > newSize)
-                    newSize = array.Length * 2;
-                array = new BarData[newSize];
-            }
-        }
-
-        void EnsureGridLineCapacity()
-        {
-            if (m_GridLineCount >= m_GridLines.Length)
-            {
-                var newArray = new GridLine[m_GridLines.Length * 2];
-                Array.Copy(m_GridLines, newArray, m_GridLines.Length);
-                m_GridLines = newArray;
-            }
-        }
-
-        Label EnsureGridLineLabel(int index)
-        {
-            if (m_GridLineLabels[index] != null) return m_GridLineLabels[index];
-
-            var label = new Label
-            {
-                style =
-                {
-                    fontSize = 9,
-                    color = k_DimGray,
-                    position = Position.Absolute,
-                    right = 4,
-                    unityTextAlign = TextAnchor.MiddleRight
-                },
-                pickingMode = PickingMode.Ignore
-            };
-            m_GridLineLabels[index] = label;
-            m_YAxisElement.Add(label);
-            return label;
-        }
-
-        int FindBarContainingFrame(int frameIndex)
-        {
-            for (int i = 0; i < m_BarCount; i++)
-            {
-                int srcIdx = m_ViewportStartBucket + i;
-                if (m_Bars[srcIdx].StartFrame <= frameIndex && m_Bars[srcIdx].EndFrame >= frameIndex)
-                    return i;
-            }
-            return -1;
-        }
-
-        int FindBarAtX(float localX)
-        {
-            if (m_BarCount == 0) return -1;
-            float areaWidth = m_GraphElement.contentRect.width;
-            if (float.IsNaN(areaWidth) || areaWidth < 1f) return -1;
-
-            float barWidth = areaWidth / m_VisibleSpan;
-            if (barWidth < 0.001f) return -1;
-
-            int index = (int)(localX / barWidth + m_FractionalOffset);
-            if (index < 0) return -1;
-            if (index >= m_BarCount) return -1;
-            return index;
-        }
-
         /// <summary>
-        /// Hit-test a Y position against the stacked segments of a bar.
-        /// Returns the absolute segment index into m_Segments, or -1 if no segment hit.
-        /// srcIdx is the bar index including viewport offset (barIndex + m_ViewportStartBucket).
+        /// Build per-bar overlay values for method highlight.
+        /// Each value is the proportional contribution of the highlighted group.
         /// </summary>
-        int HitTestSegment(int srcIdx, float localY)
+        void BuildOverlayValues(CallsiteGroup group)
         {
-            if (!m_HasSegmentData || m_FramesPerBucket != 1) return -1;
-
-            int segLookup = m_OrderByMagnitude ? m_SortedBarIndices[srcIdx] : srcIdx;
-            if (m_SegmentOffsets == null || segLookup + 1 >= m_SegmentOffsets.Length) return -1;
-
-            int segStart = m_SegmentOffsets[segLookup];
-            int segEnd = m_SegmentOffsets[segLookup + 1];
-
-            // Only hit-test when 2+ segments are visually distinguishable
-            float areaHeight = m_GraphElement.contentRect.height;
-            int visibleCount = 0;
-            for (int s = segStart; s < segEnd && visibleCount < 2; s++)
-            {
-                float segH = m_YAxisMax > 0
-                    ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
-                    : 0f;
-                if (segH >= 0.5f)
-                    visibleCount++;
-            }
-            if (visibleCount < 2) return -1;
-            float currentY = m_YAxisMax > 0
-                ? areaHeight + (float)m_YPanOffset / m_YAxisMax * areaHeight
-                : areaHeight;
-
-            for (int s = segStart; s < segEnd; s++)
-            {
-                float segH = m_YAxisMax > 0
-                    ? (float)m_Segments[s].Bytes / m_YAxisMax * areaHeight
-                    : 0f;
-                float segTop = currentY - segH;
-
-                if (localY >= segTop && localY <= currentY)
-                    return s;
-                currentY = segTop;
-            }
-
-            return -1;
-        }
-
-        void MapBarRangeToFrameRange(int startBar, int endBar, out int startFrame, out int endFrame)
-        {
-            // Ensure correct ordering
-            if (startBar > endBar)
-            {
-                int tmp = startBar;
-                startBar = endBar;
-                endBar = tmp;
-            }
-
-            // Clamp
-            if (startBar < 0) startBar = 0;
-            if (endBar >= m_BarCount) endBar = m_BarCount - 1;
-
-            // Bars are always in display order. In sorted mode, a range of
-            // display positions may span non-contiguous frames, so find min/max.
-            if (m_OrderByMagnitude)
-            {
-                int minFrame = int.MaxValue;
-                int maxFrame = int.MinValue;
-                for (int i = startBar; i <= endBar; i++)
-                {
-                    int srcIdx = m_ViewportStartBucket + i;
-                    if (m_Bars[srcIdx].StartFrame < minFrame) minFrame = m_Bars[srcIdx].StartFrame;
-                    if (m_Bars[srcIdx].EndFrame > maxFrame) maxFrame = m_Bars[srcIdx].EndFrame;
-                }
-                startFrame = minFrame;
-                endFrame = maxFrame;
-            }
-            else
-            {
-                startFrame = m_Bars[m_ViewportStartBucket + startBar].StartFrame;
-                endFrame = m_Bars[m_ViewportStartBucket + endBar].EndFrame;
-            }
-        }
-
-        /// <summary>
-        /// Populate the reusable bool[] buffer with the frames covered by the
-        /// selected display bars. Works for both contiguous and sorted views.
-        /// </summary>
-        void BuildSelectedFrameBuffer(int startBar, int endBar)
-        {
-            if (startBar > endBar)
-            {
-                int tmp = startBar;
-                startBar = endBar;
-                endBar = tmp;
-            }
-            if (startBar < 0) startBar = 0;
-            if (endBar >= m_BarCount) endBar = m_BarCount - 1;
+            if (m_Snapshot == null || !m_Snapshot.HasRawAllocations) return;
+            if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
 
             int fullFrameCount = m_FrameStore.FullFrameBytes.Length;
-            m_SelectedFrameBaseFrame = m_FrameStore.FullFrameStart;
+            int snapshotFrameCount = m_Snapshot.PerFrameBytes != null ? m_Snapshot.PerFrameBytes.Length : 0;
+            if (snapshotFrameCount == 0) return;
 
-            // Ensure capacity, then clear
-            if (m_SelectedFrameBuffer == null || m_SelectedFrameBuffer.Length < fullFrameCount)
-                m_SelectedFrameBuffer = new bool[fullFrameCount];
-            else
-                System.Array.Clear(m_SelectedFrameBuffer, 0, fullFrameCount);
-
-            // Mark frames covered by each selected bar
-            for (int i = startBar; i <= endBar; i++)
+            // Sum group's allocations into per-frame buffer
+            EnsurePerFrameBuffer(snapshotFrameCount);
+            int groupIdx = group.GroupIndex;
+            var allocs = m_Snapshot.RawAllocations;
+            for (int i = 0; i < allocs.Count; i++)
             {
-                int srcIdx = m_ViewportStartBucket + i;
-                int sf = m_Bars[srcIdx].StartFrame;
-                int ef = m_Bars[srcIdx].EndFrame;
-                for (int f = sf; f <= ef; f++)
-                {
-                    int idx = f - m_SelectedFrameBaseFrame;
-                    if (idx >= 0 && idx < fullFrameCount)
-                        m_SelectedFrameBuffer[idx] = true;
-                }
+                var alloc = allocs[i];
+                int matchIdx = m_GroupByCallsite ? alloc.FullCallstackGroupIndex : alloc.TopFrameGroupIndex;
+                if (matchIdx != groupIdx) continue;
+                int idx = alloc.FrameIndex - m_Snapshot.FrameStart;
+                if (idx >= 0 && idx < snapshotFrameCount)
+                    m_PerFrameBuffer[idx] += alloc.Bytes;
             }
 
-            m_HasFrameSelection = true;
+            // Map per-snapshot-frame values to per-bar values
+            if (m_OverlayValues == null || m_OverlayValues.Length < fullFrameCount)
+                m_OverlayValues = new float[fullFrameCount];
+
+            for (int i = 0; i < fullFrameCount; i++)
+            {
+                int snapshotIdx = (m_FrameStore.FullFrameStart + i) - m_Snapshot.FrameStart;
+                m_OverlayValues[i] = (snapshotIdx >= 0 && snapshotIdx < snapshotFrameCount)
+                    ? m_PerFrameBuffer[snapshotIdx]
+                    : 0f;
+            }
+        }
+
+        void EnsurePerFrameBuffer(int size)
+        {
+            if (m_PerFrameBuffer == null || m_PerFrameBuffer.Length < size)
+                m_PerFrameBuffer = new long[size];
+            else
+                Array.Clear(m_PerFrameBuffer, 0, size);
         }
 
         // ═══════════════════════════════════════════════════
-        //  SECTION FOLDOUT HELPER
+        //  OVERLAY & METHOD HIGHLIGHT
         // ═══════════════════════════════════════════════════
 
         /// <summary>
-        /// Creates a foldout styled to match Unity's Profile Analyzer:
-        /// bold header text, subtle background on the header bar, separator line.
+        /// Highlight segments matching a specific callsite group's method.
         /// </summary>
-        static Foldout MakeSectionFoldout(string title, bool defaultOpen = true)
+        public void UpdateOverlay(CallsiteGroup group)
         {
-            var foldout = new Foldout { text = title, value = defaultOpen };
-            foldout.style.marginBottom = 2;
-            foldout.style.marginTop = 2;
-
-            var toggle = foldout.Q<Toggle>();
-            if (toggle != null)
+            if (group == null)
             {
-                toggle.style.backgroundColor = new Color(0.25f, 0.25f, 0.25f);
-                toggle.style.paddingTop = 3;
-                toggle.style.paddingBottom = 3;
-                toggle.style.paddingLeft = 2;
-                toggle.style.marginBottom = 2;
-                toggle.style.borderBottomWidth = 1;
-                toggle.style.borderBottomColor = new Color(0.15f, 0.15f, 0.15f);
-
-                var label = toggle.Q<Label>();
-                if (label != null)
-                {
-                    label.style.fontSize = 12;
-                    label.style.unityFontStyleAndWeight = FontStyle.Bold;
-                }
+                ClearOverlay();
+                return;
             }
 
-            return foldout;
+            BuildOverlayValues(group);
+            if (m_OverlayValues != null)
+                m_BarGraph.SetOverlay(m_OverlayValues);
+
+            m_GraphOverlayLabel.text = group.DisplayName;
+        }
+
+        public void ClearOverlay()
+        {
+            m_BarGraph.ClearOverlay();
+            m_GraphOverlayLabel.text = "";
         }
 
         // ═══════════════════════════════════════════════════
-        //  CURSOR UTILITY
+        //  SELECTION
         // ═══════════════════════════════════════════════════
 
-        static readonly PropertyInfo s_CursorIdProp =
-            typeof(UnityEngine.UIElements.Cursor).GetProperty(
-                "defaultCursorId", BindingFlags.NonPublic | BindingFlags.Instance);
-
-        static void SetSystemCursor(VisualElement element, MouseCursor cursor)
+        public void ClearSelection()
         {
-            object boxed = new UnityEngine.UIElements.Cursor();
-            s_CursorIdProp.SetValue(boxed, (int)cursor);
-            element.style.cursor = new StyleCursor((UnityEngine.UIElements.Cursor)boxed);
+            m_BarGraph.ClearSelection();
+            m_HighlightedFrame = -1;
+            m_HasSelection = false;
+        }
+
+        public void ResetToFullRange()
+        {
+            ClearSelection();
+
+            var snap = m_BarGraph.CreateViewSnapshot();
+            snap.ZoomX = 1f;
+            snap.ZoomY = 1f;
+            snap.PanX = 0f;
+            snap.PanY = 0f;
+            m_BarGraph.RestoreViewSnapshot(snap);
+        }
+
+        /// <summary>
+        /// Derive frame indices from the current SelectedBars.
+        /// Returns false if no selection exists.
+        /// </summary>
+        bool GetSelectedFrameRange(out int startFrame, out int endFrame)
+        {
+            var selected = m_BarGraph.ViewState.SelectedBars;
+            if (selected.Count == 0)
+            {
+                startFrame = -1;
+                endFrame = -1;
+                return false;
+            }
+
+            int baseFrame = m_FrameStore.FullFrameStart;
+            int minFrame = int.MaxValue;
+            int maxFrame = int.MinValue;
+            foreach (int barIdx in selected)
+            {
+                int frame = baseFrame + barIdx;
+                if (frame < minFrame) minFrame = frame;
+                if (frame > maxFrame) maxFrame = frame;
+            }
+            startFrame = minFrame;
+            endFrame = maxFrame;
+            return true;
+        }
+
+        /// <summary>
+        /// Build a bool[] frame selection buffer from SelectedBars.
+        /// Used by the main window for "Analyze Selection".
+        /// </summary>
+        public bool GetSelectedFrameBuffer(out bool[] buffer, out int baseFrame)
+        {
+            var selected = m_BarGraph.ViewState.SelectedBars;
+            if (selected.Count == 0 || m_FrameStore == null)
+            {
+                buffer = null;
+                baseFrame = 0;
+                return false;
+            }
+
+            int fullFrameCount = m_FrameStore.FullFrameBytes.Length;
+            baseFrame = m_FrameStore.FullFrameStart;
+
+            buffer = new bool[fullFrameCount];
+            foreach (int barIdx in selected)
+            {
+                if (barIdx >= 0 && barIdx < fullFrameCount)
+                    buffer[barIdx] = true;
+            }
+            return true;
+        }
+
+        /// <summary>True if there is an active drag selection.</summary>
+        public bool HasFrameSelection => m_BarGraph != null && m_BarGraph.ViewState.SelectedBars.Count > 0;
+
+        // ═══════════════════════════════════════════════════
+        //  SERIALIZATION
+        // ═══════════════════════════════════════════════════
+
+        public BarGraphViewSnapshot CaptureState()
+        {
+            return m_BarGraph.CreateViewSnapshot();
+        }
+
+        public void RestoreState(BarGraphViewSnapshot state)
+        {
+            if (!state.IsValid) return;
+            m_BarGraph.RestoreViewSnapshot(state);
+            UpdateSortToggleLabel();
+            m_YAxisResetBtn.SetEnabled(m_BarGraph.ViewState.ZoomY > 1.01f);
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  EVENT HANDLERS — BAR GRAPH
+        // ═══════════════════════════════════════════════════
+
+        void OnBarClicked(BarClickedEventArgs args)
+        {
+            if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
+
+            int frameIndex = m_FrameStore.FullFrameStart + args.DataIndex;
+            m_HighlightedFrame = frameIndex;
+
+            string methodName = null;
+            if (m_HasSegmentData && args.DataIndex < m_BarEntryCount)
+            {
+                ref readonly BarEntry bar = ref m_BarEntries[args.DataIndex];
+                if (bar.SegmentCount > 1)
+                {
+                    int bestSeg = 0;
+                    float bestVal = 0f;
+                    for (int s = 0; s < bar.SegmentCount; s++)
+                    {
+                        float v = m_BarSegments[bar.SegmentStart + s].Value;
+                        if (v > bestVal) { bestVal = v; bestSeg = s; }
+                    }
+                    m_BarGraph.SelectSegment(args.DataIndex, bestSeg);
+                    int tag = m_BarSegments[bar.SegmentStart + bestSeg].Tag;
+                    if (tag >= 0) methodName = m_MethodPalette.GetMethodName(tag);
+                }
+                else if (bar.SegmentCount == 1)
+                {
+                    m_BarGraph.SelectSegment(args.DataIndex, 0);
+                    int tag = m_BarSegments[bar.SegmentStart].Tag;
+                    if (tag >= 0) methodName = m_MethodPalette.GetMethodName(tag);
+                }
+            }
+
+            m_OnFrameSelected?.Invoke(frameIndex, methodName);
+        }
+
+        void OnSegmentClicked(SegmentEventArgs args)
+        {
+            if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
+
+            int frameIndex = m_FrameStore.FullFrameStart + args.BarDataIndex;
+            m_HighlightedFrame = frameIndex;
+
+            string methodName = args.Tag >= 0 ? m_MethodPalette.GetMethodName(args.Tag) : null;
+            m_OnFrameSelected?.Invoke(frameIndex, methodName);
+        }
+
+        void OnSelectionChangedInternal(SelectionChangedEventArgs args)
+        {
+            if (!GetSelectedFrameRange(out int startFrame, out int endFrame)) return;
+            OnSelectionChanged?.Invoke(startFrame, endFrame);
+        }
+
+        void OnDragCompletedInternal(DragCompletedEventArgs args)
+        {
+            m_BarGraph.ClearSegmentSelection();
+            PopulateSelectionBuffer();
+            if (!GetSelectedFrameRange(out int startFrame, out int endFrame)) return;
+            OnDragCompleted?.Invoke(startFrame, endFrame);
+        }
+
+        void PopulateSelectionBuffer()
+        {
+            int count = m_BarEntryCount;
+            if (m_SelectionBuffer == null || m_SelectionBuffer.Length < count)
+                m_SelectionBuffer = new bool[count];
+            else
+                Array.Clear(m_SelectionBuffer, 0, count);
+
+            var selected = m_BarGraph.ViewState.SelectedBars;
+            foreach (int idx in selected)
+                if (idx >= 0 && idx < count)
+                    m_SelectionBuffer[idx] = true;
+
+            m_HasSelection = true;
+        }
+
+        void OnHoverChanged(HoverChangedEventArgs args)
+        {
+            if (args.DataIndex < 0)
+            {
+                m_LastTooltipBar = -1;
+                HideFloatingTooltip();
+                return;
+            }
+
+            m_LastTooltipBar = args.DataIndex;
+            int frameIndex = m_FrameStore.FullFrameStart + args.DataIndex;
+            long val = (long)args.TotalValue;
+
+            // Position tooltip at the bar's approximate location
+            ShowFloatingTooltip(string.Concat(
+                "Frame ", GCAllocUtils.DisplayFrame(frameIndex).ToString(),
+                ": ", GCAllocUtils.FormatBytes(val)));
+        }
+
+        void OnSegmentHoverChanged(SegmentEventArgs args)
+        {
+            if (args.BarDataIndex < 0)
+            {
+                m_LastTooltipBar = -1;
+                HideFloatingTooltip();
+                return;
+            }
+
+            m_LastTooltipBar = args.BarDataIndex;
+            string methodName = args.Tag >= 0
+                ? m_MethodPalette.GetMethodName(args.Tag)
+                : "Others";
+            long segBytes = (long)args.Value;
+
+            int frameIndex = m_FrameStore.FullFrameStart + args.BarDataIndex;
+            long totalForFrame = m_FrameStore.FullFrameBytes[args.BarDataIndex];
+            int pct = totalForFrame > 0 ? (int)(segBytes * 100 / totalForFrame) : 0;
+
+            ShowFloatingTooltip(string.Concat(
+                methodName.Replace("  —  ", "\n— "),
+                ": ", GCAllocUtils.FormatBytes(segBytes),
+                " (", pct.ToString(), "%)"));
+        }
+
+        void OnViewChanged(ViewChangedEventArgs args)
+        {
+            // Update Y-axis reset button when zoom changes
+            m_YAxisResetBtn.SetEnabled(args.ZoomY > 1.01f);
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  CONTEXT MENU
+        // ═══════════════════════════════════════════════════
+
+        void OnGraphContextMenu(ContextualMenuPopulateEvent evt)
+        {
+            bool hasData = m_BarEntryCount > 0;
+            bool hasSelection = m_BarGraph.ViewState.SelectedBars.Count > 0;
+
+            evt.menu.AppendAction("Select All", OnContextSelectAll,
+                hasData ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+
+            evt.menu.AppendAction("Clear Selection", OnContextClearSelection,
+                hasSelection ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+
+            evt.menu.AppendSeparator();
+
+            evt.menu.AppendAction("Select Frame with Max GC", OnContextSelectMaxGC,
+                hasData ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+
+            evt.menu.AppendAction("Analyze Selection", OnContextAnalyzeSelection,
+                hasSelection ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+
+            evt.menu.AppendSeparator();
+
+            evt.menu.AppendAction("Reset Zoom", OnContextResetZoom,
+                IsZoomedIn ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+
+            evt.menu.AppendAction(
+                OrderByMagnitude ? "Order by Frame" : "Order by Size",
+                OnContextToggleSort,
+                hasData ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+        }
+
+        void OnContextSelectAll(DropdownMenuAction _)
+        {
+            m_BarGraph.SelectAll();
+        }
+
+        void OnContextClearSelection(DropdownMenuAction _) => ClearSelection();
+
+        void OnContextSelectMaxGC(DropdownMenuAction _) => SelectExtremeFrame(true);
+
+        void OnContextAnalyzeSelection(DropdownMenuAction _)
+        {
+            if (!GetSelectedFrameRange(out int sf, out int ef)) return;
+            OnDragCompleted?.Invoke(sf, ef);
+        }
+
+        void OnContextResetZoom(DropdownMenuAction _)
+        {
+            var snap = m_BarGraph.CreateViewSnapshot();
+            snap.ZoomX = 1f;
+            snap.ZoomY = 1f;
+            snap.PanX = 0f;
+            snap.PanY = 0f;
+            m_BarGraph.RestoreViewSnapshot(snap);
+        }
+
+        void OnContextToggleSort(DropdownMenuAction _) => OnSortToggleClicked();
+
+        // ═══════════════════════════════════════════════════
+        //  SELECT EXTREME FRAME
+        // ═══════════════════════════════════════════════════
+
+        void SelectExtremeFrame(bool selectMax)
+        {
+            if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
+
+            var perFrame = m_FrameStore.FullFrameBytes;
+            int extremeIdx = 0;
+            long extremeVal = perFrame[0];
+
+            for (int i = 1; i < perFrame.Length; i++)
+            {
+                if (selectMax ? perFrame[i] > extremeVal : perFrame[i] < extremeVal)
+                {
+                    extremeVal = perFrame[i];
+                    extremeIdx = i;
+                }
+            }
+
+            m_BarGraph.SelectBar(extremeIdx);
+
+            int frameIndex = m_FrameStore.FullFrameStart + extremeIdx;
+            m_HighlightedFrame = frameIndex;
+
+            m_OnFrameSelected?.Invoke(frameIndex, null);
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  BUTTON HANDLERS
+        // ═══════════════════════════════════════════════════
+
+        void OnSortToggleClicked()
+        {
+            OrderByMagnitude = !OrderByMagnitude;
+        }
+
+        void UpdateSortToggleLabel()
+        {
+            if (m_SortToggleBtn == null) return;
+            m_SortToggleBtn.text = OrderByMagnitude ? "Order by Frame" : "Order by Size";
+        }
+
+        void ResetYAxisScale()
+        {
+            var snap = m_BarGraph.CreateViewSnapshot();
+            snap.ZoomY = 1f;
+            snap.PanY = 0f;
+            m_BarGraph.RestoreViewSnapshot(snap);
+            m_YAxisResetBtn.SetEnabled(false);
+        }
+
+        void UpdateResetButtonVisibility()
+        {
+            if (m_ResetBtn == null || m_FrameStore == null) return;
+
+            bool isSubRange = m_HasSelection && m_FrameStore.HasCachedAnalysis;
+
+            m_ResetBtn.SetEnabled(isSubRange);
+        }
+
+        // ═══════════════════════════════════════════════════
+        //  TOOLTIP
+        // ═══════════════════════════════════════════════════
+
+        void ShowFloatingTooltip(string text)
+        {
+            m_FloatingTooltip.text = text;
+            m_FloatingTooltip.style.display = DisplayStyle.Flex;
+            m_FloatingTooltip.BringToFront();
+
+            var worldPos = m_BarGraph.LocalToWorld(m_LastPointerLocalPos);
+            var tooltipParent = m_FloatingTooltip.parent;
+            var pos = tooltipParent != null ? tooltipParent.WorldToLocal(worldPos) : worldPos;
+
+            float x = pos.x + 12f;
+            float y = pos.y - 28f;
+            if (y < 0f) y = pos.y + 16f;
+
+            m_FloatingTooltip.style.left = x;
+            m_FloatingTooltip.style.top = y;
+        }
+
+        void HideFloatingTooltip()
+        {
+            m_FloatingTooltip.style.display = DisplayStyle.None;
         }
     }
 }

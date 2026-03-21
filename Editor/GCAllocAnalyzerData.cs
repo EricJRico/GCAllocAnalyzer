@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using BarGraph.Core;
 using UnityEngine;
 
 namespace GCAllocBreakdown.Editor
@@ -13,7 +14,7 @@ namespace GCAllocBreakdown.Editor
     [Serializable]
     internal class AnalysisSnapshot
     {
-        public List<RawAllocation> RawAllocations = new(4096);
+        [NonSerialized] public List<RawAllocation> RawAllocations = new(4096);
         public List<string> SortedThreadNames = new(32);
         public long TotalBytes;
         public int TotalCount;
@@ -25,13 +26,20 @@ namespace GCAllocBreakdown.Editor
         [NonSerialized] public List<CallsiteGroup> GroupsByTopFrame = new(256);
         [NonSerialized] public long[] PerFrameBytes;
 
-        public bool HasData => RawAllocations != null && RawAllocations.Count > 0;
+        /// <summary>
+        /// True when skeleton metadata exists (from analysis or file restore).
+        /// RawAllocations may still be loading on a background thread.
+        /// </summary>
+        public bool HasData => TotalCount > 0;
 
         public void EnsureNonSerializedLists()
         {
+            RawAllocations ??= new List<RawAllocation>(4096);
             GroupsByFullCallstack ??= new List<CallsiteGroup>(256);
             GroupsByTopFrame ??= new List<CallsiteGroup>(256);
         }
+
+        public bool HasRawAllocations => RawAllocations != null && RawAllocations.Count > 0;
     }
 
     // ═══════════════════════════════════════════════════
@@ -89,12 +97,21 @@ namespace GCAllocBreakdown.Editor
     {
         public string Key;
         public string DisplayName;
+        public string DisplayNameNoAssembly;
+        public string DisplayNameWithAssembly;
+        public string HierarchyPath;
         public int GroupIndex;
         public long TotalBytes;
         public int Count;
         public float Percentage;
         public List<ResolvedFrame> ResolvedCallStack;
-        public List<RawAllocation> Allocations;
+
+        // First allocation info — for CPU module selection and display name swap
+        public int FirstAllocFrameIndex;
+        public int FirstAllocRawSampleIndex;
+        public string FirstAllocThreadName;
+        public string FirstAllocThreadGroupName;
+        public ulong FirstAllocThreadId;
 
         // Per-frame statistics (computed during grouping)
         public double MeanBytesPerFrame;
@@ -120,6 +137,11 @@ namespace GCAllocBreakdown.Editor
         public string FormattedRange;
         public string FormattedFirst;
         public string[] FormattedTopWorst;    // pre-built "frame N — X KB" strings
+
+        // Dense thread indices that contributed allocations to this group.
+        // Populated during BuildGrouping; enables O(1) thread filter checks
+        // without a separate Dictionary<string, HashSet<string>> pass.
+        [NonSerialized] public HashSet<int> ThreadIndices;
     }
 
     [Serializable]
@@ -256,12 +278,6 @@ namespace GCAllocBreakdown.Editor
     //  STACKED BAR SEGMENT DATA
     // ═══════════════════════════════════════════════════
 
-    internal struct BarSegment
-    {
-        public int MethodIndex;   // index into MethodColorPalette (k_OthersIndex = "Others")
-        public long Bytes;
-    }
-
     internal class MethodColorPalette
     {
         public const int k_OthersIndex = -1;
@@ -293,53 +309,86 @@ namespace GCAllocBreakdown.Editor
 
         public int Count => m_IndexToMethod.Count;
 
-        readonly Dictionary<string, long> m_BytesPerMethod = new(64);
-        readonly List<KeyValuePair<string, long>> m_SortedForBuild = new(64);
+        // Reusable arrays sized by TopFrameId — avoids per-Build allocations
+        long[] m_BytesByTopFrame;
+        string[] m_NameByTopFrame;
+        int[] m_PaletteByTopFrame;
+
+        struct TopFrameEntry
+        {
+            public int TopFrameId;
+            public long TotalBytes;
+        }
+        readonly List<TopFrameEntry> m_SortedForBuild = new(64);
 
         public void Build(List<RawAllocation> allocs)
         {
             m_MethodToIndex.Clear();
             m_IndexToMethod.Clear();
-            m_BytesPerMethod.Clear();
             m_SortedForBuild.Clear();
 
-            // Sum bytes per display name (human-readable top-frame method).
-            // DisplayName when call stacks are enabled, ParentMethod otherwise.
+            // Find max TopFrameId for array sizing
+            int maxId = 0;
             for (int i = 0; i < allocs.Count; i++)
             {
-                string key = allocs[i].DisplayName;
-                if (string.IsNullOrEmpty(key))
-                    key = allocs[i].ParentMethod;
-                if (string.IsNullOrEmpty(key))
-                    key = "(unknown)";
-                if (m_BytesPerMethod.TryGetValue(key, out long existing))
-                    m_BytesPerMethod[key] = existing + allocs[i].Bytes;
-                else
-                    m_BytesPerMethod[key] = allocs[i].Bytes;
+                int id = allocs[i].TopFrameId;
+                if (id > maxId) maxId = id;
             }
+            int arrayLen = maxId + 1;
 
-            // Sort descending by total bytes
-            foreach (var kvp in m_BytesPerMethod)
-                m_SortedForBuild.Add(kvp);
-            m_SortedForBuild.Sort((a, b) => b.Value.CompareTo(a.Value));
-
-            // Assign palette indices in rank order
-            for (int i = 0; i < m_SortedForBuild.Count; i++)
+            // Ensure arrays are large enough
+            if (m_BytesByTopFrame == null || m_BytesByTopFrame.Length < arrayLen)
             {
-                m_MethodToIndex[m_SortedForBuild[i].Key] = i;
-                m_IndexToMethod.Add(m_SortedForBuild[i].Key);
+                m_BytesByTopFrame = new long[arrayLen];
+                m_NameByTopFrame = new string[arrayLen];
+                m_PaletteByTopFrame = new int[arrayLen];
+            }
+            else
+            {
+                Array.Clear(m_BytesByTopFrame, 0, arrayLen);
+                Array.Clear(m_NameByTopFrame, 0, arrayLen);
             }
 
-            // Stamp SegmentMethodIndex on each allocation for O(1) array indexing
-            // in BuildSegmentData (avoids 1.87M string dictionary lookups).
+            // Pass 1: Sum bytes per TopFrameId (integer array — no string hashing)
             for (int i = 0; i < allocs.Count; i++)
             {
-                string key = allocs[i].DisplayName;
-                if (string.IsNullOrEmpty(key))
-                    key = allocs[i].ParentMethod;
-                if (string.IsNullOrEmpty(key))
-                    key = "(unknown)";
-                allocs[i].SegmentMethodIndex = m_MethodToIndex.TryGetValue(key, out int idx) ? idx : k_OthersIndex;
+                int id = allocs[i].TopFrameId;
+                if (id < 0) continue;
+                m_BytesByTopFrame[id] += allocs[i].Bytes;
+                if (m_NameByTopFrame[id] == null)
+                {
+                    string name = allocs[i].DisplayName;
+                    if (string.IsNullOrEmpty(name))
+                        name = allocs[i].ParentMethod;
+                    if (string.IsNullOrEmpty(name))
+                        name = "(unknown)";
+                    m_NameByTopFrame[id] = name;
+                }
+            }
+
+            // Collect non-zero entries and sort descending by total bytes
+            for (int id = 0; id < arrayLen; id++)
+            {
+                if (m_BytesByTopFrame[id] > 0)
+                    m_SortedForBuild.Add(new TopFrameEntry { TopFrameId = id, TotalBytes = m_BytesByTopFrame[id] });
+            }
+            m_SortedForBuild.Sort((a, b) => b.TotalBytes.CompareTo(a.TotalBytes));
+
+            // Assign palette indices in rank order, build lookup tables
+            for (int rank = 0; rank < m_SortedForBuild.Count; rank++)
+            {
+                int id = m_SortedForBuild[rank].TopFrameId;
+                string name = m_NameByTopFrame[id];
+                m_MethodToIndex[name] = rank;
+                m_IndexToMethod.Add(name);
+                m_PaletteByTopFrame[id] = rank;
+            }
+
+            // Pass 2: Stamp SegmentMethodIndex on each allocation (integer array lookup)
+            for (int i = 0; i < allocs.Count; i++)
+            {
+                int id = allocs[i].TopFrameId;
+                allocs[i].SegmentMethodIndex = id >= 0 ? m_PaletteByTopFrame[id] : k_OthersIndex;
             }
         }
 
@@ -430,39 +479,64 @@ namespace GCAllocBreakdown.Editor
     }
 
     // ═══════════════════════════════════════════════════
-    //  GRAPH CONTROLLER STATE — serializable subset of
-    //  PerFrameGraphController state that must survive
-    //  domain reload.
+    //  WindowState — all user-visible state that must survive
+    //  domain reload, captured as a single unit.
     // ═══════════════════════════════════════════════════
 
     [Serializable]
-    internal struct GraphControllerState
+    internal struct WindowState
     {
-        public bool OrderByMagnitude;
-        public float ViewportStart;
-        public float ViewportEnd;
-        public bool HasFrameSelection;
-        public bool[] SelectedFrameBuffer;
-        public int SelectedFrameBaseFrame;
-        public int SelectionFrameStart;
-        public int SelectionFrameEnd;
-        public int HighlightedFrame;
-        public long UserYAxisMax;
-        public bool HasCustomYScale;
-        public long YPanOffset;
+        // Graph
+        public BarGraphViewSnapshot Graph;
 
-        public static GraphControllerState Default => new GraphControllerState
+        // Filters
+        public string NameFilter;
+        public string ExcludeFilter;
+        public bool GroupByCallsite;
+        public string[] SelectedThreads;  // empty = all threads
+
+        // Sort
+        public int SortCol;    // cast from SortCol enum (private to window)
+        public bool SortAsc;
+
+        // Selections
+        public int SelectedMarkerIndex;
+        public int SelectedAllocIndex;
+
+        // Display
+        public bool ShowAssembly;
+        public bool IsLoadedSnapshot;
+
+        // Foldouts
+        public bool DataSummaryOpen;
+        public bool TopOffendersOpen;
+
+        public static WindowState Default => new WindowState
         {
-            OrderByMagnitude = false,
-            ViewportStart = 0f,
-            ViewportEnd = 1f,
-            HasFrameSelection = false,
-            SelectionFrameStart = -1,
-            SelectionFrameEnd = -1,
-            HighlightedFrame = -1,
-            UserYAxisMax = 0,
-            HasCustomYScale = false,
-            YPanOffset = 0
+            Graph = default,
+            NameFilter = "",
+            ExcludeFilter = "",
+            GroupByCallsite = true,
+            SelectedThreads = Array.Empty<string>(),
+            SortCol = 0,  // Bytes
+            SortAsc = false,
+            SelectedMarkerIndex = -1,
+            SelectedAllocIndex = -1,
+            ShowAssembly = false,
+            IsLoadedSnapshot = false,
+            DataSummaryOpen = true,
+            TopOffendersOpen = true
         };
+
+        /// <summary>
+        /// Patch null reference-type fields that arise when Unity deserializes
+        /// default(WindowState) after a serialization format change.
+        /// </summary>
+        public void EnsureValid()
+        {
+            NameFilter ??= "";
+            ExcludeFilter ??= "";
+            SelectedThreads ??= Array.Empty<string>();
+        }
     }
 }

@@ -1,7 +1,9 @@
 {
     "name": "GCAllocBreakdown.Editor",
     "rootNamespace": "GCAllocBreakdown.Editor",
-    "references": [],
+    "references": [
+        "UIToolkitExtensions.BarChart"
+    ],
     "includePlatforms": [
         "Editor"
     ],

@@ -16,16 +16,25 @@ namespace GCAllocBreakdown.Editor
         const string k_LowColorKey    = k_KeyPrefix + "LowColor";
         const string k_HighThreshKey  = k_KeyPrefix + "HighThreshold";
         const string k_MedThreshKey   = k_KeyPrefix + "MedThreshold";
+        const string k_GraphBarColorKey  = k_KeyPrefix + "GraphBarColor";
+        const string k_GraphDimColorKey  = k_KeyPrefix + "GraphDimColor";
+        const string k_GraphBarSpacingKey = k_KeyPrefix + "GraphBarSpacing";
 
         static readonly Color k_DefaultHigh   = new(1f, 0.3f, 0.3f);
         static readonly Color k_DefaultMedium = new(1f, 0.85f, 0.2f);
         static readonly Color k_DefaultLow    = new(0.7f, 0.7f, 0.7f);
+        static readonly Color k_DefaultGraphBar = new(0.25f, 0.60f, 1f);    // matches BarGraphElement default blue
+        static readonly Color k_DefaultGraphDim = new(0.12f, 0.16f, 0.22f); // dark muted blue
+        const float k_DefaultGraphBarSpacing = 0.12f;                        // matches BarGraphElement default (12%)
         const int k_DefaultHighThreshold = 10240;
         const int k_DefaultMedThreshold  = 1024;
 
         static Color s_HighColor;
         static Color s_MediumColor;
         static Color s_LowColor;
+        static Color s_GraphBarColor;
+        static Color s_GraphDimColor;
+        static float s_GraphBarSpacing;
         static int   s_HighThreshold;
         static int   s_MedThreshold;
         static bool  s_Loaded;
@@ -34,9 +43,12 @@ namespace GCAllocBreakdown.Editor
 
         // ── Public accessors ──
 
-        internal static Color HighColor   { get { EnsureLoaded(); return s_HighColor; } }
-        internal static Color MediumColor { get { EnsureLoaded(); return s_MediumColor; } }
-        internal static Color LowColor    { get { EnsureLoaded(); return s_LowColor; } }
+        internal static Color HighColor      { get { EnsureLoaded(); return s_HighColor; } }
+        internal static Color MediumColor   { get { EnsureLoaded(); return s_MediumColor; } }
+        internal static Color LowColor      { get { EnsureLoaded(); return s_LowColor; } }
+        internal static Color GraphBarColor  { get { EnsureLoaded(); return s_GraphBarColor; } }
+        internal static Color GraphDimColor  { get { EnsureLoaded(); return s_GraphDimColor; } }
+        internal static float GraphBarSpacing { get { EnsureLoaded(); return s_GraphBarSpacing; } }
 
         internal static int HighThreshold { get { EnsureLoaded(); return s_HighThreshold; } }
         internal static int MedThreshold  { get { EnsureLoaded(); return s_MedThreshold; } }
@@ -76,6 +88,27 @@ namespace GCAllocBreakdown.Editor
             SettingsChanged?.Invoke();
         }
 
+        internal static void SetGraphBarColor(Color c)
+        {
+            s_GraphBarColor = c;
+            SaveColor(k_GraphBarColorKey, c);
+            SettingsChanged?.Invoke();
+        }
+
+        internal static void SetGraphDimColor(Color c)
+        {
+            s_GraphDimColor = c;
+            SaveColor(k_GraphDimColorKey, c);
+            SettingsChanged?.Invoke();
+        }
+
+        internal static void SetGraphBarSpacing(float value)
+        {
+            s_GraphBarSpacing = Mathf.Clamp(value, 0f, 0.5f);
+            EditorPrefs.SetFloat(k_GraphBarSpacingKey, s_GraphBarSpacing);
+            SettingsChanged?.Invoke();
+        }
+
         internal static void SetHighThreshold(int value)
         {
             s_HighThreshold = Math.Max(value, s_MedThreshold + 1);
@@ -100,12 +133,18 @@ namespace GCAllocBreakdown.Editor
             s_HighColor      = k_DefaultHigh;
             s_MediumColor    = k_DefaultMedium;
             s_LowColor       = k_DefaultLow;
+            s_GraphBarColor   = k_DefaultGraphBar;
+            s_GraphDimColor   = k_DefaultGraphDim;
+            s_GraphBarSpacing = k_DefaultGraphBarSpacing;
             s_HighThreshold  = k_DefaultHighThreshold;
             s_MedThreshold   = k_DefaultMedThreshold;
 
             SaveColor(k_HighColorKey, s_HighColor);
             SaveColor(k_MediumColorKey, s_MediumColor);
             SaveColor(k_LowColorKey, s_LowColor);
+            SaveColor(k_GraphBarColorKey, s_GraphBarColor);
+            SaveColor(k_GraphDimColorKey, s_GraphDimColor);
+            EditorPrefs.SetFloat(k_GraphBarSpacingKey, s_GraphBarSpacing);
             EditorPrefs.SetInt(k_HighThreshKey, s_HighThreshold);
             EditorPrefs.SetInt(k_MedThreshKey, s_MedThreshold);
 
@@ -122,6 +161,9 @@ namespace GCAllocBreakdown.Editor
             s_HighColor      = LoadColor(k_HighColorKey, k_DefaultHigh);
             s_MediumColor    = LoadColor(k_MediumColorKey, k_DefaultMedium);
             s_LowColor       = LoadColor(k_LowColorKey, k_DefaultLow);
+            s_GraphBarColor  = LoadColor(k_GraphBarColorKey, k_DefaultGraphBar);
+            s_GraphDimColor  = LoadColor(k_GraphDimColorKey, k_DefaultGraphDim);
+            s_GraphBarSpacing = EditorPrefs.GetFloat(k_GraphBarSpacingKey, k_DefaultGraphBarSpacing);
             s_HighThreshold  = EditorPrefs.GetInt(k_HighThreshKey, k_DefaultHighThreshold);
             s_MedThreshold   = EditorPrefs.GetInt(k_MedThreshKey, k_DefaultMedThreshold);
         }
@@ -170,6 +212,23 @@ namespace GCAllocBreakdown.Editor
                 GCAllocSettings.SetHighColor(high);
                 GCAllocSettings.SetMediumColor(medium);
                 GCAllocSettings.SetLowColor(low);
+            }
+
+            EditorGUILayout.Space(12);
+            EditorGUILayout.LabelField("Graph Colors", EditorStyles.boldLabel);
+            EditorGUILayout.Space(4);
+
+            EditorGUI.BeginChangeCheck();
+
+            Color barColor = EditorGUILayout.ColorField("Bar Color", GCAllocSettings.GraphBarColor);
+            Color dimColor = EditorGUILayout.ColorField("Dim Bar Color", GCAllocSettings.GraphDimColor);
+            float spacing  = EditorGUILayout.Slider("Bar Spacing", GCAllocSettings.GraphBarSpacing, 0f, 0.5f);
+
+            if (EditorGUI.EndChangeCheck())
+            {
+                GCAllocSettings.SetGraphBarColor(barColor);
+                GCAllocSettings.SetGraphDimColor(dimColor);
+                GCAllocSettings.SetGraphBarSpacing(spacing);
             }
 
             EditorGUILayout.Space(12);

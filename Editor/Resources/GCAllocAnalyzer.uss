@@ -1,0 +1,12 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   GC Alloc Analyzer — BarGraphElement style overrides
+   Starts from package defaults, only overrides what's needed.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.gc-alloc-bar-graph {
+    /* Tighter bottom padding */
+    --bar-graph-padding-bottom: 16;
+
+    /* Dim unselected bars when selection is active */
+    --bar-graph-dim-opacity: 0.3;
+}
