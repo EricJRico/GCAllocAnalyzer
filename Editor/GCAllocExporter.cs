@@ -13,6 +13,28 @@ namespace GCAllocBreakdown.Editor
 
     internal static class GCAllocExporter
     {
+        public static void OpenCompareTool()
+        {
+            var info = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(GCAllocExporter).Assembly);
+            if (info == null)
+            {
+                Debug.LogError("[GC Alloc Analyzer] Could not locate package path.");
+                return;
+            }
+
+            string htmlPath = Path.GetFullPath(
+                Path.Combine(info.resolvedPath, "Documentation~", "gc-alloc-compare.html"));
+
+            if (!File.Exists(htmlPath))
+            {
+                Debug.LogError(string.Concat(
+                    "[GC Alloc Analyzer] Compare tool not found at: ", htmlPath));
+                return;
+            }
+
+            Application.OpenURL("file:///" + htmlPath.Replace('\\', '/'));
+        }
+
         public static void ExportMarkerTableCSV(List<CallsiteGroup> groups)
         {
             string path = EditorUtility.SaveFilePanel(

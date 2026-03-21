@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GC Alloc Compare</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  min-height: 100vh;
+}
+
+/* ═══════════════════════════════════════════════════
+   HEADER
+   ═══════════════════════════════════════════════════ */
+
+.header {
+  background: #16213e;
+  border-bottom: 1px solid #2a2a4a;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #a8b4ce;
+  letter-spacing: 0.5px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.header-files {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  font-size: 13px;
+  color: #8892a8;
+}
+
+.header-files span { font-weight: 600; color: #a8b4ce; }
+
+.btn {
+  padding: 6px 14px;
+  border: 1px solid #3a3a5a;
+  border-radius: 4px;
+  background: #2a2a4a;
+  color: #c0c8d8;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn:hover { background: #3a3a5a; }
+
+/* ═══════════════════════════════════════════════════
+   LANDING / DROP ZONES
+   ═══════════════════════════════════════════════════ */
+
+.landing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+}
+
+.landing h2 {
+  font-size: 28px;
+  font-weight: 300;
+  color: #a8b4ce;
+  margin-bottom: 8px;
+}
+
+.landing p {
+  color: #6a7a8a;
+  margin-bottom: 40px;
+  font-size: 14px;
+}
+
+.drop-zones {
+  display: flex;
+  gap: 32px;
+  width: 100%;
+  max-width: 800px;
+}
+
+.drop-zone {
+  flex: 1;
+  border: 2px dashed #3a3a5a;
+  border-radius: 8px;
+  padding: 40px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  position: relative;
+}
+
+.drop-zone:hover, .drop-zone.drag-over {
+  border-color: #5a6aaa;
+  background: rgba(90, 106, 170, 0.08);
+}
+
+.drop-zone.loaded {
+  border-color: #4a8a6a;
+  border-style: solid;
+  background: rgba(74, 138, 106, 0.06);
+}
+
+.drop-zone-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #8892a8;
+  margin-bottom: 8px;
+}
+
+.drop-zone-hint {
+  font-size: 12px;
+  color: #5a6a7a;
+}
+
+.drop-zone-summary {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #7a9a8a;
+  line-height: 1.6;
+}
+
+.drop-zone input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* ═══════════════════════════════════════════════════
+   SUMMARY CARDS
+   ═══════════════════════════════════════════════════ */
+
+.comparison { display: none; padding: 20px 24px; }
+.comparison.visible { display: block; }
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.card {
+  background: #16213e;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+
+.card-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #6a7a8a;
+  margin-bottom: 8px;
+}
+
+.card-values {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.card-before, .card-after {
+  font-size: 13px;
+  color: #8892a8;
+}
+
+.card-delta {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.card-detail {
+  font-size: 12px;
+  color: #8892a8;
+  margin-top: 6px;
+}
+
+.positive { color: #ef5350; }
+.negative { color: #66bb6a; }
+.neutral { color: #6a7a8a; }
+
+/* ═══════════════════════════════════════════════════
+   FILTER BAR
+   ═══════════════════════════════════════════════════ */
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.filter-bar input {
+  padding: 6px 12px;
+  border: 1px solid #3a3a5a;
+  border-radius: 4px;
+  background: #16213e;
+  color: #c0c8d8;
+  font-size: 13px;
+  width: 240px;
+  outline: none;
+}
+
+.filter-bar input:focus { border-color: #5a6aaa; }
+
+.filter-bar input::placeholder { color: #4a5a6a; }
+
+.category-btn {
+  padding: 4px 12px;
+  border: 1px solid #3a3a5a;
+  border-radius: 12px;
+  background: transparent;
+  color: #8892a8;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.category-btn:hover { border-color: #5a6aaa; color: #c0c8d8; }
+.category-btn.active { background: #2a3a5a; border-color: #5a6aaa; color: #e0e8f8; }
+
+.result-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: #6a7a8a;
+}
+
+/* ═══════════════════════════════════════════════════
+   COMPARISON TABLE
+   ═══════════════════════════════════════════════════ */
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th {
+  background: #16213e;
+  border-bottom: 2px solid #2a2a4a;
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #8892a8;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+}
+
+th:hover { color: #c0c8d8; }
+
+th .sort-arrow {
+  margin-left: 4px;
+  font-size: 10px;
+  color: #5a6aaa;
+}
+
+th.num { text-align: right; }
+
+td { padding: 6px 12px; border-bottom: 1px solid #1e1e3a; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.name-cell { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+tr:hover { background: rgba(90, 106, 170, 0.06); }
+
+tr.status-improved { background: rgba(102, 187, 106, 0.06); }
+tr.status-regressed { background: rgba(239, 83, 80, 0.06); }
+tr.status-new { background: rgba(255, 152, 0, 0.06); }
+tr.status-removed { background: rgba(0, 150, 136, 0.06); }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge-improved { background: rgba(102, 187, 106, 0.15); color: #66bb6a; }
+.badge-regressed { background: rgba(239, 83, 80, 0.15); color: #ef5350; }
+.badge-new { background: rgba(255, 152, 0, 0.15); color: #ff9800; }
+.badge-removed { background: rgba(0, 150, 136, 0.15); color: #26a69a; }
+.badge-unchanged { background: rgba(120, 120, 140, 0.15); color: #78788c; }
+
+@media (max-width: 900px) {
+  .summary-cards { grid-template-columns: repeat(2, 1fr); }
+  .drop-zones { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+
+<div class="header" id="header">
+  <h1>GC Alloc Compare</h1>
+  <div class="header-files" id="headerFiles"></div>
+  <div class="header-actions" id="headerActions" style="display:none">
+    <button class="btn" id="swapBtn" title="Swap before/after">Swap</button>
+    <button class="btn" id="resetBtn">Reset</button>
+  </div>
+</div>
+
+<div class="landing" id="landing">
+  <h2>GC Alloc Compare</h2>
+  <p>Drop two marker table CSVs to compare GC allocation changes</p>
+  <div class="drop-zones">
+    <div class="drop-zone" id="dropBefore">
+      <input type="file" accept=".csv" data-slot="before">
+      <div class="drop-zone-label">Before (Baseline)</div>
+      <div class="drop-zone-hint">Drop CSV or click to browse</div>
+      <div class="drop-zone-summary" id="summaryBefore"></div>
+    </div>
+    <div class="drop-zone" id="dropAfter">
+      <input type="file" accept=".csv" data-slot="after">
+      <div class="drop-zone-label">After (Optimized)</div>
+      <div class="drop-zone-hint">Drop CSV or click to browse</div>
+      <div class="drop-zone-summary" id="summaryAfter"></div>
+    </div>
+  </div>
+</div>
+
+<div class="comparison" id="comparison">
+  <div class="summary-cards" id="summaryCards"></div>
+  <div class="filter-bar">
+    <input type="text" id="nameFilter" placeholder="Filter by method name...">
+    <button class="category-btn active" data-cat="all">All</button>
+    <button class="category-btn" data-cat="improved">Improved</button>
+    <button class="category-btn" data-cat="regressed">Regressed</button>
+    <button class="category-btn" data-cat="new">New</button>
+    <button class="category-btn" data-cat="removed">Removed</button>
+    <button class="category-btn" data-cat="unchanged">Unchanged</button>
+    <span class="result-count" id="resultCount"></span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead id="tableHead"></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════
+
+let beforeData = null;
+let afterData = null;
+let beforeName = '';
+let afterName = '';
+let comparison = [];
+let sortCol = 'absDeltaBytes';
+let sortAsc = false;
+let filterCategory = 'all';
+let filterText = '';
+
+// ═══════════════════════════════════════════════════
+//  CSV PARSER (RFC 4180)
+// ═══════════════════════════════════════════════════
+
+function parseCSV(text) {
+  var lines = [];
+  var row = [];
+  var field = '';
+  var inQuotes = false;
+  var i = 0;
+  var len = text.length;
+
+  while (i < len) {
+    var ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < len && text[i + 1] === '"') {
+          field += '"';
+          i += 2;
+        } else {
+          inQuotes = false;
+          i++;
+        }
+      } else {
+        field += ch;
+        i++;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+        i++;
+      } else if (ch === ',') {
+        row.push(field);
+        field = '';
+        i++;
+      } else if (ch === '\r') {
+        row.push(field);
+        field = '';
+        lines.push(row);
+        row = [];
+        i++;
+        if (i < len && text[i] === '\n') i++;
+      } else if (ch === '\n') {
+        row.push(field);
+        field = '';
+        lines.push(row);
+        row = [];
+        i++;
+      } else {
+        field += ch;
+        i++;
+      }
+    }
+  }
+
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    lines.push(row);
+  }
+
+  if (lines.length < 2) return [];
+
+  var headers = lines[0];
+  var rows = [];
+  for (var r = 1; r < lines.length; r++) {
+    var cols = lines[r];
+    if (cols.length < 2) continue;
+    var obj = {};
+    for (var c = 0; c < headers.length; c++) {
+      obj[headers[c].trim()] = c < cols.length ? cols[c].trim() : '';
+    }
+    rows.push(obj);
+  }
+  return rows;
+}
+
+function parseNum(val) {
+  var n = parseFloat(val);
+  return isNaN(n) ? 0 : n;
+}
+
+// ═══════════════════════════════════════════════════
+//  FORMATTING
+// ═══════════════════════════════════════════════════
+
+function formatBytes(bytes) {
+  var abs = Math.abs(bytes);
+  if (abs >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+  if (abs >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return bytes + ' B';
+}
+
+function formatDelta(bytes) {
+  if (bytes === 0) return '0 B';
+  var prefix = bytes > 0 ? '+' : '';
+  return prefix + formatBytes(bytes);
+}
+
+function formatPct(pct) {
+  if (!isFinite(pct)) return 'new';
+  if (pct === 0) return '0%';
+  var prefix = pct > 0 ? '+' : '';
+  return prefix + pct.toFixed(1) + '%';
+}
+
+function formatCount(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return '' + n;
+}
+
+function deltaClass(val) {
+  if (val < 0) return 'negative';
+  if (val > 0) return 'positive';
+  return 'neutral';
+}
+
+// ═══════════════════════════════════════════════════
+//  COMPARISON ENGINE
+// ═══════════════════════════════════════════════════
+
+function buildComparison(before, after) {
+  var beforeMap = {};
+  var totalBytesBefore = 0;
+  var totalCountBefore = 0;
+  for (var i = 0; i < before.length; i++) {
+    var b = before[i];
+    beforeMap[b.Name] = b;
+    totalBytesBefore += parseNum(b.Bytes);
+    totalCountBefore += parseNum(b.Count);
+  }
+
+  var afterMap = {};
+  var totalBytesAfter = 0;
+  var totalCountAfter = 0;
+  for (var i = 0; i < after.length; i++) {
+    var a = after[i];
+    afterMap[a.Name] = a;
+    totalBytesAfter += parseNum(a.Bytes);
+    totalCountAfter += parseNum(a.Count);
+  }
+
+  var allNames = {};
+  for (var i = 0; i < before.length; i++) allNames[before[i].Name] = true;
+  for (var i = 0; i < after.length; i++) allNames[after[i].Name] = true;
+
+  var results = [];
+  var names = Object.keys(allNames);
+  for (var i = 0; i < names.length; i++) {
+    var name = names[i];
+    var bRow = beforeMap[name];
+    var aRow = afterMap[name];
+    var entry = { name: name };
+
+    if (bRow && aRow) {
+      entry.beforeBytes = parseNum(bRow.Bytes);
+      entry.afterBytes = parseNum(aRow.Bytes);
+      entry.deltaBytes = entry.afterBytes - entry.beforeBytes;
+      entry.deltaPct = entry.beforeBytes !== 0 ? (entry.deltaBytes / entry.beforeBytes) * 100 : 0;
+      entry.beforeMean = parseNum(bRow['Mean/Frame']);
+      entry.afterMean = parseNum(aRow['Mean/Frame']);
+      entry.deltaMean = entry.afterMean - entry.beforeMean;
+      entry.beforeCount = parseNum(bRow.Count);
+      entry.afterCount = parseNum(aRow.Count);
+      entry.deltaCount = entry.afterCount - entry.beforeCount;
+      if (entry.deltaBytes < 0) entry.status = 'improved';
+      else if (entry.deltaBytes > 0) entry.status = 'regressed';
+      else entry.status = 'unchanged';
+    } else if (bRow) {
+      entry.beforeBytes = parseNum(bRow.Bytes);
+      entry.afterBytes = null;
+      entry.deltaBytes = -entry.beforeBytes;
+      entry.deltaPct = -100;
+      entry.beforeMean = parseNum(bRow['Mean/Frame']);
+      entry.afterMean = null;
+      entry.deltaMean = -entry.beforeMean;
+      entry.beforeCount = parseNum(bRow.Count);
+      entry.afterCount = null;
+      entry.deltaCount = -entry.beforeCount;
+      entry.status = 'removed';
+    } else {
+      entry.beforeBytes = null;
+      entry.afterBytes = parseNum(aRow.Bytes);
+      entry.deltaBytes = entry.afterBytes;
+      entry.deltaPct = Infinity;
+      entry.beforeMean = null;
+      entry.afterMean = parseNum(aRow['Mean/Frame']);
+      entry.deltaMean = entry.afterMean;
+      entry.beforeCount = null;
+      entry.afterCount = parseNum(aRow.Count);
+      entry.deltaCount = entry.afterCount;
+      entry.status = 'new';
+    }
+
+    entry.absDeltaBytes = Math.abs(entry.deltaBytes);
+    results.push(entry);
+  }
+
+  return {
+    rows: results,
+    totalBytesBefore: totalBytesBefore,
+    totalBytesAfter: totalBytesAfter,
+    totalCountBefore: totalCountBefore,
+    totalCountAfter: totalCountAfter
+  };
+}
+
+// ═══════════════════════════════════════════════════
+//  RENDERING
+// ═══════════════════════════════════════════════════
+
+var columns = [
+  { key: 'name',        label: 'Name',            num: false },
+  { key: 'status',      label: 'Status',          num: false },
+  { key: 'beforeBytes', label: 'Before Bytes',    num: true },
+  { key: 'afterBytes',  label: 'After Bytes',     num: true },
+  { key: 'deltaBytes',  label: 'Delta Bytes',     num: true },
+  { key: 'deltaPct',    label: 'Delta %',         num: true },
+  { key: 'beforeMean',  label: 'Before Mean/F',   num: true },
+  { key: 'afterMean',   label: 'After Mean/F',    num: true },
+  { key: 'deltaMean',   label: 'Delta Mean/F',    num: true },
+  { key: 'beforeCount', label: 'Before Count',    num: true },
+  { key: 'afterCount',  label: 'After Count',     num: true }
+];
+
+var statusOrder = { regressed: 0, 'new': 1, improved: 2, removed: 3, unchanged: 4 };
+
+function sortRows(rows) {
+  var col = sortCol;
+  var asc = sortAsc;
+  rows.sort(function(a, b) {
+    var va, vb;
+    if (col === 'name') {
+      va = a.name.toLowerCase();
+      vb = b.name.toLowerCase();
+      return asc ? (va < vb ? -1 : va > vb ? 1 : 0) : (vb < va ? -1 : vb > va ? 1 : 0);
+    }
+    if (col === 'status') {
+      va = statusOrder[a.status];
+      vb = statusOrder[b.status];
+    } else {
+      va = a[col];
+      vb = b[col];
+      if (va === null) va = asc ? Infinity : -Infinity;
+      if (vb === null) vb = asc ? Infinity : -Infinity;
+    }
+    return asc ? va - vb : vb - va;
+  });
+}
+
+function filterRows(rows) {
+  var filtered = [];
+  var text = filterText.toLowerCase();
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (filterCategory !== 'all' && r.status !== filterCategory) continue;
+    if (text && r.name.toLowerCase().indexOf(text) === -1) continue;
+    filtered.push(r);
+  }
+  return filtered;
+}
+
+function renderSummary(comp) {
+  var deltaBytes = comp.totalBytesAfter - comp.totalBytesBefore;
+  var deltaCount = comp.totalCountAfter - comp.totalCountBefore;
+  var deltaBytesPct = comp.totalBytesBefore !== 0 ? (deltaBytes / comp.totalBytesBefore) * 100 : 0;
+  var deltaCountPct = comp.totalCountBefore !== 0 ? (deltaCount / comp.totalCountBefore) * 100 : 0;
+
+  var improved = 0, regressed = 0, unchanged = 0, added = 0, removed = 0;
+  for (var i = 0; i < comp.rows.length; i++) {
+    var s = comp.rows[i].status;
+    if (s === 'improved') improved++;
+    else if (s === 'regressed') regressed++;
+    else if (s === 'unchanged') unchanged++;
+    else if (s === 'new') added++;
+    else if (s === 'removed') removed++;
+  }
+
+  var html = '';
+
+  html += '<div class="card">';
+  html += '<div class="card-title">Total Bytes</div>';
+  html += '<div class="card-values">';
+  html += '<span class="card-before">' + formatBytes(comp.totalBytesBefore) + '</span>';
+  html += '<span style="color:#4a5a6a">&rarr;</span>';
+  html += '<span class="card-after">' + formatBytes(comp.totalBytesAfter) + '</span>';
+  html += '</div>';
+  html += '<div class="card-detail"><span class="' + deltaClass(deltaBytes) + '">' + formatDelta(deltaBytes) + ' (' + formatPct(deltaBytesPct) + ')</span></div>';
+  html += '</div>';
+
+  html += '<div class="card">';
+  html += '<div class="card-title">Total Allocations</div>';
+  html += '<div class="card-values">';
+  html += '<span class="card-before">' + formatCount(comp.totalCountBefore) + '</span>';
+  html += '<span style="color:#4a5a6a">&rarr;</span>';
+  html += '<span class="card-after">' + formatCount(comp.totalCountAfter) + '</span>';
+  html += '</div>';
+  html += '<div class="card-detail"><span class="' + deltaClass(deltaCount) + '">' + formatDelta(deltaCount).replace(/[KMB]/g, '') + ' (' + formatPct(deltaCountPct) + ')</span></div>';
+  html += '</div>';
+
+  html += '<div class="card">';
+  html += '<div class="card-title">Methods Changed</div>';
+  html += '<div class="card-detail" style="margin-top:0">';
+  html += '<span class="negative">' + improved + ' improved</span> &middot; ';
+  html += '<span class="positive">' + regressed + ' regressed</span> &middot; ';
+  html += '<span class="neutral">' + unchanged + ' unchanged</span>';
+  html += '</div></div>';
+
+  html += '<div class="card">';
+  html += '<div class="card-title">Methods Added / Removed</div>';
+  html += '<div class="card-detail" style="margin-top:0">';
+  html += '<span class="positive">' + added + ' new</span> &middot; ';
+  html += '<span class="negative">' + removed + ' removed</span>';
+  html += '</div></div>';
+
+  document.getElementById('summaryCards').innerHTML = html;
+}
+
+function renderHeader() {
+  var files = document.getElementById('headerFiles');
+  var actions = document.getElementById('headerActions');
+
+  if (beforeData && afterData) {
+    files.innerHTML = '<span>Before:</span> ' + esc(beforeName) + ' &nbsp;&middot;&nbsp; <span>After:</span> ' + esc(afterName);
+    actions.style.display = 'flex';
+  } else {
+    files.innerHTML = '';
+    actions.style.display = 'none';
+  }
+}
+
+function renderTable() {
+  var head = document.getElementById('tableHead');
+  var body = document.getElementById('tableBody');
+
+  var headerHtml = '<tr>';
+  for (var i = 0; i < columns.length; i++) {
+    var c = columns[i];
+    var arrow = '';
+    if (sortCol === c.key) arrow = '<span class="sort-arrow">' + (sortAsc ? '\u25B2' : '\u25BC') + '</span>';
+    else if (sortCol === 'absDeltaBytes' && c.key === 'deltaBytes') arrow = '<span class="sort-arrow">' + (sortAsc ? '\u25B2' : '\u25BC') + '</span>';
+    headerHtml += '<th class="' + (c.num ? 'num' : '') + '" data-col="' + c.key + '">' + c.label + arrow + '</th>';
+  }
+  headerHtml += '</tr>';
+  head.innerHTML = headerHtml;
+
+  var visible = filterRows(comparison);
+  sortRows(visible);
+
+  document.getElementById('resultCount').textContent = visible.length + ' of ' + comparison.length + ' methods';
+
+  var rowsHtml = '';
+  for (var i = 0; i < visible.length; i++) {
+    var r = visible[i];
+    rowsHtml += '<tr class="status-' + r.status + '">';
+
+    rowsHtml += '<td class="name-cell" title="' + esc(r.name) + '">' + esc(r.name) + '</td>';
+
+    rowsHtml += '<td><span class="badge badge-' + r.status + '">' + r.status + '</span></td>';
+
+    rowsHtml += '<td class="num">' + (r.beforeBytes !== null ? formatBytes(r.beforeBytes) : '') + '</td>';
+    rowsHtml += '<td class="num">' + (r.afterBytes !== null ? formatBytes(r.afterBytes) : '') + '</td>';
+    rowsHtml += '<td class="num ' + deltaClass(r.deltaBytes) + '">' + formatDelta(r.deltaBytes) + '</td>';
+    rowsHtml += '<td class="num ' + deltaClass(r.deltaBytes) + '">' + formatPct(r.deltaPct) + '</td>';
+
+    rowsHtml += '<td class="num">' + (r.beforeMean !== null ? formatBytes(r.beforeMean) : '') + '</td>';
+    rowsHtml += '<td class="num">' + (r.afterMean !== null ? formatBytes(r.afterMean) : '') + '</td>';
+    rowsHtml += '<td class="num ' + deltaClass(r.deltaMean) + '">' + formatDelta(Math.round(r.deltaMean)) + '</td>';
+
+    rowsHtml += '<td class="num">' + (r.beforeCount !== null ? formatCount(r.beforeCount) : '') + '</td>';
+    rowsHtml += '<td class="num">' + (r.afterCount !== null ? formatCount(r.afterCount) : '') + '</td>';
+
+    rowsHtml += '</tr>';
+  }
+
+  body.innerHTML = rowsHtml;
+}
+
+function esc(str) {
+  var d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+// ═══════════════════════════════════════════════════
+//  FILE LOADING
+// ═══════════════════════════════════════════════════
+
+function loadFile(file, slot) {
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var rows = parseCSV(e.target.result);
+    if (rows.length === 0) return;
+
+    if (slot === 'before') {
+      beforeData = rows;
+      beforeName = file.name;
+      updateDropZone('before', rows, file.name);
+    } else {
+      afterData = rows;
+      afterName = file.name;
+      updateDropZone('after', rows, file.name);
+    }
+
+    if (beforeData && afterData) showComparison();
+  };
+  reader.readAsText(file);
+}
+
+function updateDropZone(slot, rows, fileName) {
+  var zone = document.getElementById(slot === 'before' ? 'dropBefore' : 'dropAfter');
+  var summary = document.getElementById(slot === 'before' ? 'summaryBefore' : 'summaryAfter');
+
+  zone.classList.add('loaded');
+
+  var totalBytes = 0;
+  var totalCount = 0;
+  for (var i = 0; i < rows.length; i++) {
+    totalBytes += parseNum(rows[i].Bytes);
+    totalCount += parseNum(rows[i].Count);
+  }
+
+  summary.innerHTML = '<strong>' + esc(fileName) + '</strong><br>' +
+    rows.length + ' methods &middot; ' + formatBytes(totalBytes) + ' &middot; ' + formatCount(totalCount) + ' allocs';
+}
+
+function showComparison() {
+  var comp = buildComparison(beforeData, afterData);
+  comparison = comp.rows;
+
+  document.getElementById('landing').style.display = 'none';
+  document.getElementById('comparison').classList.add('visible');
+
+  renderHeader();
+  renderSummary(comp);
+  renderTable();
+}
+
+function reset() {
+  beforeData = null;
+  afterData = null;
+  beforeName = '';
+  afterName = '';
+  comparison = [];
+  sortCol = 'absDeltaBytes';
+  sortAsc = false;
+  filterCategory = 'all';
+  filterText = '';
+
+  document.getElementById('landing').style.display = '';
+  document.getElementById('comparison').classList.remove('visible');
+  document.getElementById('headerFiles').innerHTML = '';
+  document.getElementById('headerActions').style.display = 'none';
+
+  var zones = document.querySelectorAll('.drop-zone');
+  for (var i = 0; i < zones.length; i++) zones[i].classList.remove('loaded');
+  document.getElementById('summaryBefore').innerHTML = '';
+  document.getElementById('summaryAfter').innerHTML = '';
+  document.getElementById('nameFilter').value = '';
+
+  var btns = document.querySelectorAll('.category-btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].classList.toggle('active', btns[i].dataset.cat === 'all');
+  }
+}
+
+// ═══════════════════════════════════════════════════
+//  EVENT HANDLERS
+// ═══════════════════════════════════════════════════
+
+function setupDropZone(zoneId, slot) {
+  var zone = document.getElementById(zoneId);
+
+  zone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    zone.classList.add('drag-over');
+  });
+
+  zone.addEventListener('dragleave', function() {
+    zone.classList.remove('drag-over');
+  });
+
+  zone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    var files = e.dataTransfer.files;
+    if (files.length > 0) loadFile(files[0], slot);
+  });
+
+  var input = zone.querySelector('input[type="file"]');
+  input.addEventListener('change', function() {
+    if (this.files.length > 0) loadFile(this.files[0], slot);
+  });
+}
+
+setupDropZone('dropBefore', 'before');
+setupDropZone('dropAfter', 'after');
+
+document.getElementById('swapBtn').addEventListener('click', function() {
+  var tmpData = beforeData;
+  var tmpName = beforeName;
+  beforeData = afterData;
+  beforeName = afterName;
+  afterData = tmpData;
+  afterName = tmpName;
+  showComparison();
+});
+
+document.getElementById('resetBtn').addEventListener('click', reset);
+
+document.getElementById('nameFilter').addEventListener('input', function() {
+  filterText = this.value;
+  renderTable();
+});
+
+document.querySelectorAll('.category-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    filterCategory = this.dataset.cat;
+    document.querySelectorAll('.category-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.cat === filterCategory);
+    });
+    renderTable();
+  });
+});
+
+document.getElementById('tableHead').addEventListener('click', function(e) {
+  var th = e.target.closest('th');
+  if (!th) return;
+  var col = th.dataset.col;
+  if (!col) return;
+
+  if (col === 'deltaBytes') {
+    if (sortCol === 'absDeltaBytes') {
+      sortAsc = !sortAsc;
+    } else if (sortCol === 'deltaBytes') {
+      sortCol = 'absDeltaBytes';
+      sortAsc = false;
+    } else {
+      sortCol = 'deltaBytes';
+      sortAsc = true;
+    }
+  } else {
+    if (sortCol === col) {
+      sortAsc = !sortAsc;
+    } else {
+      sortCol = col;
+      sortAsc = col === 'name';
+    }
+  }
+  renderTable();
+});
+
+// Handle drag-and-drop anywhere on the page when comparison is visible
+document.addEventListener('dragover', function(e) {
+  if (!beforeData || !afterData) return;
+  e.preventDefault();
+});
+
+document.addEventListener('drop', function(e) {
+  if (!beforeData || !afterData) return;
+  e.preventDefault();
+});
+</script>
+</body>
+</html>
