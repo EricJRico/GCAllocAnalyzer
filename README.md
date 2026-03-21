@@ -250,6 +250,10 @@ Graph shortcuts are active when the graph is focused (automatic on hover).
 
 See [CHANGELOG](CHANGELOG.md) for release history.
 
+## Technical Documentation
+
+- [Domain Reload System](Documentation~/domain-reload-system.md) — how analysis state survives Unity's domain reload using two-phase binary serialization
+
 ---
 
 ## License

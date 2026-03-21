@@ -1835,7 +1835,8 @@ namespace GCAllocBreakdown.Editor
             m_EndFrameField.value = GCAllocUtils.DisplayFrame(last);
             UpdateFrameRangeInfo();
 
-            // Show graph with all bars dimmed (nothing analyzed yet)
+            // Clear any existing selection/zoom and show graph with all bars dimmed
+            m_GraphController.ResetToFullRange();
             RebuildGraph();
 
             m_SharedSB.Clear();
