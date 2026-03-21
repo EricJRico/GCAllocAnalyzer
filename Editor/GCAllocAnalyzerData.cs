@@ -137,6 +137,11 @@ namespace GCAllocBreakdown.Editor
         public string FormattedRange;
         public string FormattedFirst;
         public string[] FormattedTopWorst;    // pre-built "frame N — X KB" strings
+
+        // Dense thread indices that contributed allocations to this group.
+        // Populated during BuildGrouping; enables O(1) thread filter checks
+        // without a separate Dictionary<string, HashSet<string>> pass.
+        [NonSerialized] public HashSet<int> ThreadIndices;
     }
 
     [Serializable]
@@ -304,53 +309,86 @@ namespace GCAllocBreakdown.Editor
 
         public int Count => m_IndexToMethod.Count;
 
-        readonly Dictionary<string, long> m_BytesPerMethod = new(64);
-        readonly List<KeyValuePair<string, long>> m_SortedForBuild = new(64);
+        // Reusable arrays sized by TopFrameId — avoids per-Build allocations
+        long[] m_BytesByTopFrame;
+        string[] m_NameByTopFrame;
+        int[] m_PaletteByTopFrame;
+
+        struct TopFrameEntry
+        {
+            public int TopFrameId;
+            public long TotalBytes;
+        }
+        readonly List<TopFrameEntry> m_SortedForBuild = new(64);
 
         public void Build(List<RawAllocation> allocs)
         {
             m_MethodToIndex.Clear();
             m_IndexToMethod.Clear();
-            m_BytesPerMethod.Clear();
             m_SortedForBuild.Clear();
 
-            // Sum bytes per display name (human-readable top-frame method).
-            // DisplayName when call stacks are enabled, ParentMethod otherwise.
+            // Find max TopFrameId for array sizing
+            int maxId = 0;
             for (int i = 0; i < allocs.Count; i++)
             {
-                string key = allocs[i].DisplayName;
-                if (string.IsNullOrEmpty(key))
-                    key = allocs[i].ParentMethod;
-                if (string.IsNullOrEmpty(key))
-                    key = "(unknown)";
-                if (m_BytesPerMethod.TryGetValue(key, out long existing))
-                    m_BytesPerMethod[key] = existing + allocs[i].Bytes;
-                else
-                    m_BytesPerMethod[key] = allocs[i].Bytes;
+                int id = allocs[i].TopFrameId;
+                if (id > maxId) maxId = id;
             }
+            int arrayLen = maxId + 1;
 
-            // Sort descending by total bytes
-            foreach (var kvp in m_BytesPerMethod)
-                m_SortedForBuild.Add(kvp);
-            m_SortedForBuild.Sort((a, b) => b.Value.CompareTo(a.Value));
-
-            // Assign palette indices in rank order
-            for (int i = 0; i < m_SortedForBuild.Count; i++)
+            // Ensure arrays are large enough
+            if (m_BytesByTopFrame == null || m_BytesByTopFrame.Length < arrayLen)
             {
-                m_MethodToIndex[m_SortedForBuild[i].Key] = i;
-                m_IndexToMethod.Add(m_SortedForBuild[i].Key);
+                m_BytesByTopFrame = new long[arrayLen];
+                m_NameByTopFrame = new string[arrayLen];
+                m_PaletteByTopFrame = new int[arrayLen];
+            }
+            else
+            {
+                Array.Clear(m_BytesByTopFrame, 0, arrayLen);
+                Array.Clear(m_NameByTopFrame, 0, arrayLen);
             }
 
-            // Stamp SegmentMethodIndex on each allocation for O(1) array indexing
-            // in BuildSegmentData (avoids 1.87M string dictionary lookups).
+            // Pass 1: Sum bytes per TopFrameId (integer array — no string hashing)
             for (int i = 0; i < allocs.Count; i++)
             {
-                string key = allocs[i].DisplayName;
-                if (string.IsNullOrEmpty(key))
-                    key = allocs[i].ParentMethod;
-                if (string.IsNullOrEmpty(key))
-                    key = "(unknown)";
-                allocs[i].SegmentMethodIndex = m_MethodToIndex.TryGetValue(key, out int idx) ? idx : k_OthersIndex;
+                int id = allocs[i].TopFrameId;
+                if (id < 0) continue;
+                m_BytesByTopFrame[id] += allocs[i].Bytes;
+                if (m_NameByTopFrame[id] == null)
+                {
+                    string name = allocs[i].DisplayName;
+                    if (string.IsNullOrEmpty(name))
+                        name = allocs[i].ParentMethod;
+                    if (string.IsNullOrEmpty(name))
+                        name = "(unknown)";
+                    m_NameByTopFrame[id] = name;
+                }
+            }
+
+            // Collect non-zero entries and sort descending by total bytes
+            for (int id = 0; id < arrayLen; id++)
+            {
+                if (m_BytesByTopFrame[id] > 0)
+                    m_SortedForBuild.Add(new TopFrameEntry { TopFrameId = id, TotalBytes = m_BytesByTopFrame[id] });
+            }
+            m_SortedForBuild.Sort((a, b) => b.TotalBytes.CompareTo(a.TotalBytes));
+
+            // Assign palette indices in rank order, build lookup tables
+            for (int rank = 0; rank < m_SortedForBuild.Count; rank++)
+            {
+                int id = m_SortedForBuild[rank].TopFrameId;
+                string name = m_NameByTopFrame[id];
+                m_MethodToIndex[name] = rank;
+                m_IndexToMethod.Add(name);
+                m_PaletteByTopFrame[id] = rank;
+            }
+
+            // Pass 2: Stamp SegmentMethodIndex on each allocation (integer array lookup)
+            for (int i = 0; i < allocs.Count; i++)
+            {
+                int id = allocs[i].TopFrameId;
+                allocs[i].SegmentMethodIndex = id >= 0 ? m_PaletteByTopFrame[id] : k_OthersIndex;
             }
         }
 

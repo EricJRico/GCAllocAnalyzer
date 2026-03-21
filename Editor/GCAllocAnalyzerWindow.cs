@@ -160,8 +160,6 @@ namespace GCAllocBreakdown.Editor
         int[] m_ThreadAllocCountBuf;
         int[] m_ThreadDenseIdxBuf;
 
-        // Thread index: group key → set of thread names (built once per grouping)
-        readonly Dictionary<string, HashSet<string>> m_GroupThreadIndex = new(256);
 
         // Reusable buffers
         readonly StringBuilder m_SharedSB = new(1024);
@@ -737,6 +735,7 @@ namespace GCAllocBreakdown.Editor
 
             // Rebuild state that depends on raw allocations
             EnsureGroupingIds();
+            RebuildGroupThreadIndices();
             RebuildThreadAllocCounts();
             UpdateThreadButtonLabel();
 
@@ -770,9 +769,6 @@ namespace GCAllocBreakdown.Editor
 
             // Rebuild top offenders now that allocs are available
             BuildTopOffenders();
-
-            // Rebuild thread index for active grouping
-            BuildThreadIndex(m_ActiveGroups);
 
             // Full graph rebuild with SetData — now that CachedRawAllocations
             // is available, SetData will build segment data and method palette.
@@ -949,8 +945,12 @@ namespace GCAllocBreakdown.Editor
             m_AllThreadNames.Clear();
             m_SelectedThreads.Clear();
             m_ThreadAllocCounts.Clear();
+            m_ThreadIndexNames.Clear();
             for (int i = 0; i < m_Snapshot.SortedThreadNames.Count; i++)
+            {
                 m_AllThreadNames.Add(m_Snapshot.SortedThreadNames[i]);
+                m_ThreadIndexNames.Add(m_Snapshot.SortedThreadNames[i]);
+            }
             RebuildThreadAllocCounts();
             UpdateThreadButtonLabel();
 
@@ -968,7 +968,6 @@ namespace GCAllocBreakdown.Editor
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
-            BuildThreadIndex(m_ActiveGroups);
             BuildTopOffenders();
             ApplyFilters();
             UpdateDataSummary();
@@ -2322,9 +2321,7 @@ namespace GCAllocBreakdown.Editor
             // Set active based on current toggle
             m_ActiveGroups = m_GroupByCallsite.value ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
 
-            // Build thread index for active grouping
-            BuildThreadIndex(m_ActiveGroups);
-            long msThreadIndex = swPost.ElapsedMilliseconds - msCacheAnalysis;
+            long msThreadIndex = 0; // ThreadIndices now stamped during BuildGrouping
 
             // Build top offenders
             BuildTopOffenders();
@@ -2571,7 +2568,7 @@ namespace GCAllocBreakdown.Editor
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
-            // Skip BuildThreadIndex — full-range index is a safe superset for thread filtering
+            // ThreadIndices on groups carry over from full-range BuildGrouping
             BuildTopOffenders_GroupsOnly();
             LogTiming(sw, "topOff");
             ApplyFilters();
@@ -2788,7 +2785,7 @@ namespace GCAllocBreakdown.Editor
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
-            // Skip BuildThreadIndex — full-range index is a safe superset for thread filtering
+            // ThreadIndices on groups carry over from full-range BuildGrouping
             BuildTopOffenders_GroupsOnly();
             LogTiming(sw, "topOff");
             ApplyFilters();
@@ -2972,7 +2969,8 @@ namespace GCAllocBreakdown.Editor
                         FirstAllocRawSampleIndex = alloc.RawSampleIndex,
                         FirstAllocThreadName = alloc.ThreadName,
                         FirstAllocThreadGroupName = alloc.ThreadGroupName,
-                        FirstAllocThreadId = alloc.ThreadId
+                        FirstAllocThreadId = alloc.ThreadId,
+                        ThreadIndices = new HashSet<int>()
                     };
                     m_GroupingArray[id] = g;
                     target.Add(g);
@@ -2984,6 +2982,7 @@ namespace GCAllocBreakdown.Editor
                 else
                     alloc.TopFrameGroupIndex = g.GroupIndex;
 
+                g.ThreadIndices.Add(alloc.ThreadIndex);
                 g.TotalBytes += alloc.Bytes;
                 g.Count++;
             }
@@ -3047,42 +3046,40 @@ namespace GCAllocBreakdown.Editor
             }
         }
 
-        void BuildThreadIndex(List<CallsiteGroup> groups)
-        {
-            // Clear existing sets for reuse instead of allocating new ones
-            foreach (var kv in m_GroupThreadIndex)
-                kv.Value.Clear();
-
-            // Build GroupIndex → Key lookup
-            bool byFullCallstack = m_GroupByCallsite.value;
-            var groupKeyByIndex = new Dictionary<int, string>(groups.Count);
-            for (int i = 0; i < groups.Count; i++)
-                groupKeyByIndex[groups[i].GroupIndex] = groups[i].Key;
-
-            // Single pass over allocations
-            var allocs = m_Snapshot.RawAllocations;
-            for (int i = 0; i < allocs.Count; i++)
-            {
-                var alloc = allocs[i];
-                int gIdx = byFullCallstack ? alloc.FullCallstackGroupIndex : alloc.TopFrameGroupIndex;
-                if (!groupKeyByIndex.TryGetValue(gIdx, out string key)) continue;
-
-                if (!m_GroupThreadIndex.TryGetValue(key, out var threads))
-                {
-                    threads = new HashSet<string>();
-                    m_GroupThreadIndex[key] = threads;
-                }
-                threads.Add(alloc.ThreadDisplayName);
-            }
-        }
-
         void SwapGroupingAndRefresh()
         {
             if (!m_Snapshot.HasData) return;
 
             m_ActiveGroups = m_GroupByCallsite.value ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
-            BuildThreadIndex(m_ActiveGroups);
             ApplyFilters();
+        }
+
+        /// <summary>
+        /// Rebuild ThreadIndices on all groups from raw allocations.
+        /// Called after domain reload when groups are restored from skeleton
+        /// but ThreadIndices (NonSerialized) are null.
+        /// </summary>
+        void RebuildGroupThreadIndices()
+        {
+            var allocs = m_Snapshot.RawAllocations;
+            var fullGroups = m_Snapshot.GroupsByFullCallstack;
+            var topGroups = m_Snapshot.GroupsByTopFrame;
+
+            for (int i = 0; i < fullGroups.Count; i++)
+                fullGroups[i].ThreadIndices = new HashSet<int>();
+            for (int i = 0; i < topGroups.Count; i++)
+                topGroups[i].ThreadIndices = new HashSet<int>();
+
+            for (int i = 0; i < allocs.Count; i++)
+            {
+                var a = allocs[i];
+                int fIdx = a.FullCallstackGroupIndex;
+                if (fIdx >= 0 && fIdx < fullGroups.Count)
+                    fullGroups[fIdx].ThreadIndices.Add(a.ThreadIndex);
+                int tIdx = a.TopFrameGroupIndex;
+                if (tIdx >= 0 && tIdx < topGroups.Count)
+                    topGroups[tIdx].ThreadIndices.Add(a.ThreadIndex);
+            }
         }
 
         // ═══════════════════════════════════════════════════
@@ -3326,10 +3323,13 @@ namespace GCAllocBreakdown.Editor
 
         bool PassesThreadFilter(CallsiteGroup g)
         {
-            if (!m_GroupThreadIndex.TryGetValue(g.Key, out var threads))
-                return false;
-            foreach (string t in m_SelectedThreads)
-                if (threads.Contains(t)) return true;
+            if (g.ThreadIndices == null) return false;
+            foreach (int threadIdx in g.ThreadIndices)
+            {
+                if (threadIdx < m_ThreadIndexNames.Count
+                    && m_SelectedThreads.Contains(m_ThreadIndexNames[threadIdx]))
+                    return true;
+            }
             return false;
         }
 
