@@ -8,6 +8,7 @@ using UnityEditor;
 using UnityEditor.Profiling;
 using UnityEditorInternal;
 using UnityEngine;
+using UnityEditor.UIElements;
 using UnityEngine.UIElements;
 
 namespace GCAllocBreakdown.Editor
@@ -59,6 +60,7 @@ namespace GCAllocBreakdown.Editor
         Label m_SummaryLabel;
         Label m_WarningLabel;
         MultiColumnListView m_ListView;
+        string m_NameFilter = "";
 
         // ── Sort ──
         enum SortCol { Bytes, Count, Avg, Name }
@@ -94,7 +96,10 @@ namespace GCAllocBreakdown.Editor
             var root = new VisualElement
             {
                 style = { paddingTop = 6, paddingLeft = 6, paddingRight = 6,
-                    paddingBottom = 6, flexGrow = 1 }
+                    paddingBottom = 6, flexGrow = 1,
+                    backgroundColor = EditorGUIUtility.isProSkin
+                        ? new Color(0.22f, 0.22f, 0.22f)
+                        : new Color(0.76f, 0.76f, 0.76f) }
             };
 
             // Toolbar
@@ -108,6 +113,17 @@ namespace GCAllocBreakdown.Editor
                 text = "Open GC Alloc Analyzer",
                 tooltip = "Open the GC Alloc Analyzer window for multi-frame analysis."
             });
+            var searchField = new ToolbarSearchField
+            {
+                style = { minWidth = 150, flexGrow = 1, marginLeft = 8 }
+            };
+            searchField.RegisterValueChangedCallback(evt =>
+            {
+                m_NameFilter = evt.newValue;
+                m_PoolHighWater = 0;
+                FlattenAndRefresh();
+            });
+            toolbar.Add(searchField);
             root.Add(toolbar);
 
             // Warning label
@@ -473,9 +489,12 @@ namespace GCAllocBreakdown.Editor
             }
 
             var groups = m_ActiveFrame.Groups;
+            bool hasFilter = m_NameFilter.Length > 0;
             for (int i = 0; i < groups.Count; i++)
             {
                 var g = groups[i];
+                if (hasFilter && g.DisplayName.IndexOf(m_NameFilter, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
                 bool hasStack = g.CallStack != null && g.CallStack.Count > 0;
                 bool expanded = m_ExpandedKeys.Contains(g.Key);
 
