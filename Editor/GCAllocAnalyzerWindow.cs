@@ -257,6 +257,8 @@ namespace GCAllocBreakdown.Editor
 
         // Background restore — generation counter to discard stale results
         int m_RestoreGeneration;
+        // Background restore result — set by background thread, polled by EditorApplication.update
+        volatile List<RawAllocation> m_PendingRestoredAllocs;
         // Background write — queued after analysis so OnDisable can skip synchronous I/O
         volatile bool m_BackgroundWriteInProgress;
         bool m_SnapshotDirty;
@@ -376,6 +378,8 @@ namespace GCAllocBreakdown.Editor
             // ── 4. Graph state (viewport + Y-axis) ──
             m_GraphController.RestoreState(state.Graph);
             m_GraphController.RebuildGraph();
+            // Re-apply segment selection — RebuildGraph calls SetData which clears it
+            m_GraphController.RestoreSegmentSelection(state.Graph);
 
             // ── 5. Marker selection (ApplyFilters defaults to index 0) ──
             if (state.SelectedMarkerIndex >= 0 && state.SelectedMarkerIndex < m_FilteredGroups.Count)
@@ -582,28 +586,35 @@ namespace GCAllocBreakdown.Editor
             ValidateState("skeleton");
 
             // ── Phase 2: Background alloc restore ──
+            // Use EditorApplication.update polling instead of delayCall — delayCall
+            // from a background thread may not fire until the editor receives input.
             int generation = ++m_RestoreGeneration;
             long capturedOffset = allocOffset;
             string capturedPath = m_SnapshotFilePath;
+            m_PendingRestoredAllocs = null;
+            EditorApplication.update += PollForRestoredAllocs;
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
-                List<RawAllocation> allocs;
                 try
                 {
-                    allocs = SnapshotSerializer.ReadAllocations(capturedPath, capturedOffset);
+                    var allocs = SnapshotSerializer.ReadAllocations(capturedPath, capturedOffset);
+                    m_PendingRestoredAllocs = allocs;
                 }
                 catch (Exception ex)
                 {
-                    EditorApplication.delayCall += () =>
-                        Debug.LogWarning($"[GCAllocAnalyzer] Failed to restore allocations: {ex.Message}");
-                    return;
+                    Debug.LogWarning($"[GCAllocAnalyzer] Failed to restore allocations: {ex.Message}");
+                    EditorApplication.update -= PollForRestoredAllocs;
                 }
-                EditorApplication.delayCall += () =>
-                {
-                    if (generation != m_RestoreGeneration) return;
-                    OnAllocsRestoredFromFile(allocs);
-                };
             });
+        }
+
+        void PollForRestoredAllocs()
+        {
+            var allocs = m_PendingRestoredAllocs;
+            if (allocs == null) return;
+            m_PendingRestoredAllocs = null;
+            EditorApplication.update -= PollForRestoredAllocs;
+            OnAllocsRestoredFromFile(allocs);
         }
 
         // ═══════════════════════════════════════════════════
@@ -846,8 +857,10 @@ namespace GCAllocBreakdown.Editor
             ValidateState("allocs");
 
             // Force repaint — OnAllocsRestoredFromFile runs via EditorApplication.delayCall
-            // which is outside the normal UIElements update cycle, so the window won't
-            // repaint until the next input event without this.
+            // which is outside the normal UIElements update cycle. Repaint() alone only
+            // schedules an IMGUI pass; MarkDirtyRepaint on the root forces UIElements to
+            // re-render custom drawers (bar graph generateVisualContent).
+            rootVisualElement.MarkDirtyRepaint();
             Repaint();
         }
 
@@ -1536,44 +1549,22 @@ namespace GCAllocBreakdown.Editor
 
         /// <summary>
         /// Rebuilds m_ThreadAllocCounts from m_Snapshot.RawAllocations.
-        /// Used after loading a snapshot or restoring after domain reload.
+        /// Uses ThreadDisplayName strings — safe regardless of whether
+        /// ThreadAllocCountIndex matches the current m_ThreadIndexNames order
+        /// (they diverge after domain reload when indices are extraction-order
+        /// but m_ThreadIndexNames is rebuilt in alphabetical order).
         /// </summary>
         void RebuildThreadAllocCounts()
         {
             m_ThreadAllocCounts.Clear();
-            int threadNameCount = m_ThreadIndexNames.Count;
-            if (threadNameCount == 0)
+            var allocs = m_Snapshot.RawAllocations;
+            for (int i = 0; i < allocs.Count; i++)
             {
-                // Fallback for snapshots loaded without dense indices
-                var allocs = m_Snapshot.RawAllocations;
-                for (int i = 0; i < allocs.Count; i++)
-                {
-                    string td = allocs[i].ThreadDisplayName;
-                    if (m_ThreadAllocCounts.TryGetValue(td, out int prev))
-                        m_ThreadAllocCounts[td] = prev + 1;
-                    else
-                        m_ThreadAllocCounts[td] = 1;
-                }
-                return;
-            }
-
-            if (m_ThreadCountBuffer == null || m_ThreadCountBuffer.Length < threadNameCount)
-                m_ThreadCountBuffer = new int[threadNameCount];
-            else
-                Array.Clear(m_ThreadCountBuffer, 0, threadNameCount);
-
-            var rawAllocs = m_Snapshot.RawAllocations;
-            for (int i = 0; i < rawAllocs.Count; i++)
-            {
-                int tidx = rawAllocs[i].ThreadAllocCountIndex;
-                if (tidx >= 0 && tidx < threadNameCount)
-                    m_ThreadCountBuffer[tidx]++;
-            }
-
-            for (int i = 0; i < threadNameCount; i++)
-            {
-                if (m_ThreadCountBuffer[i] > 0)
-                    m_ThreadAllocCounts[m_ThreadIndexNames[i]] = m_ThreadCountBuffer[i];
+                string td = allocs[i].ThreadDisplayName;
+                if (m_ThreadAllocCounts.TryGetValue(td, out int prev))
+                    m_ThreadAllocCounts[td] = prev + 1;
+                else
+                    m_ThreadAllocCounts[td] = 1;
             }
         }
 

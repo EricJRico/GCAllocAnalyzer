@@ -882,6 +882,17 @@ namespace GCAllocBreakdown.Editor
             m_YAxisResetBtn.SetEnabled(m_BarGraph.ViewState.ZoomY > 1.01f);
         }
 
+        /// <summary>
+        /// Re-apply segment selection after RebuildGraph, which calls SetData
+        /// and clears all selection state via OnDataChanged.
+        /// </summary>
+        public void RestoreSegmentSelection(BarGraphViewSnapshot state)
+        {
+            if (!state.IsValid) return;
+            if (state.SelectedSegmentBar >= 0 && state.SelectedSegmentBar < m_BarEntryCount)
+                m_BarGraph.SelectSegment(state.SelectedSegmentBar, state.SelectedSegmentIndex);
+        }
+
         // ═══════════════════════════════════════════════════
         //  EVENT HANDLERS — BAR GRAPH
         // ═══════════════════════════════════════════════════
