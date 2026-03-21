@@ -124,6 +124,14 @@ namespace GCAllocBreakdown.Editor
         /// <summary>True when the view is zoomed in (ZoomX > 1).</summary>
         public bool IsZoomedIn => m_BarGraph != null && m_BarGraph.ViewState.ZoomX > 1.01f;
 
+        /// <summary>Enable or disable the Order by Size button.</summary>
+        public void SetSortEnabled(bool enabled)
+        {
+            if (!enabled)
+                OrderByMagnitude = false;
+            m_SortToggleBtn.SetEnabled(enabled);
+        }
+
         /// <summary>When true, bars are sorted by magnitude (descending).</summary>
         public bool OrderByMagnitude
         {

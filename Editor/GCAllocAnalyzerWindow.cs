@@ -1768,8 +1768,11 @@ namespace GCAllocBreakdown.Editor
             m_Snapshot.GroupsByTopFrame?.Clear();
             m_FilteredGroups.Clear();
             m_ActiveGroups = null;
+            RefreshMarkerListView();
+            ClearMarkerSummary();
             ShowNoDataState(true);
             ClearGraphOverlay();
+            m_GraphController.SetSortEnabled(false);
 
             int totalFrames = last - first + 1;
             long[] fullFrameBytes = new long[totalFrames];
@@ -2338,6 +2341,7 @@ namespace GCAllocBreakdown.Editor
 
             m_SaveBtn.SetEnabled(m_Snapshot.HasData);
             m_ExportBtn.SetEnabled(m_Snapshot.HasData);
+            m_GraphController.SetSortEnabled(true);
             m_SnapshotDirty = true;
             QueueBackgroundWrite();
             swPost.Stop();
