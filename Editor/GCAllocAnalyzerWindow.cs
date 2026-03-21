@@ -1214,8 +1214,8 @@ namespace GCAllocBreakdown.Editor
         void OnGraphResetRequested()
         {
             if (!m_FrameStore.HasCachedAnalysis) return;
+            m_GraphController?.ResetToFullRange();
             RebuildFromCache(m_FrameStore.FullFrameStart, m_FrameStore.FullFrameEnd);
-            m_GraphController?.ClearSelection();
         }
 
         void OnGraphFrameSelected(int frameIndex, string methodName)

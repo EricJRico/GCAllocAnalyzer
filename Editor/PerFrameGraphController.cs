@@ -757,6 +757,18 @@ namespace GCAllocBreakdown.Editor
             m_HasSelection = false;
         }
 
+        public void ResetToFullRange()
+        {
+            ClearSelection();
+
+            var snap = m_BarGraph.CreateViewSnapshot();
+            snap.ZoomX = 1f;
+            snap.ZoomY = 1f;
+            snap.PanX = 0f;
+            snap.PanY = 0f;
+            m_BarGraph.RestoreViewSnapshot(snap);
+        }
+
         /// <summary>
         /// Derive frame indices from the current SelectedBars.
         /// Returns false if no selection exists.
