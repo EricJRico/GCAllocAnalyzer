@@ -1197,8 +1197,8 @@ namespace GCAllocBreakdown.Editor
                 else
                     RebuildFromCache(startFrame, endFrame);
 
-                // Clear visual selection (the selection "became" the analyzed range)
-                m_GraphController?.ClearSelection();
+                // Dimming persists — selected bars stay visually dimmed to show
+                // which frames are included in the current analysis.
             }
             else
             {

@@ -58,8 +58,6 @@ namespace GCAllocBreakdown.Editor
         List<CallsiteGroup> m_FilteredGroups;
         GraphFrameStore m_FrameStore;
         bool m_GroupByCallsite;
-        int m_AnalyzedFrameStart = -1;
-        int m_AnalyzedFrameEnd = -1;
 
         // ═══════════════════════════════════════════════════
         //  BAR DATA BUFFERS
@@ -69,6 +67,10 @@ namespace GCAllocBreakdown.Editor
         BarSegment[] m_BarSegments;
         int m_BarEntryCount;
         int m_BarSegmentCount;
+
+        // Per-bar selection buffer for baked dimming (reusable, never freed)
+        bool[] m_SelectionBuffer;
+        bool m_HasSelection;
 
         // Overlay values (one float per bar for method highlight)
         float[] m_OverlayValues;
@@ -261,6 +263,7 @@ namespace GCAllocBreakdown.Editor
             m_BarGraph.Settings.EnableMousePan = true;
             m_BarGraph.Settings.EnableYPan = true;
             m_BarGraph.Settings.EnableSelection = true;
+            m_BarGraph.Settings.ShowSegmentHighlightInLod = true;
 
             // Input handlers
             m_BarGraph.SetInputSource(new BarGraphUIToolkitInput());
@@ -270,7 +273,6 @@ namespace GCAllocBreakdown.Editor
             m_BarGraph.AddHandler(new BarGraphPanHandler());
             m_BarGraph.AddHandler(new BarGraphZoomHandler());
             m_BarGraph.AddHandler(new BarGraphKeyboardNavigationHandler());
-            m_BarGraph.AddHandler(new BarGraphKeyboardSelectionHandler());
             m_BarGraph.AddHandler(new BarGraphYAxisDragHandler());
             m_BarGraph.AddHandler(new BarGraphScrollbarHandler());
 
@@ -383,17 +385,6 @@ namespace GCAllocBreakdown.Editor
             m_FilteredGroups = filteredGroups;
             m_GroupByCallsite = groupByCallsite;
 
-            if (snapshot != null && snapshot.HasData)
-            {
-                m_AnalyzedFrameStart = snapshot.FrameStart;
-                m_AnalyzedFrameEnd = snapshot.FrameEnd;
-            }
-            else
-            {
-                m_AnalyzedFrameStart = -1;
-                m_AnalyzedFrameEnd = -1;
-            }
-
             if (m_FrameStore != null && m_FrameStore.HasCachedAnalysis
                 && m_FrameStore.HasFullFrameData)
             {
@@ -416,17 +407,6 @@ namespace GCAllocBreakdown.Editor
             m_Snapshot = snapshot;
             m_FilteredGroups = filteredGroups;
             m_GroupByCallsite = groupByCallsite;
-
-            if (snapshot != null && snapshot.HasData)
-            {
-                m_AnalyzedFrameStart = snapshot.FrameStart;
-                m_AnalyzedFrameEnd = snapshot.FrameEnd;
-            }
-            else
-            {
-                m_AnalyzedFrameStart = -1;
-                m_AnalyzedFrameEnd = -1;
-            }
         }
 
         // ═══════════════════════════════════════════════════
@@ -508,17 +488,11 @@ namespace GCAllocBreakdown.Editor
 
         BarVisualOverride? GetBarVisualOverride(int barIndex)
         {
-            bool isFullRange = m_AnalyzedFrameStart < 0 || m_AnalyzedFrameEnd < 0
-                || (m_AnalyzedFrameStart == m_FrameStore.FullFrameStart
-                    && m_AnalyzedFrameEnd == m_FrameStore.FullFrameEnd);
-
-            if (isFullRange)
+            if (!m_HasSelection || barIndex < 0
+                || m_SelectionBuffer == null || barIndex >= m_SelectionBuffer.Length)
                 return new BarVisualOverride { LodColor = GCAllocSettings.GraphBarColor };
 
-            int frame = m_FrameStore.FullFrameStart + barIndex;
-            bool isAnalyzed = frame >= m_AnalyzedFrameStart && frame <= m_AnalyzedFrameEnd;
-
-            Color32 lodColor = isAnalyzed
+            Color32 lodColor = m_SelectionBuffer[barIndex]
                 ? GCAllocSettings.GraphBarColor
                 : GCAllocSettings.GraphDimColor;
 
@@ -539,12 +513,8 @@ namespace GCAllocBreakdown.Editor
             int frameCount = perFrame.Length;
             int baseFrame = m_FrameStore.FullFrameStart;
 
-            bool isFullRange = m_AnalyzedFrameStart < 0 || m_AnalyzedFrameEnd < 0
-                || (m_AnalyzedFrameStart == m_FrameStore.FullFrameStart
-                    && m_AnalyzedFrameEnd == m_FrameStore.FullFrameEnd);
-
             if (m_HasSegmentData)
-                BuildBarEntriesWithSegments(perFrame, frameCount, baseFrame, isFullRange);
+                BuildBarEntriesWithSegments(perFrame, frameCount, baseFrame, !m_HasSelection);
             else
                 BuildBarEntriesFlat(perFrame, frameCount);
         }
@@ -595,7 +565,7 @@ namespace GCAllocBreakdown.Editor
             for (int b = 0; b < frameCount; b++)
             {
                 bool isAnalyzed = isFullRange
-                    || (baseFrame + b >= m_AnalyzedFrameStart && baseFrame + b <= m_AnalyzedFrameEnd);
+                    || (m_SelectionBuffer != null && b < m_SelectionBuffer.Length && m_SelectionBuffer[b]);
 
                 int rowStart = b * methodCount;
 
@@ -784,6 +754,7 @@ namespace GCAllocBreakdown.Editor
         {
             m_BarGraph.ClearSelection();
             m_HighlightedFrame = -1;
+            m_HasSelection = false;
         }
 
         /// <summary>
@@ -888,9 +859,11 @@ namespace GCAllocBreakdown.Editor
                     int tag = m_BarSegments[bar.SegmentStart + bestSeg].Tag;
                     if (tag >= 0) methodName = m_MethodPalette.GetMethodName(tag);
                 }
-                else
+                else if (bar.SegmentCount == 1)
                 {
-                    m_BarGraph.ClearSelection();
+                    m_BarGraph.SelectSegment(args.DataIndex, 0);
+                    int tag = m_BarSegments[bar.SegmentStart].Tag;
+                    if (tag >= 0) methodName = m_MethodPalette.GetMethodName(tag);
                 }
             }
 
@@ -916,8 +889,26 @@ namespace GCAllocBreakdown.Editor
 
         void OnDragCompletedInternal(DragCompletedEventArgs args)
         {
+            m_BarGraph.ClearSegmentSelection();
+            PopulateSelectionBuffer();
             if (!GetSelectedFrameRange(out int startFrame, out int endFrame)) return;
             OnDragCompleted?.Invoke(startFrame, endFrame);
+        }
+
+        void PopulateSelectionBuffer()
+        {
+            int count = m_BarEntryCount;
+            if (m_SelectionBuffer == null || m_SelectionBuffer.Length < count)
+                m_SelectionBuffer = new bool[count];
+            else
+                Array.Clear(m_SelectionBuffer, 0, count);
+
+            var selected = m_BarGraph.ViewState.SelectedBars;
+            foreach (int idx in selected)
+                if (idx >= 0 && idx < count)
+                    m_SelectionBuffer[idx] = true;
+
+            m_HasSelection = true;
         }
 
         void OnHoverChanged(HoverChangedEventArgs args)
@@ -1088,11 +1079,7 @@ namespace GCAllocBreakdown.Editor
         {
             if (m_ResetBtn == null || m_FrameStore == null) return;
 
-            bool isSubRange = m_AnalyzedFrameStart >= 0
-                && m_AnalyzedFrameEnd >= 0
-                && m_FrameStore.HasCachedAnalysis
-                && (m_AnalyzedFrameStart != m_FrameStore.FullFrameStart
-                    || m_AnalyzedFrameEnd != m_FrameStore.FullFrameEnd);
+            bool isSubRange = m_HasSelection && m_FrameStore.HasCachedAnalysis;
 
             m_ResetBtn.SetEnabled(isSubRange);
         }
