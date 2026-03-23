@@ -18,6 +18,9 @@ namespace GCAllocBreakdown.Editor
         const string k_MedThreshKey   = k_KeyPrefix + "MedThreshold";
         const string k_GraphBarColorKey  = k_KeyPrefix + "GraphBarColor";
         const string k_GraphDimColorKey  = k_KeyPrefix + "GraphDimColor";
+        const string k_GraphOverlayColorKey = k_KeyPrefix + "GraphOverlayColor";
+        const string k_GraphHighlightTintKey    = k_KeyPrefix + "GraphHighlightTint";
+        const string k_GraphHighlightOutlineKey = k_KeyPrefix + "GraphHighlightOutline";
         const string k_GraphBarSpacingKey = k_KeyPrefix + "GraphBarSpacing";
 
         static readonly Color k_DefaultHigh   = new(1f, 0.3f, 0.3f);
@@ -25,6 +28,9 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_DefaultLow    = new(0.7f, 0.7f, 0.7f);
         static readonly Color k_DefaultGraphBar = new(0.25f, 0.60f, 1f);    // matches BarGraphElement default blue
         static readonly Color k_DefaultGraphDim = new(0.12f, 0.16f, 0.22f); // dark muted blue
+        static readonly Color k_DefaultGraphOverlay = new(1f, 0.67f, 0f, 0.6f);       // orange, 60% alpha
+        static readonly Color k_DefaultGraphHighlightTint = new(1f, 0.78f, 0.2f, 0.35f);  // warm gold, 35% alpha
+        static readonly Color k_DefaultGraphHighlightOutline = new(1f, 0.78f, 0.2f, 0.9f); // warm gold, 90% alpha
         const float k_DefaultGraphBarSpacing = 0.12f;                        // matches BarGraphElement default (12%)
         const int k_DefaultHighThreshold = 10240;
         const int k_DefaultMedThreshold  = 1024;
@@ -34,6 +40,9 @@ namespace GCAllocBreakdown.Editor
         static Color s_LowColor;
         static Color s_GraphBarColor;
         static Color s_GraphDimColor;
+        static Color s_GraphOverlayColor;
+        static Color s_GraphHighlightTint;
+        static Color s_GraphHighlightOutline;
         static float s_GraphBarSpacing;
         static int   s_HighThreshold;
         static int   s_MedThreshold;
@@ -48,6 +57,9 @@ namespace GCAllocBreakdown.Editor
         internal static Color LowColor      { get { EnsureLoaded(); return s_LowColor; } }
         internal static Color GraphBarColor  { get { EnsureLoaded(); return s_GraphBarColor; } }
         internal static Color GraphDimColor  { get { EnsureLoaded(); return s_GraphDimColor; } }
+        internal static Color GraphOverlayColor { get { EnsureLoaded(); return s_GraphOverlayColor; } }
+        internal static Color GraphHighlightTint { get { EnsureLoaded(); return s_GraphHighlightTint; } }
+        internal static Color GraphHighlightOutline { get { EnsureLoaded(); return s_GraphHighlightOutline; } }
         internal static float GraphBarSpacing { get { EnsureLoaded(); return s_GraphBarSpacing; } }
 
         internal static int HighThreshold { get { EnsureLoaded(); return s_HighThreshold; } }
@@ -102,6 +114,27 @@ namespace GCAllocBreakdown.Editor
             SettingsChanged?.Invoke();
         }
 
+        internal static void SetGraphOverlayColor(Color c)
+        {
+            s_GraphOverlayColor = c;
+            SaveColor(k_GraphOverlayColorKey, c);
+            SettingsChanged?.Invoke();
+        }
+
+        internal static void SetGraphHighlightTint(Color c)
+        {
+            s_GraphHighlightTint = c;
+            SaveColor(k_GraphHighlightTintKey, c);
+            SettingsChanged?.Invoke();
+        }
+
+        internal static void SetGraphHighlightOutline(Color c)
+        {
+            s_GraphHighlightOutline = c;
+            SaveColor(k_GraphHighlightOutlineKey, c);
+            SettingsChanged?.Invoke();
+        }
+
         internal static void SetGraphBarSpacing(float value)
         {
             s_GraphBarSpacing = Mathf.Clamp(value, 0f, 0.5f);
@@ -135,6 +168,9 @@ namespace GCAllocBreakdown.Editor
             s_LowColor       = k_DefaultLow;
             s_GraphBarColor   = k_DefaultGraphBar;
             s_GraphDimColor   = k_DefaultGraphDim;
+            s_GraphOverlayColor = k_DefaultGraphOverlay;
+            s_GraphHighlightTint = k_DefaultGraphHighlightTint;
+            s_GraphHighlightOutline = k_DefaultGraphHighlightOutline;
             s_GraphBarSpacing = k_DefaultGraphBarSpacing;
             s_HighThreshold  = k_DefaultHighThreshold;
             s_MedThreshold   = k_DefaultMedThreshold;
@@ -144,6 +180,9 @@ namespace GCAllocBreakdown.Editor
             SaveColor(k_LowColorKey, s_LowColor);
             SaveColor(k_GraphBarColorKey, s_GraphBarColor);
             SaveColor(k_GraphDimColorKey, s_GraphDimColor);
+            SaveColor(k_GraphOverlayColorKey, s_GraphOverlayColor);
+            SaveColor(k_GraphHighlightTintKey, s_GraphHighlightTint);
+            SaveColor(k_GraphHighlightOutlineKey, s_GraphHighlightOutline);
             EditorPrefs.SetFloat(k_GraphBarSpacingKey, s_GraphBarSpacing);
             EditorPrefs.SetInt(k_HighThreshKey, s_HighThreshold);
             EditorPrefs.SetInt(k_MedThreshKey, s_MedThreshold);
@@ -163,6 +202,9 @@ namespace GCAllocBreakdown.Editor
             s_LowColor       = LoadColor(k_LowColorKey, k_DefaultLow);
             s_GraphBarColor  = LoadColor(k_GraphBarColorKey, k_DefaultGraphBar);
             s_GraphDimColor  = LoadColor(k_GraphDimColorKey, k_DefaultGraphDim);
+            s_GraphOverlayColor = LoadColor(k_GraphOverlayColorKey, k_DefaultGraphOverlay);
+            s_GraphHighlightTint = LoadColor(k_GraphHighlightTintKey, k_DefaultGraphHighlightTint);
+            s_GraphHighlightOutline = LoadColor(k_GraphHighlightOutlineKey, k_DefaultGraphHighlightOutline);
             s_GraphBarSpacing = EditorPrefs.GetFloat(k_GraphBarSpacingKey, k_DefaultGraphBarSpacing);
             s_HighThreshold  = EditorPrefs.GetInt(k_HighThreshKey, k_DefaultHighThreshold);
             s_MedThreshold   = EditorPrefs.GetInt(k_MedThreshKey, k_DefaultMedThreshold);
@@ -192,7 +234,7 @@ namespace GCAllocBreakdown.Editor
         [SettingsProvider]
         static SettingsProvider CreateProvider() => new GCAllocSettingsProvider
         {
-            keywords = new[] { "gc", "alloc", "allocation", "profiler", "severity", "color", "threshold" }
+            keywords = new[] { "gc", "alloc", "allocation", "profiler", "severity", "color", "threshold", "overlay" }
         };
 
         public override void OnGUI(string searchContext)
@@ -220,14 +262,20 @@ namespace GCAllocBreakdown.Editor
 
             EditorGUI.BeginChangeCheck();
 
-            Color barColor = EditorGUILayout.ColorField("Bar Color", GCAllocSettings.GraphBarColor);
-            Color dimColor = EditorGUILayout.ColorField("Dim Bar Color", GCAllocSettings.GraphDimColor);
-            float spacing  = EditorGUILayout.Slider("Bar Spacing", GCAllocSettings.GraphBarSpacing, 0f, 0.5f);
+            Color barColor     = EditorGUILayout.ColorField("Bar Color", GCAllocSettings.GraphBarColor);
+            Color dimColor     = EditorGUILayout.ColorField("Dim Bar Color", GCAllocSettings.GraphDimColor);
+            Color overlayColor = EditorGUILayout.ColorField("Overlay Highlight", GCAllocSettings.GraphOverlayColor);
+            Color hlTint       = EditorGUILayout.ColorField("Segment Highlight Tint", GCAllocSettings.GraphHighlightTint);
+            Color hlOutline    = EditorGUILayout.ColorField("Segment Highlight Outline", GCAllocSettings.GraphHighlightOutline);
+            float spacing      = EditorGUILayout.Slider("Bar Spacing", GCAllocSettings.GraphBarSpacing, 0f, 0.5f);
 
             if (EditorGUI.EndChangeCheck())
             {
                 GCAllocSettings.SetGraphBarColor(barColor);
                 GCAllocSettings.SetGraphDimColor(dimColor);
+                GCAllocSettings.SetGraphOverlayColor(overlayColor);
+                GCAllocSettings.SetGraphHighlightTint(hlTint);
+                GCAllocSettings.SetGraphHighlightOutline(hlOutline);
                 GCAllocSettings.SetGraphBarSpacing(spacing);
             }
 

@@ -149,6 +149,7 @@ namespace GCAllocBreakdown.Editor
                 var mode = value ? SortMode.ByValue : SortMode.None;
                 if (m_BarGraph.ViewState.SortMode == mode) return;
                 m_BarGraph.SetSortMode(mode, descending: true);
+
                 UpdateSortToggleLabel();
             }
         }
@@ -279,6 +280,8 @@ namespace GCAllocBreakdown.Editor
             m_BarGraph.Settings.EnableYPan = true;
             m_BarGraph.Settings.EnableSelection = true;
             m_BarGraph.Settings.ShowSegmentHighlightInLod = true;
+            m_BarGraph.VisTagHighlightTint    = GCAllocSettings.GraphHighlightTint;
+            m_BarGraph.VisTagHighlightOutline = GCAllocSettings.GraphHighlightOutline;
 
             // Input handlers
             m_BarGraph.SetInputSource(new BarGraphUIToolkitInput());
@@ -288,6 +291,8 @@ namespace GCAllocBreakdown.Editor
             m_BarGraph.AddHandler(new BarGraphPanHandler());
             m_BarGraph.AddHandler(new BarGraphZoomHandler());
             m_BarGraph.AddHandler(new BarGraphKeyboardNavigationHandler());
+            var kbHandler = new ProfilerKeyboardHandler();
+            m_BarGraph.AddHandler(kbHandler);
             m_BarGraph.AddHandler(new BarGraphYAxisDragHandler());
             m_BarGraph.AddHandler(new BarGraphScrollbarHandler());
 
@@ -298,6 +303,8 @@ namespace GCAllocBreakdown.Editor
             selHandler.BarClicked += OnBarClicked;
             selHandler.SegmentClicked += OnSegmentClicked;
             selHandler.DragCompleted += OnDragCompletedInternal;
+            kbHandler.BarClicked += OnBarClicked;
+            kbHandler.SegmentClicked += OnSegmentClicked;
 
             // Subscribe to element events (state notifications)
             m_BarGraph.SelectionChanged += OnSelectionChangedInternal;
@@ -442,6 +449,8 @@ namespace GCAllocBreakdown.Editor
         public void ApplySettings()
         {
             m_BarGraph.SetBarSpacingRatio(GCAllocSettings.GraphBarSpacing);
+            m_BarGraph.VisTagHighlightTint    = GCAllocSettings.GraphHighlightTint;
+            m_BarGraph.VisTagHighlightOutline = GCAllocSettings.GraphHighlightOutline;
             if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
             BuildBarEntries();
             m_BarGraph.SetData(m_BarEntries, m_BarEntryCount, m_BarSegments, m_BarSegmentCount);
@@ -476,6 +485,8 @@ namespace GCAllocBreakdown.Editor
 
             // LOD color: use GraphBarColor for analyzed bars, GraphDimColor for unanalyzed
             m_BarGraph.BarVisualProvider = GetBarVisualOverride;
+            m_BarGraph.TagHighlightFilter = IsBarAnalyzed;
+            m_OverviewStrip.BarVisualProvider = GetOverviewBarVisual;
 
             // Update X-axis labels
             if (m_BarEntryCount > 0)
@@ -525,6 +536,13 @@ namespace GCAllocBreakdown.Editor
         //  BAR VISUAL PROVIDER
         // ═══════════════════════════════════════════════════
 
+        bool IsBarAnalyzed(int barIndex)
+        {
+            if (!m_HasSelection) return true;
+            return m_SelectionBuffer != null && barIndex >= 0
+                && barIndex < m_SelectionBuffer.Length && m_SelectionBuffer[barIndex];
+        }
+
         BarVisualOverride? GetBarVisualOverride(int barIndex)
         {
             if (!m_HasSelection || barIndex < 0
@@ -536,6 +554,19 @@ namespace GCAllocBreakdown.Editor
                 : GCAllocSettings.GraphDimColor;
 
             return new BarVisualOverride { LodColor = lodColor };
+        }
+
+        BarVisualOverride? GetOverviewBarVisual(int barIndex)
+        {
+            if (!m_HasSelection || barIndex < 0
+                || m_SelectionBuffer == null || barIndex >= m_SelectionBuffer.Length)
+                return new BarVisualOverride { Color = GCAllocSettings.GraphBarColor };
+
+            Color32 color = m_SelectionBuffer[barIndex]
+                ? GCAllocSettings.GraphBarColor
+                : GCAllocSettings.GraphDimColor;
+
+            return new BarVisualOverride { Color = color };
         }
 
         // ═══════════════════════════════════════════════════
@@ -772,9 +803,17 @@ namespace GCAllocBreakdown.Editor
                 return;
             }
 
+            // Overlay bars — visible in LOD mode when segments aren't rendered
             BuildOverlayValues(group);
             if (m_OverlayValues != null)
-                m_BarGraph.SetOverlay(m_OverlayValues);
+                m_BarGraph.SetOverlay(m_OverlayValues, GCAllocSettings.GraphOverlayColor);
+
+            // Segment-level tag highlight — visible when zoomed in with segments
+            int tag = m_MethodPalette.GetIndex(group.DisplayName);
+            if (tag >= 0)
+                m_BarGraph.HighlightTag(tag);
+            else
+                m_BarGraph.ClearTagHighlight();
 
             m_GraphOverlayLabel.text = group.DisplayName;
         }
@@ -782,6 +821,7 @@ namespace GCAllocBreakdown.Editor
         public void ClearOverlay()
         {
             m_BarGraph.ClearOverlay();
+            m_BarGraph.ClearTagHighlight();
             m_GraphOverlayLabel.text = "";
         }
 
@@ -903,6 +943,7 @@ namespace GCAllocBreakdown.Editor
 
             int frameIndex = m_FrameStore.FullFrameStart + args.DataIndex;
             m_HighlightedFrame = frameIndex;
+            m_BarGraph.ClearTagHighlight();
 
             string methodName = null;
             if (m_HasSegmentData && args.DataIndex < m_BarEntryCount)
@@ -938,6 +979,11 @@ namespace GCAllocBreakdown.Editor
 
             int frameIndex = m_FrameStore.FullFrameStart + args.BarDataIndex;
             m_HighlightedFrame = frameIndex;
+
+            if (args.Tag >= 0)
+                m_BarGraph.HighlightTag(args.Tag);
+            else
+                m_BarGraph.ClearTagHighlight();
 
             string methodName = args.Tag >= 0 ? m_MethodPalette.GetMethodName(args.Tag) : null;
             m_OnFrameSelected?.Invoke(frameIndex, methodName);

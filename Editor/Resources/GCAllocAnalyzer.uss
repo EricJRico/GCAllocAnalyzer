@@ -9,4 +9,9 @@
 
     /* Dim unselected bars when selection is active */
     --bar-graph-dim-opacity: 0.3;
+
+    /* Tag highlight — tint matching segments when an Allocation Site is selected */
+    --bar-graph-tag-highlight-tint: rgba(255, 200, 50, 0.35);
+    --bar-graph-tag-highlight-outline: rgba(255, 200, 50, 0.9);
+    --bar-graph-tag-highlight-outline-width: 1.5;
 }

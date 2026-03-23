@@ -498,6 +498,10 @@ namespace GCAllocBreakdown.Editor
             if (m_Snapshot != null && m_Snapshot.HasData)
                 PopulateTopOffendersUI();
             m_GraphController.ApplySettings();
+
+            int sel = m_MarkerListView.selectedIndex;
+            if (sel >= 0 && sel < m_FilteredGroups.Count)
+                UpdateGraphOverlay(m_FilteredGroups[sel]);
         }
 
         /// <summary>
