@@ -1,9 +1,9 @@
 using System;
 using UnityEngine;
 using UnityEngine.UIElements;
-using BarGraph.Core;
-using BarGraph.Events;
-using BarGraph.Input;
+using GCAllocBreakdown.BarChart.Core;
+using GCAllocBreakdown.BarChart.Events;
+using GCAllocBreakdown.BarChart.Input;
 
 namespace GCAllocBreakdown.Editor
 {

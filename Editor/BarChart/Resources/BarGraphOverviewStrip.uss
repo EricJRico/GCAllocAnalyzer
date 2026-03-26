@@ -1,0 +1,54 @@
+/* BarGraphOverviewStrip.uss  –  Default theme for BarGraphOverviewStrip
+   Miniature full-dataset view with viewport indicator.
+   Override custom properties per-theme as needed.                     */
+
+.bar-graph-overview-strip {
+    height: 48px;
+    min-height: 24px;
+    max-height: 80px;
+    overflow: hidden;
+
+    --overview-indicator-fill-color:    rgba(255, 255, 255, 0.12);
+    --overview-indicator-border-color:  rgba(102, 179, 255, 0.7);
+    --overview-indicator-border-width:  1.5;
+}
+
+/* Inner chart: minimal vertical padding so bars fill the strip height.
+   Chained selector for higher specificity over base .bar-graph rules.
+   Left/right padding intentionally omitted so the overview inherits
+   the main chart's values and bars align horizontally. */
+.bar-graph-overview-strip .bar-graph--overview {
+    min-height: 0;
+    --bar-graph-padding-top:           0;
+    --bar-graph-padding-bottom:        0;
+    --bar-graph-bar-spacing-ratio:     0.04;
+}
+
+.bar-graph-overview-strip .bar-graph__labels {
+    display: none;
+}
+
+.bar-graph-overview-strip__indicator {
+    border-radius: 2px;
+    cursor: pan;
+}
+
+.bar-graph-overview-strip__indicator--resizing {
+    cursor: resize-horizontal;
+}
+
+/* ── Edge handles ────────────────────────────────────────────────────
+   Thin vertical grips on left/right edges of the viewport indicator. */
+
+.bar-graph-overview-strip__handle {
+    width: 4px;
+    background-color: rgba(255, 255, 255, 0.35);
+    border-radius: 1px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+    cursor: resize-horizontal;
+}
+
+.bar-graph-overview-strip__handle:hover {
+    background-color: rgba(255, 255, 255, 0.6);
+}

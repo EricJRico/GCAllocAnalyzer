@@ -5,10 +5,10 @@ using System.Text;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
-using BarGraph.Core;
-using BarGraph.Events;
-using BarGraph.Input;
-using BarGraph.Input.Handlers;
+using GCAllocBreakdown.BarChart.Core;
+using GCAllocBreakdown.BarChart.Events;
+using GCAllocBreakdown.BarChart.Input;
+using GCAllocBreakdown.BarChart.Input.Handlers;
 
 namespace GCAllocBreakdown.Editor
 {

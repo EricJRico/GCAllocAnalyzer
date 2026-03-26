@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using BarGraph.Core;
+using GCAllocBreakdown.BarChart.Core;
 using UnityEngine;
 
 namespace GCAllocBreakdown.Editor

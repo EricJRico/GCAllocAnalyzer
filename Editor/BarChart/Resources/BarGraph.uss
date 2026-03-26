@@ -1,0 +1,69 @@
+/* BarGraph.uss  –  Default theme for BarGraphElement
+   All visual defaults are defined here via USS custom properties.
+   Override freely in your own USS sheets or via theme class selectors.  */
+
+.bar-graph {
+    flex-grow: 1;
+    min-width:  80px;
+    min-height: 60px;
+    border-radius: 4px;
+    overflow: hidden;
+
+    /* ── Chrome colours ────────────────────────────────────────────── */
+    --bar-graph-bg-color:                rgb(18, 18, 26);
+    --bar-graph-default-bar-color:       rgb(64, 153, 255);
+    --bar-graph-axis-color:              rgb(140, 140, 153);
+    --bar-graph-grid-line-color:         rgb(46, 46, 61);
+    --bar-graph-hover-tint-color:        rgba(255, 255, 255, 0.18);
+    --bar-graph-selection-fill-color:    rgba(255, 255, 255, 0.22);
+    --bar-graph-selection-rim-color:     rgba(102, 179, 255, 0.9);
+    --bar-graph-drag-rect-fill-color:    rgba(89, 166, 255, 0.08);
+    --bar-graph-drag-rect-border-color:  rgba(89, 166, 255, 0.6);
+    --bar-graph-focus-rim-color:         rgb(255, 204, 51);
+    --bar-graph-overlay-tint:            rgba(255, 255, 255, 0.38);
+    --bar-graph-tag-highlight-tint:      rgba(255, 255, 255, 0.22);
+    --bar-graph-tag-highlight-outline:   rgba(0, 0, 0, 0);
+
+    /* ── Chrome geometry ───────────────────────────────────────────── */
+    --bar-graph-selection-rim-width:     1.5;
+    --bar-graph-overlay-opacity:         0.35;
+    --bar-graph-bar-spacing-ratio:       0.12;
+    --bar-graph-min-bar-width:           1;
+    --bar-graph-grid-line-width:         1;
+    --bar-graph-axis-line-width:         1.5;
+    --bar-graph-dim-opacity:             1;
+    --bar-graph-tag-highlight-outline-width: 0;
+
+    /* ── Padding (plot-area insets) ────────────────────────────────── */
+    --bar-graph-padding-left:            52;
+    --bar-graph-padding-right:           12;
+    --bar-graph-padding-top:             12;
+    --bar-graph-padding-bottom:          32;
+
+    /* ── Label layout ──────────────────────────────────────────────── */
+    --bar-graph-label-height:            18;
+    --bar-graph-x-label-width:           40;
+    --bar-graph-x-label-offset-y:        3;
+    --bar-graph-y-label-gap:             4;
+}
+
+/* Label layer – overlays the Painter2D canvas, pointer events pass through */
+.bar-graph__labels {
+    position: absolute;
+    left: 0; top: 0; right: 0; bottom: 0;
+}
+
+/* ── Label typography ─────────────────────────────────────────────────
+   Standard USS properties — override font-size, color, -unity-font-style,
+   letter-spacing, text-transform per-label-type or per-theme.   */
+
+.bar-graph__label--y,
+.bar-graph__label--x {
+    font-size: 10px;
+    color: rgb(191, 191, 199);
+    height: 18px;
+}
+
+/* ── Convenience size modifiers ───────────────────────────────────── */
+.bar-graph--compact { min-width: 120px; min-height: 80px; }
+.bar-graph--fill    { width: 100%;      height: 100%;     }

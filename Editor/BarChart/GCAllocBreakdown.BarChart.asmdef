@@ -1,12 +1,8 @@
 {
-    "name": "GCAllocBreakdown.Editor",
-    "rootNamespace": "GCAllocBreakdown.Editor",
-    "references": [
-        "GCAllocBreakdown.BarChart"
-    ],
-    "includePlatforms": [
-        "Editor"
-    ],
+    "name": "GCAllocBreakdown.BarChart",
+    "rootNamespace": "GCAllocBreakdown.BarChart",
+    "references": [],
+    "includePlatforms": ["Editor"],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,

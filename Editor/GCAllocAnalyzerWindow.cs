@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
-using BarGraph.Core;
+using GCAllocBreakdown.BarChart.Core;
 using UnityEditor;
 using UnityEditor.Profiling;
 using UnityEditorInternal;

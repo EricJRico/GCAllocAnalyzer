@@ -2,20 +2,18 @@ using System;
 using UnityEngine;
 using GCAllocBreakdown.BarChart.Core;
 using GCAllocBreakdown.BarChart.Events;
-using GCAllocBreakdown.BarChart.Input;
 
-namespace GCAllocBreakdown.Editor
+namespace GCAllocBreakdown.BarChart.Input.Handlers
 {
-    // ═══════════════════════════════════════════════════
-    //  PROFILER SELECTION HANDLER
-    //  Custom IBarGraphHandler implementing GCAllocAnalyzer's
-    //  selection policy:
-    //    Click segment  → select segment + fire SegmentClicked
-    //    Click bar      → fire BarClicked (navigate only, no selection)
-    //    Drag           → commit drag selection + fire DragCompleted
-    // ═══════════════════════════════════════════════════
-
-    internal sealed class ProfilerSelectionHandler : IBarGraphHandler
+    /// <summary>
+    /// Handles click-to-select and rubber-band drag selection.
+    /// Subscribes to select actions from <see cref="BarGraphEventBus"/>.
+    ///
+    /// Owns the input interpretation events that were previously on
+    /// <see cref="BarGraphElement"/>. Consumers subscribe to these
+    /// events on the handler, not the element.
+    /// </summary>
+    public sealed class BarGraphSelectionHandler : IBarGraphHandler
     {
         BarGraphElement _element;
 
@@ -24,13 +22,13 @@ namespace GCAllocBreakdown.Editor
         bool    _additive;
         int     _clickedBar;
 
-        /// <summary>Fired when a bar is clicked (navigate to frame, no selection).</summary>
+        /// <summary>Fired when a bar is clicked (single click, not drag).</summary>
         public event Action<BarClickedEventArgs> BarClicked;
 
         /// <summary>Fired when a segment is clicked in a multi-segment bar.</summary>
         public event Action<SegmentEventArgs> SegmentClicked;
 
-        /// <summary>Fired when a drag-select gesture completes.</summary>
+        /// <summary>Fired when a rubber-band drag-select gesture completes.</summary>
         public event Action<DragCompletedEventArgs> DragCompleted;
 
         public void Register(BarGraphEventBus actions, BarGraphElement element)
@@ -79,7 +77,6 @@ namespace GCAllocBreakdown.Editor
             {
                 var vs = _element.ViewState;
 
-                // Segment click: select the segment and fire SegmentClicked
                 if (vs.HoveredSegmentBar >= 0 && vs.HoveredSegmentIndex >= 0
                     && _element.GetSegmentCount(vs.HoveredSegmentBar) > 1)
                 {
@@ -103,16 +100,18 @@ namespace GCAllocBreakdown.Editor
                         LocalPosition   = pos,
                     });
                 }
-                else if (_clickedBar >= 0)
+                else
                 {
-                    // Bar click: navigate to frame — no bar selection, no dimming.
-                    // Controller decides whether to select a segment.
-                    int dispIdx = _clickedBar < vs.DataToDisplay.Length
-                        ? vs.DataToDisplay[_clickedBar] : _clickedBar;
-                    float val = _element.Bars[_clickedBar].TotalValue;
+                    _element.ToggleBar(_clickedBar, _additive);
 
-                    BarClicked?.Invoke(new BarClickedEventArgs(
-                        _clickedBar, dispIdx, val, pos));
+                    if (_clickedBar >= 0)
+                    {
+                        int dispIdx = _clickedBar < vs.DataToDisplay.Length
+                            ? vs.DataToDisplay[_clickedBar] : _clickedBar;
+                        float val = _element.Bars[_clickedBar].TotalValue;
+                        BarClicked?.Invoke(new BarClickedEventArgs(
+                            _clickedBar, dispIdx, val, pos));
+                    }
                 }
             }
 
