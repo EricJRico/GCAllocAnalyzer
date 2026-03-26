@@ -28,9 +28,9 @@ namespace GCAllocBreakdown.Editor
         static readonly Color k_DefaultLow    = new(0.7f, 0.7f, 0.7f);
         static readonly Color k_DefaultGraphBar = new(0.25f, 0.60f, 1f);    // matches BarGraphElement default blue
         static readonly Color k_DefaultGraphDim = new(0.12f, 0.16f, 0.22f); // dark muted blue
-        static readonly Color k_DefaultGraphOverlay = new(1f, 0.67f, 0f, 0.6f);       // orange, 60% alpha
+        static readonly Color k_DefaultGraphOverlay = new(1f, 1f, 1f, 1f);       // white
         static readonly Color k_DefaultGraphHighlightTint = new(1f, 0.78f, 0.2f, 0.35f);  // warm gold, 35% alpha
-        static readonly Color k_DefaultGraphHighlightOutline = new(1f, 0.78f, 0.2f, 0.9f); // warm gold, 90% alpha
+        static readonly Color k_DefaultGraphHighlightOutline = new(1f, 1f, 1f, 0.6f); // white, 60% alpha
         const float k_DefaultGraphBarSpacing = 0.12f;                        // matches BarGraphElement default (12%)
         const int k_DefaultHighThreshold = 10240;
         const int k_DefaultMedThreshold  = 1024;
@@ -79,66 +79,31 @@ namespace GCAllocBreakdown.Editor
 
         // ── Setters (save + fire event) ──
 
-        internal static void SetHighColor(Color c)
+        internal static void SetGraphColors(Color bar, Color dim, Color overlay, Color hlTint, Color hlOutline, float spacing)
         {
-            s_HighColor = c;
-            SaveColor(k_HighColorKey, c);
-            SettingsChanged?.Invoke();
-        }
-
-        internal static void SetMediumColor(Color c)
-        {
-            s_MediumColor = c;
-            SaveColor(k_MediumColorKey, c);
-            SettingsChanged?.Invoke();
-        }
-
-        internal static void SetLowColor(Color c)
-        {
-            s_LowColor = c;
-            SaveColor(k_LowColorKey, c);
-            SettingsChanged?.Invoke();
-        }
-
-        internal static void SetGraphBarColor(Color c)
-        {
-            s_GraphBarColor = c;
-            SaveColor(k_GraphBarColorKey, c);
-            SettingsChanged?.Invoke();
-        }
-
-        internal static void SetGraphDimColor(Color c)
-        {
-            s_GraphDimColor = c;
-            SaveColor(k_GraphDimColorKey, c);
-            SettingsChanged?.Invoke();
-        }
-
-        internal static void SetGraphOverlayColor(Color c)
-        {
-            s_GraphOverlayColor = c;
-            SaveColor(k_GraphOverlayColorKey, c);
-            SettingsChanged?.Invoke();
-        }
-
-        internal static void SetGraphHighlightTint(Color c)
-        {
-            s_GraphHighlightTint = c;
-            SaveColor(k_GraphHighlightTintKey, c);
-            SettingsChanged?.Invoke();
-        }
-
-        internal static void SetGraphHighlightOutline(Color c)
-        {
-            s_GraphHighlightOutline = c;
-            SaveColor(k_GraphHighlightOutlineKey, c);
-            SettingsChanged?.Invoke();
-        }
-
-        internal static void SetGraphBarSpacing(float value)
-        {
-            s_GraphBarSpacing = Mathf.Clamp(value, 0f, 0.5f);
+            s_GraphBarColor         = bar;
+            s_GraphDimColor         = dim;
+            s_GraphOverlayColor     = overlay;
+            s_GraphHighlightTint    = hlTint;
+            s_GraphHighlightOutline = hlOutline;
+            s_GraphBarSpacing       = Mathf.Clamp(spacing, 0f, 0.5f);
+            SaveColor(k_GraphBarColorKey,         bar);
+            SaveColor(k_GraphDimColorKey,         dim);
+            SaveColor(k_GraphOverlayColorKey,     overlay);
+            SaveColor(k_GraphHighlightTintKey,    hlTint);
+            SaveColor(k_GraphHighlightOutlineKey, hlOutline);
             EditorPrefs.SetFloat(k_GraphBarSpacingKey, s_GraphBarSpacing);
+            SettingsChanged?.Invoke();
+        }
+
+        internal static void SetSeverityColors(Color high, Color medium, Color low)
+        {
+            s_HighColor   = high;
+            s_MediumColor = medium;
+            s_LowColor    = low;
+            SaveColor(k_HighColorKey,   high);
+            SaveColor(k_MediumColorKey, medium);
+            SaveColor(k_LowColorKey,    low);
             SettingsChanged?.Invoke();
         }
 
@@ -250,11 +215,7 @@ namespace GCAllocBreakdown.Editor
             Color low    = EditorGUILayout.ColorField("Low / Normal", GCAllocSettings.LowColor);
 
             if (EditorGUI.EndChangeCheck())
-            {
-                GCAllocSettings.SetHighColor(high);
-                GCAllocSettings.SetMediumColor(medium);
-                GCAllocSettings.SetLowColor(low);
-            }
+                GCAllocSettings.SetSeverityColors(high, medium, low);
 
             EditorGUILayout.Space(12);
             EditorGUILayout.LabelField("Graph Colors", EditorStyles.boldLabel);
@@ -270,14 +231,7 @@ namespace GCAllocBreakdown.Editor
             float spacing      = EditorGUILayout.Slider("Bar Spacing", GCAllocSettings.GraphBarSpacing, 0f, 0.5f);
 
             if (EditorGUI.EndChangeCheck())
-            {
-                GCAllocSettings.SetGraphBarColor(barColor);
-                GCAllocSettings.SetGraphDimColor(dimColor);
-                GCAllocSettings.SetGraphOverlayColor(overlayColor);
-                GCAllocSettings.SetGraphHighlightTint(hlTint);
-                GCAllocSettings.SetGraphHighlightOutline(hlOutline);
-                GCAllocSettings.SetGraphBarSpacing(spacing);
-            }
+                GCAllocSettings.SetGraphColors(barColor, dimColor, overlayColor, hlTint, hlOutline, spacing);
 
             EditorGUILayout.Space(12);
             EditorGUILayout.LabelField("Severity Thresholds", EditorStyles.boldLabel);

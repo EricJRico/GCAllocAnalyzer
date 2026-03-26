@@ -93,6 +93,10 @@ namespace GCAllocBreakdown.Editor
         // Per-frame scratch buffer for overlay building
         long[] m_PerFrameBuffer;
 
+        // Last bar/dim colors baked into m_BarEntries — used to skip BuildBarEntries() in ApplySettings()
+        Color32 m_LastBakedBarColor;
+        Color32 m_LastBakedDimColor;
+
 
         // ═══════════════════════════════════════════════════
         //  UI ELEMENTS
@@ -452,6 +456,11 @@ namespace GCAllocBreakdown.Editor
             m_BarGraph.VisTagHighlightTint    = GCAllocSettings.GraphHighlightTint;
             m_BarGraph.VisTagHighlightOutline = GCAllocSettings.GraphHighlightOutline;
             if (m_FrameStore == null || !m_FrameStore.HasFullFrameData) return;
+
+            Color32 newBar = GCAllocSettings.GraphBarColor;
+            Color32 newDim = GCAllocSettings.GraphDimColor;
+            if (newBar.Equals(m_LastBakedBarColor) && newDim.Equals(m_LastBakedDimColor)) return;
+
             BuildBarEntries();
             m_BarGraph.SetData(m_BarEntries, m_BarEntryCount, m_BarSegments, m_BarSegmentCount);
             m_OverviewStrip.SetData(m_BarEntries, m_BarEntryCount, m_BarSegments, m_BarSegmentCount);
@@ -587,6 +596,9 @@ namespace GCAllocBreakdown.Editor
                 BuildBarEntriesWithSegments(perFrame, frameCount, baseFrame, !m_HasSelection);
             else
                 BuildBarEntriesFlat(perFrame, frameCount);
+
+            m_LastBakedBarColor = GCAllocSettings.GraphBarColor;
+            m_LastBakedDimColor = GCAllocSettings.GraphDimColor;
         }
 
         void BuildBarEntriesFlat(long[] perFrame, int frameCount)
@@ -999,6 +1011,7 @@ namespace GCAllocBreakdown.Editor
         {
             m_BarGraph.ClearSegmentSelection();
             PopulateSelectionBuffer();
+            m_OverviewStrip.BarVisualProvider = GetOverviewBarVisual;
             if (!GetSelectedFrameRange(out int startFrame, out int endFrame)) return;
             OnDragCompleted?.Invoke(startFrame, endFrame);
         }
