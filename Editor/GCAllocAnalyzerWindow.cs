@@ -91,6 +91,8 @@ namespace GCAllocBreakdown.Editor
 
         // Per-frame graph — delegated to PerFrameGraphController
         PerFrameGraphController m_GraphController;
+        TwoPaneSplitView m_MainSplit;
+        TwoPaneSplitView m_GraphListSplit;
 
         // Right panel
         Label m_FrameCountLabel, m_FrameRangeLabel, m_TotalGcLabel;
@@ -105,9 +107,13 @@ namespace GCAllocBreakdown.Editor
         // Foldouts
         Foldout m_DataSummaryFoldout;
         Foldout m_TopOffendersFoldout;
+        DropdownField m_TopOffendersDropdown;
         VisualElement m_TopByTotalContainer;
+        VisualElement m_TopByAvgContainer;
         VisualElement m_TopSpikesContainer;
+        int m_TopOffendersCount = 3;
         readonly List<CallsiteGroup> m_TopByTotalBytes = new(10);
+        readonly List<CallsiteGroup> m_TopByAvgPerFrame = new(10);
         readonly List<RawAllocation> m_TopSingleAllocs = new(10);
 
         // Alloc sort
@@ -169,6 +175,7 @@ namespace GCAllocBreakdown.Editor
         // Reusable buffers
         readonly StringBuilder m_SharedSB = new(1024);
         readonly StringBuilder m_TimingLog = new(512);
+        readonly StringBuilder m_SelectionDiag = new(512); // temporary — remove after debugging
 
         void LogTiming(Stopwatch sw, string label)
         {
@@ -297,11 +304,11 @@ namespace GCAllocBreakdown.Editor
 
             root.Add(BuildToolbar());
 
-            var splitView = new TwoPaneSplitView(1, 350, TwoPaneSplitViewOrientation.Horizontal);
-            splitView.style.flexGrow = 1;
-            splitView.Add(BuildLeftPanel());
-            splitView.Add(BuildRightPanel());
-            root.Add(splitView);
+            m_MainSplit = new TwoPaneSplitView(1, m_SavedState.RightPanelWidth, TwoPaneSplitViewOrientation.Horizontal);
+            m_MainSplit.style.flexGrow = 1;
+            m_MainSplit.Add(BuildLeftPanel());
+            m_MainSplit.Add(BuildRightPanel());
+            root.Add(m_MainSplit);
 
             root.Add(BuildStatusBar());
             root.Add(m_GraphController.TooltipElement);
@@ -327,8 +334,11 @@ namespace GCAllocBreakdown.Editor
                 SelectedAllocIndex = m_AllocListView.selectedIndex,
                 ShowAssembly = m_ShowAssembly,
                 IsLoadedSnapshot = m_IsLoadedSnapshot,
+                RightPanelWidth = m_MainSplit.fixedPane.resolvedStyle.width,
+                GraphPaneHeight = m_GraphListSplit.fixedPane.resolvedStyle.height,
                 DataSummaryOpen = m_DataSummaryFoldout.value,
-                TopOffendersOpen = m_TopOffendersFoldout.value
+                TopOffendersOpen = m_TopOffendersFoldout.value,
+                TopOffendersCount = m_TopOffendersCount
             };
 
             // Serialize thread selection (HashSet not serializable).
@@ -376,10 +386,16 @@ namespace GCAllocBreakdown.Editor
             RestoreMarkerSortIndicator();
 
             // ── 4. Graph state (viewport + Y-axis) ──
+            m_SelectionDiag.Append("  ApplyWindowState(");
+            m_SelectionDiag.Append(hasAllocs);
+            m_SelectionDiag.Append("): bars=");
+            m_SelectionDiag.Append(state.Graph.SelectedBars?.Length ?? -1);
+            m_SelectionDiag.Append('\n');
             m_GraphController.RestoreState(state.Graph);
             m_GraphController.RebuildGraph();
-            // Re-apply segment selection — RebuildGraph calls SetData which clears it
+            // Re-apply selection — RebuildGraph calls SetData which clears it
             m_GraphController.RestoreSegmentSelection(state.Graph);
+            m_GraphController.RestoreBarSelection(state.Graph, m_SelectionDiag);
 
             // ── 5. Marker selection (ApplyFilters defaults to index 0) ──
             if (state.SelectedMarkerIndex >= 0 && state.SelectedMarkerIndex < m_FilteredGroups.Count)
@@ -398,6 +414,8 @@ namespace GCAllocBreakdown.Editor
             // ── 7. Foldouts ──
             m_DataSummaryFoldout.value = state.DataSummaryOpen;
             m_TopOffendersFoldout.value = state.TopOffendersOpen;
+            m_TopOffendersCount = state.TopOffendersCount;
+            m_TopOffendersDropdown.index = m_TopOffendersCount - 1;
 
             // ── 8. Loaded snapshot label ──
             if (m_IsLoadedSnapshot)
@@ -413,6 +431,14 @@ namespace GCAllocBreakdown.Editor
         {
             GCAllocSettings.SettingsChanged -= OnSettingsChanged;
             m_SavedState = CaptureWindowState();
+
+            // Selection diagnostic (temporary)
+            m_SelectionDiag.Clear();
+            m_SelectionDiag.Append("[GCAllocAnalyzer][Selection] OnDisable: captured=");
+            m_SelectionDiag.Append(m_SavedState.Graph.SelectedBars?.Length ?? -1);
+            m_SelectionDiag.Append(", IsValid=");
+            m_SelectionDiag.Append(m_SavedState.Graph.IsValid);
+            Debug.Log(m_SelectionDiag.ToString());
 
             // If background write already completed, nothing to do.
             // If still in progress, spin-wait (must finish before domain unloads).
@@ -510,6 +536,15 @@ namespace GCAllocBreakdown.Editor
         /// </summary>
         void TryRestoreAfterReload()
         {
+            // Selection diagnostic (temporary)
+            m_SelectionDiag.Clear();
+            m_SelectionDiag.Append("[GCAllocAnalyzer][Selection] Restore trace:\n");
+            m_SelectionDiag.Append("  Deserialized: SelectedBars=");
+            m_SelectionDiag.Append(m_SavedState.Graph.SelectedBars?.Length ?? -1);
+            m_SelectionDiag.Append(", IsValid=");
+            m_SelectionDiag.Append(m_SavedState.Graph.IsValid);
+            m_SelectionDiag.Append('\n');
+
             m_SavedState.EnsureValid();
             m_Snapshot.EnsureNonSerializedLists();
             if (!m_Snapshot.HasData) return;
@@ -818,11 +853,24 @@ namespace GCAllocBreakdown.Editor
             if (isSubRange)
                 RebuildFromCache(subRangeStart, subRangeEnd);
 
+            // Selection diagnostic (temporary)
+            m_SelectionDiag.Append("  AllocRestore: isSubRange=");
+            m_SelectionDiag.Append(isSubRange);
+            m_SelectionDiag.Append(", savedBars=");
+            m_SelectionDiag.Append(m_SavedState.Graph.SelectedBars?.Length ?? -1);
+            m_SelectionDiag.Append('\n');
+
             long msPreApply = sw.ElapsedMilliseconds;
             m_IsRestoringState = true;
             ApplyWindowState(true);
             m_IsRestoringState = false;
             long msApply = sw.ElapsedMilliseconds - msPreApply;
+
+            // Selection diagnostic final state (temporary)
+            m_SelectionDiag.Append("  Final: HasFrameSelection=");
+            m_SelectionDiag.Append(m_GraphController.HasFrameSelection);
+            m_SelectionDiag.Append('\n');
+            Debug.Log(m_SelectionDiag.ToString());
 
             m_SaveBtn.SetEnabled(true);
             m_ExportBtn.SetEnabled(true);
@@ -1178,9 +1226,9 @@ namespace GCAllocBreakdown.Editor
             left.Add(m_FiltersFoldout);
 
             // Split view: graph (top, resizable) + marker list (bottom, flex)
-            var graphListSplit = new TwoPaneSplitView(0, 200, TwoPaneSplitViewOrientation.Vertical);
-            graphListSplit.style.flexGrow = 1;
-            graphListSplit.Add(BuildPerFrameGraph());
+            m_GraphListSplit = new TwoPaneSplitView(0, m_SavedState.GraphPaneHeight, TwoPaneSplitViewOrientation.Vertical);
+            m_GraphListSplit.style.flexGrow = 1;
+            m_GraphListSplit.Add(BuildPerFrameGraph());
 
             // Marker list (multi-column, virtualized)
             m_MarkerListView = new MultiColumnListView
@@ -1237,8 +1285,8 @@ namespace GCAllocBreakdown.Editor
             m_MarkerListView.columnSortingChanged += OnMarkerColumnSortingChanged;
             m_MarkerListView.selectionChanged += OnMarkerSelectionChanged;
 
-            graphListSplit.Add(m_MarkerListView);
-            left.Add(graphListSplit);
+            m_GraphListSplit.Add(m_MarkerListView);
+            left.Add(m_GraphListSplit);
 
             return left;
         }
@@ -1629,6 +1677,25 @@ namespace GCAllocBreakdown.Editor
             m_TopOffendersFoldout.style.flexShrink = 0;
             m_TopOffendersFoldout.style.display = DisplayStyle.None;
 
+            var topNRow = new VisualElement
+            {
+                style = { flexDirection = FlexDirection.Row, alignItems = Align.Center,
+                    marginBottom = 4, marginTop = 2 }
+            };
+            topNRow.Add(new Label("Top") { style = { fontSize = 11, marginRight = 4 } });
+            m_TopOffendersDropdown = new DropdownField(
+                new List<string> { "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" },
+                m_TopOffendersCount - 1);
+            m_TopOffendersDropdown.style.width = 50;
+            m_TopOffendersDropdown.RegisterValueChangedCallback(evt =>
+            {
+                m_TopOffendersCount = int.Parse(evt.newValue);
+                PopulateTopOffendersUI();
+            });
+            topNRow.Add(m_TopOffendersDropdown);
+            topNRow.Add(new Label("sites") { style = { fontSize = 11, marginLeft = 4, color = k_SubtleText } });
+            m_TopOffendersFoldout.Add(topNRow);
+
             m_TopOffendersFoldout.Add(new Label("By Total Bytes")
             {
                 style = { unityFontStyleAndWeight = FontStyle.Bold, fontSize = 11,
@@ -1636,6 +1703,15 @@ namespace GCAllocBreakdown.Editor
             });
             m_TopByTotalContainer = new VisualElement { style = { marginBottom = 6 } };
             m_TopOffendersFoldout.Add(m_TopByTotalContainer);
+
+            m_TopOffendersFoldout.Add(new Label("Avg / Frame")
+            {
+                style = { unityFontStyleAndWeight = FontStyle.Bold, fontSize = 11,
+                    marginBottom = 2, marginTop = 2, borderTopWidth = 1,
+                    borderTopColor = new Color(0.2f, 0.2f, 0.2f), paddingTop = 4 }
+            });
+            m_TopByAvgContainer = new VisualElement { style = { marginBottom = 6 } };
+            m_TopOffendersFoldout.Add(m_TopByAvgContainer);
 
             m_TopOffendersFoldout.Add(new Label("Largest Single Allocations")
             {
@@ -3702,6 +3778,14 @@ namespace GCAllocBreakdown.Editor
             if (m_TopByTotalBytes.Count > 10)
                 m_TopByTotalBytes.RemoveRange(10, m_TopByTotalBytes.Count - 10);
 
+            // Top 10 groups by mean bytes per frame
+            m_TopByAvgPerFrame.Clear();
+            for (int i = 0; i < m_ActiveGroups.Count; i++)
+                m_TopByAvgPerFrame.Add(m_ActiveGroups[i]);
+            m_TopByAvgPerFrame.Sort((a, b) => b.MeanBytesPerFrame.CompareTo(a.MeanBytesPerFrame));
+            if (m_TopByAvgPerFrame.Count > 10)
+                m_TopByAvgPerFrame.RemoveRange(10, m_TopByAvgPerFrame.Count - 10);
+
             // Top 10 single largest allocations
             m_TopSingleAllocs.Clear();
             for (int i = 0; i < m_Snapshot.RawAllocations.Count; i++)
@@ -3734,6 +3818,13 @@ namespace GCAllocBreakdown.Editor
             if (m_TopByTotalBytes.Count > 10)
                 m_TopByTotalBytes.RemoveRange(10, m_TopByTotalBytes.Count - 10);
 
+            m_TopByAvgPerFrame.Clear();
+            for (int i = 0; i < m_ActiveGroups.Count; i++)
+                m_TopByAvgPerFrame.Add(m_ActiveGroups[i]);
+            m_TopByAvgPerFrame.Sort((a, b) => b.MeanBytesPerFrame.CompareTo(a.MeanBytesPerFrame));
+            if (m_TopByAvgPerFrame.Count > 10)
+                m_TopByAvgPerFrame.RemoveRange(10, m_TopByAvgPerFrame.Count - 10);
+
             PopulateTopOffendersUI();
         }
 
@@ -3747,8 +3838,10 @@ namespace GCAllocBreakdown.Editor
 
         void PopulateTopOffendersUI()
         {
+            int n = m_TopOffendersCount;
+
             m_TopByTotalContainer.Clear();
-            for (int i = 0; i < m_TopByTotalBytes.Count; i++)
+            for (int i = 0; i < m_TopByTotalBytes.Count && i < n; i++)
             {
                 var g = m_TopByTotalBytes[i];
                 var row = MakeTopOffenderRow(
@@ -3756,8 +3849,17 @@ namespace GCAllocBreakdown.Editor
                 m_TopByTotalContainer.Add(row);
             }
 
+            m_TopByAvgContainer.Clear();
+            for (int i = 0; i < m_TopByAvgPerFrame.Count && i < n; i++)
+            {
+                var g = m_TopByAvgPerFrame[i];
+                var row = MakeTopOffenderRow(
+                    i + 1, g.FormattedMean, g.FormattedPct, g.DisplayName, g.Key);
+                m_TopByAvgContainer.Add(row);
+            }
+
             m_TopSpikesContainer.Clear();
-            for (int i = 0; i < m_TopSingleAllocs.Count; i++)
+            for (int i = 0; i < m_TopSingleAllocs.Count && i < n; i++)
             {
                 var a = m_TopSingleAllocs[i];
                 m_SharedSB.Clear();

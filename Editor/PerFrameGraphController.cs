@@ -923,6 +923,30 @@ namespace GCAllocBreakdown.Editor
 
         public BarGraphViewSnapshot CaptureState()
         {
+            // Diagnostic (temporary)
+            var sb = new StringBuilder(256);
+            sb.Append("[GCAllocAnalyzer][Selection] CaptureState:\n");
+            sb.Append("  SelectedBars(HashSet)=");
+            sb.Append(m_BarGraph.ViewState.SelectedBars.Count);
+            sb.Append("  m_HasSelection=");
+            sb.Append(m_HasSelection);
+            sb.Append("  m_SelectionBuffer=");
+            if (m_SelectionBuffer == null)
+                sb.Append("null");
+            else
+            {
+                int trueCount = 0;
+                int len = Math.Min(m_SelectionBuffer.Length, m_BarEntryCount);
+                for (int i = 0; i < len; i++)
+                    if (m_SelectionBuffer[i]) trueCount++;
+                sb.Append(trueCount);
+                sb.Append('/');
+                sb.Append(len);
+            }
+            sb.Append("  m_BarEntryCount=");
+            sb.Append(m_BarEntryCount);
+            UnityEngine.Debug.Log(sb.ToString());
+
             return m_BarGraph.CreateViewSnapshot();
         }
 
@@ -943,6 +967,44 @@ namespace GCAllocBreakdown.Editor
             if (!state.IsValid) return;
             if (state.SelectedSegmentBar >= 0 && state.SelectedSegmentBar < m_BarEntryCount)
                 m_BarGraph.SelectSegment(state.SelectedSegmentBar, state.SelectedSegmentIndex);
+        }
+
+        /// <summary>
+        /// Re-apply bar selection after RebuildGraph, which calls SetData
+        /// and clears SelectedBars via OnDataChanged.
+        /// </summary>
+        public void RestoreBarSelection(BarGraphViewSnapshot state, StringBuilder diag = null)
+        {
+            if (!state.IsValid || state.SelectedBars == null || state.SelectedBars.Length == 0)
+            {
+                diag?.Append("  RestoreBarSel: skipped (");
+                diag?.Append(state.IsValid ? "valid" : "invalid");
+                diag?.Append(", bars=");
+                diag?.Append(state.SelectedBars?.Length ?? -1);
+                diag?.Append(")\n");
+                return;
+            }
+
+            for (int i = 0; i < state.SelectedBars.Length; i++)
+            {
+                int idx = state.SelectedBars[i];
+                if (idx >= 0 && idx < m_BarEntryCount)
+                    m_BarGraph.ViewState.SelectedBars.Add(idx);
+            }
+
+            PopulateSelectionBuffer();
+            m_OverviewStrip.BarVisualProvider = GetOverviewBarVisual;
+            m_BarGraph.MarkDirtyRepaint();
+
+            diag?.Append("  RestoreBarSel: input=");
+            diag?.Append(state.SelectedBars.Length);
+            diag?.Append(" barCount=");
+            diag?.Append(m_BarEntryCount);
+            diag?.Append(" added=");
+            diag?.Append(m_BarGraph.ViewState.SelectedBars.Count);
+            diag?.Append(" hasSel=");
+            diag?.Append(m_HasSelection);
+            diag?.Append('\n');
         }
 
         // ═══════════════════════════════════════════════════

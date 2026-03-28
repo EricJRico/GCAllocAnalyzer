@@ -486,6 +486,9 @@ namespace GCAllocBreakdown.Editor
     [Serializable]
     internal struct WindowState
     {
+        internal const float k_DefaultRightPanelWidth = 350f;
+        internal const float k_DefaultGraphPaneHeight = 200f;
+
         // Graph
         public BarGraphViewSnapshot Graph;
 
@@ -510,6 +513,11 @@ namespace GCAllocBreakdown.Editor
         // Foldouts
         public bool DataSummaryOpen;
         public bool TopOffendersOpen;
+        public int TopOffendersCount;
+
+        // Layout
+        public float RightPanelWidth;
+        public float GraphPaneHeight;
 
         public static WindowState Default => new WindowState
         {
@@ -525,7 +533,10 @@ namespace GCAllocBreakdown.Editor
             ShowAssembly = false,
             IsLoadedSnapshot = false,
             DataSummaryOpen = true,
-            TopOffendersOpen = true
+            TopOffendersOpen = true,
+            TopOffendersCount = 3,
+            RightPanelWidth = k_DefaultRightPanelWidth,
+            GraphPaneHeight = k_DefaultGraphPaneHeight
         };
 
         /// <summary>
@@ -537,6 +548,9 @@ namespace GCAllocBreakdown.Editor
             NameFilter ??= "";
             ExcludeFilter ??= "";
             SelectedThreads ??= Array.Empty<string>();
+            if (!(RightPanelWidth > 0f)) RightPanelWidth = k_DefaultRightPanelWidth;
+            if (!(GraphPaneHeight > 0f)) GraphPaneHeight = k_DefaultGraphPaneHeight;
+            if (TopOffendersCount < 1 || TopOffendersCount > 10) TopOffendersCount = 3;
         }
     }
 }

@@ -190,6 +190,12 @@ All bright/dim/selected/highlighted/overlay logic moves to the controller. The r
 
 **Scope:** `GraphElement.cs` drawing methods, `PerFrameGraphController.cs` mask/value computation. The magnitude range fix should be implemented as part of this refactor rather than adding more state to the current architecture.
 
+## BarGraph: Light/Dark Mode and Color Blind Accessibility
+
+**Plan:** [`Documentation~/plans/Plan_LightDarkMode_ColorBlind.md`](plans/Plan_LightDarkMode_ColorBlind.md)
+
+USS-only light/dark mode theming via `.bar-graph--dark` / `.bar-graph--light` class selectors, plus CVD (color vision deficiency) chrome overrides for tritanopia, deuteranopia, and protanopia. Includes `BarGraphPalettes` static class with Okabe-Ito and BlueOrange6 color-blind-safe palettes for consumer data colors. No C# changes to `BarGraphElement.cs`.
+
 ## Performance: Minor Allocation Hotspots
 
 Low-priority items flagged during code review. Not urgent — each allocates once per user action or once per analysis, not per frame.
