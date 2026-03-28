@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Text;
+using GCAllocTest;
 using UnityEngine;
 
 /// <summary>
@@ -28,29 +30,72 @@ public class InitAndPeriodicAllocs : MonoBehaviour
     int m_Frame;
     List<string> m_CachedStrings;
     List<object> m_CachedObjects;
+    bool m_Optimized;
+    StringBuilder m_SharedSB;
+    byte[] m_SpikeBuffer;
+    Dictionary<string, string> m_MetadataDict;
+    float[] m_SnapshotBuffer;
 
     void Awake()
     {
-        // Heavy initialization — many small string allocations
-        m_CachedStrings = new List<string>(awakeStringCount);
-        for (int i = 0; i < awakeStringCount; i++)
+        m_Optimized = GCAllocTestRig.CurrentMode == AllocMode.Optimized;
+        m_SharedSB = new StringBuilder(128);
+
+        if (m_Optimized)
         {
-            m_CachedStrings.Add("InitString_" + i.ToString());
+            // Use StringBuilder to avoid intermediate concat strings
+            m_CachedStrings = new List<string>(awakeStringCount);
+            for (int i = 0; i < awakeStringCount; i++)
+            {
+                m_SharedSB.Clear();
+                m_SharedSB.Append("InitString_").Append(i);
+                m_CachedStrings.Add(m_SharedSB.ToString());
+            }
+        }
+        else
+        {
+            // Heavy initialization — many small string allocations
+            m_CachedStrings = new List<string>(awakeStringCount);
+            for (int i = 0; i < awakeStringCount; i++)
+            {
+                m_CachedStrings.Add("InitString_" + i.ToString());
+            }
         }
 
-        Debug.Log("InitAndPeriodicAllocs: Awake allocated " + awakeStringCount + " strings");
+        m_SharedSB.Clear();
+        m_SharedSB.Append("InitAndPeriodicAllocs: Awake allocated ").Append(awakeStringCount).Append(" strings");
+        Debug.Log(m_SharedSB.ToString());
+
+        // Pre-allocate reusable buffers
+        m_SpikeBuffer = new byte[spikeBufferSize];
+        m_MetadataDict = new Dictionary<string, string>(3);
+        m_SnapshotBuffer = new float[3];
     }
 
     void Start()
     {
-        // More initialization — boxed objects and arrays
-        m_CachedObjects = new List<object>(startObjectCount);
-        for (int i = 0; i < startObjectCount; i++)
+        if (m_Optimized)
         {
-            m_CachedObjects.Add(new byte[32 + i]);
+            // Single large buffer instead of N small arrays
+            m_CachedObjects = new List<object>(1);
+            int totalSize = 0;
+            for (int i = 0; i < startObjectCount; i++)
+                totalSize += 32 + i;
+            m_CachedObjects.Add(new byte[totalSize]);
+        }
+        else
+        {
+            // More initialization — boxed objects and arrays
+            m_CachedObjects = new List<object>(startObjectCount);
+            for (int i = 0; i < startObjectCount; i++)
+            {
+                m_CachedObjects.Add(new byte[32 + i]);
+            }
         }
 
-        Debug.Log("InitAndPeriodicAllocs: Start allocated " + startObjectCount + " objects");
+        m_SharedSB.Clear();
+        m_SharedSB.Append("InitAndPeriodicAllocs: Start allocated ").Append(startObjectCount).Append(" objects");
+        Debug.Log(m_SharedSB.ToString());
     }
 
     void Update()
@@ -72,6 +117,19 @@ public class InitAndPeriodicAllocs : MonoBehaviour
 
     void CreateSpike()
     {
+        // ═══════════════════════════════════════════════════════════════════
+        // Optimized: reuse pre-allocated buffer, interned string literals
+        // ═══════════════════════════════════════════════════════════════════
+        if (m_Optimized)
+        {
+            m_SpikeBuffer[0] = 0xFF;
+            m_MetadataDict.Clear();
+            m_MetadataDict["timestamp"] = "cached";
+            m_MetadataDict["frame"] = "cached";
+            m_MetadataDict["size"] = "cached";
+            return;
+        }
+
         // One large allocation — simulates loading a texture buffer, mesh data, etc.
         byte[] buffer = new byte[spikeBufferSize];
         buffer[0] = 0xFF;
@@ -87,6 +145,19 @@ public class InitAndPeriodicAllocs : MonoBehaviour
 
     void SmallPeriodicAlloc()
     {
+        // ═══════════════════════════════════════════════════════════════════
+        // Optimized: SB for string, reuse float buffer
+        // ═══════════════════════════════════════════════════════════════════
+        if (m_Optimized)
+        {
+            m_SharedSB.Clear();
+            m_SharedSB.Append("Frame ").Append(m_Frame).Append(" alive");
+            m_SnapshotBuffer[0] = Time.time;
+            m_SnapshotBuffer[1] = Time.deltaTime;
+            m_SnapshotBuffer[2] = Time.fixedDeltaTime;
+            return;
+        }
+
         // Small intermittent allocation — common in real code
         string status = "Frame " + m_Frame + " alive";
         var snapshot = new float[] { Time.time, Time.deltaTime, Time.fixedDeltaTime };

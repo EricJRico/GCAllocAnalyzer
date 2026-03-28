@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using UnityEngine;
 
 namespace GCAllocTest.LINQPatterns
@@ -42,6 +44,17 @@ namespace GCAllocTest.LINQPatterns
         int m_Threshold;
         int m_Frame;
 
+        bool m_Optimized;
+        List<int> m_FilterResult;
+        List<string> m_ProjectionResult;
+        List<int> m_SortBuffer;
+        List<int> m_GroupResult;
+        List<int> m_ChainedResult;
+        List<string> m_DictLinqResult;
+        StringBuilder m_AggregateSB;
+        int[] m_GroupBuckets;
+        Comparison<int> m_DescComparer;
+
         // ═══════════════════════════════════════════════════════════════════
         //  Lifecycle
         // ═══════════════════════════════════════════════════════════════════
@@ -61,6 +74,17 @@ namespace GCAllocTest.LINQPatterns
             m_DictData = new Dictionary<string, int>(k_DictCount);
             for (int i = 0; i < k_DictCount; i++)
                 m_DictData.Add("Key_" + i, i * 7);
+
+            m_Optimized = GCAllocTestRig.CurrentMode == AllocMode.Optimized;
+            m_FilterResult = new List<int>(k_IntCount);
+            m_ProjectionResult = new List<string>(64);
+            m_SortBuffer = new List<int>(k_IntCount);
+            m_GroupResult = new List<int>(10);
+            m_ChainedResult = new List<int>(k_IntCount);
+            m_DictLinqResult = new List<string>(k_DictCount);
+            m_AggregateSB = new StringBuilder(512);
+            m_GroupBuckets = new int[10];
+            m_DescComparer = (a, b) => b.CompareTo(a);
         }
 
         void Update()
@@ -99,6 +123,15 @@ namespace GCAllocTest.LINQPatterns
 
         void DoFilter()
         {
+            if (m_Optimized)
+            {
+                m_FilterResult.Clear();
+                for (int i = 0; i < m_IntList.Count; i++)
+                    if (m_IntList[i] > m_Threshold)
+                        m_FilterResult.Add(m_IntList[i]);
+                return;
+            }
+
             _ = m_IntList.Where(x => x > m_Threshold).ToList();
         }
 
@@ -110,6 +143,15 @@ namespace GCAllocTest.LINQPatterns
 
         void DoProjection()
         {
+            if (m_Optimized)
+            {
+                m_ProjectionResult.Clear();
+                for (int i = 0; i < m_IntList.Count; i++)
+                    if (m_IntList[i] < 50)
+                        m_ProjectionResult.Add(m_IntList[i].ToString());
+                return;
+            }
+
             _ = m_IntList.Where(x => x < 50).Select(x => x.ToString()).ToArray();
         }
 
@@ -121,6 +163,17 @@ namespace GCAllocTest.LINQPatterns
 
         void DoSortTake()
         {
+            if (m_Optimized)
+            {
+                m_SortBuffer.Clear();
+                for (int i = 0; i < m_IntList.Count; i++)
+                    m_SortBuffer.Add(m_IntList[i]);
+                m_SortBuffer.Sort(m_DescComparer);
+                if (m_SortBuffer.Count > 10)
+                    m_SortBuffer.RemoveRange(10, m_SortBuffer.Count - 10);
+                return;
+            }
+
             _ = m_IntList.OrderBy(x => -x).Take(10).ToList();
         }
 
@@ -132,6 +185,18 @@ namespace GCAllocTest.LINQPatterns
 
         void DoGroupBy()
         {
+            if (m_Optimized)
+            {
+                for (int i = 0; i < m_GroupBuckets.Length; i++)
+                    m_GroupBuckets[i] = 0;
+                for (int i = 0; i < m_IntList.Count; i++)
+                    m_GroupBuckets[m_IntList[i] % 10] += m_IntList[i];
+                m_GroupResult.Clear();
+                for (int i = 0; i < m_GroupBuckets.Length; i++)
+                    m_GroupResult.Add(m_GroupBuckets[i]);
+                return;
+            }
+
             _ = m_IntList.GroupBy(x => x % 10).Select(g => g.Sum()).ToList();
         }
 
@@ -143,6 +208,18 @@ namespace GCAllocTest.LINQPatterns
 
         void DoAggregate()
         {
+            if (m_Optimized)
+            {
+                m_AggregateSB.Clear();
+                int count = m_StringList.Count < 20 ? m_StringList.Count : 20;
+                for (int i = 0; i < count; i++)
+                {
+                    if (i > 0) m_AggregateSB.Append(", ");
+                    m_AggregateSB.Append(m_StringList[i]);
+                }
+                return;
+            }
+
             _ = m_StringList.Take(20).Aggregate("", (acc, x) => acc + ", " + x);
         }
 
@@ -154,6 +231,24 @@ namespace GCAllocTest.LINQPatterns
 
         void DoAnyFirst()
         {
+            if (m_Optimized)
+            {
+                bool found = false;
+                for (int i = 0; i < m_IntList.Count; i++)
+                {
+                    if (m_IntList[i] == 42) { found = true; break; }
+                }
+                _ = found;
+
+                int first = default;
+                for (int i = 0; i < m_IntList.Count; i++)
+                {
+                    if (m_IntList[i] > 900) { first = m_IntList[i]; break; }
+                }
+                _ = first;
+                return;
+            }
+
             _ = m_IntList.Any(x => x == 42);
             _ = m_IntList.FirstOrDefault(x => x > 900);
         }
@@ -167,6 +262,18 @@ namespace GCAllocTest.LINQPatterns
 
         void DoChained()
         {
+            if (m_Optimized)
+            {
+                m_ChainedResult.Clear();
+                for (int i = 0; i < m_IntList.Count; i++)
+                    if (m_IntList[i] > 100)
+                        m_ChainedResult.Add(m_IntList[i] * 2);
+                m_ChainedResult.Sort(m_DescComparer);
+                if (m_ChainedResult.Count > 5)
+                    m_ChainedResult.RemoveRange(5, m_ChainedResult.Count - 5);
+                return;
+            }
+
             _ = m_IntList
                 .Where(x => x > 100)
                 .Select(x => x * 2)
@@ -184,6 +291,15 @@ namespace GCAllocTest.LINQPatterns
 
         void DoDictionaryLinq()
         {
+            if (m_Optimized)
+            {
+                m_DictLinqResult.Clear();
+                foreach (var kvp in m_DictData)
+                    if (kvp.Value > 100)
+                        m_DictLinqResult.Add(kvp.Value.ToString());
+                return;
+            }
+
             _ = m_DictData.Values.Where(v => v > 100).Select(v => v.ToString()).ToList();
         }
     }

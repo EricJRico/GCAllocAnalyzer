@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 namespace GCAllocTest.EdgeCases
@@ -68,6 +69,35 @@ namespace GCAllocTest.EdgeCases
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    //  Optimized Static Helper Classes
+    // ═══════════════════════════════════════════════════════════════════
+
+    static class ParamsHelperOpt
+    {
+        public static void Consume(int a) { _ = a; }
+        public static void Consume(int a, float b, string c) { _ = a; _ = b; _ = c; }
+        public static void Consume(int a, int b, int c, int d, int e) { _ = a; }
+    }
+
+    static class EnumHelperOpt
+    {
+        static readonly string[] k_StateNames = { "Idle", "Running", "Paused", "Stopped", "Error" };
+
+        public static string ProcessState(TestState state)
+        {
+            string name = k_StateNames[(int)state];
+            _ = (state == TestState.Paused);
+            return name;
+        }
+    }
+
+    struct TestStateComparer : System.Collections.Generic.IEqualityComparer<TestState>
+    {
+        public bool Equals(TestState x, TestState y) => x == y;
+        public int GetHashCode(TestState obj) => (int)obj;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     //  MonoBehaviour — ParamsAndBoxingEdgeCases
     // ═══════════════════════════════════════════════════════════════════
 
@@ -97,6 +127,13 @@ namespace GCAllocTest.EdgeCases
         int m_Frame;
         Dictionary<TestState, int> m_EnumDict;
 
+        bool m_Optimized;
+        StringBuilder m_SharedSB;
+        Dictionary<TestState, int> m_EnumDictOpt;
+        List<int> m_ResizeList;
+        Dictionary<string, int> m_ResizeDict;
+        string[] m_DictKeys;
+
         // ═══════════════════════════════════════════════════════════════
         //  Lifecycle
         // ═══════════════════════════════════════════════════════════════
@@ -106,6 +143,15 @@ namespace GCAllocTest.EdgeCases
             // No custom comparer — the default comparer boxes the enum key
             // on every GetHashCode / Equals call.
             m_EnumDict = new Dictionary<TestState, int>();
+
+            m_Optimized = GCAllocTestRig.CurrentMode == AllocMode.Optimized;
+            m_SharedSB = new StringBuilder(256);
+            m_EnumDictOpt = new Dictionary<TestState, int>(new TestStateComparer());
+            m_ResizeList = new List<int>(128);
+            m_ResizeDict = new Dictionary<string, int>(32);
+            m_DictKeys = new string[20];
+            for (int i = 0; i < 20; i++)
+                m_DictKeys[i] = "Key_" + i;
         }
 
         void Update()
@@ -139,6 +185,17 @@ namespace GCAllocTest.EdgeCases
 
         void DoParamsAllocations()
         {
+            if (m_Optimized)
+            {
+                ParamsHelperOpt.Consume(m_Frame);
+                ParamsHelperOpt.Consume(m_Frame, 2.5f, "hello");
+                ParamsHelperOpt.Consume(m_Frame, m_Frame + 1, m_Frame + 2, m_Frame + 3, m_Frame + 4);
+                m_SharedSB.Clear();
+                m_SharedSB.Append(m_Frame).Append(' ').Append(m_Frame + 1).Append(' ')
+                    .Append(m_Frame + 2).Append(' ').Append(m_Frame + 3);
+                return;
+            }
+
             // Calls through a static helper to add stack depth
             ParamsHelper.CallWithParams(m_Frame);
 
@@ -156,6 +213,16 @@ namespace GCAllocTest.EdgeCases
 
         void DoEnumBoxing()
         {
+            if (m_Optimized)
+            {
+                _ = EnumHelperOpt.ProcessState(TestState.Running);
+                m_EnumDictOpt[TestState.Running] = m_Frame;
+                _ = m_EnumDictOpt[TestState.Running];
+                m_SharedSB.Clear();
+                m_SharedSB.Append("Current state: ").Append(EnumHelperOpt.ProcessState(TestState.Running));
+                return;
+            }
+
             // Call through static helper for stack depth
             _ = EnumHelper.ProcessState(TestState.Running);
 
@@ -177,9 +244,19 @@ namespace GCAllocTest.EdgeCases
 
         void DoInterfaceBoxing()
         {
+            if (m_Optimized)
+            {
+                ComparableStruct s = new ComparableStruct { Value = 42 };
+                _ = s.CompareTo(new ComparableStruct { Value = 10 });
+                _ = DoCompare(
+                    new ComparableStruct { Value = 1 },
+                    new ComparableStruct { Value = 2 });
+                return;
+            }
+
             // Explicit assignment to interface — boxes the struct
-            ComparableStruct s = new ComparableStruct { Value = 42 };
-            System.IComparable<ComparableStruct> boxed = s;
+            ComparableStruct s2 = new ComparableStruct { Value = 42 };
+            System.IComparable<ComparableStruct> boxed = s2;
             _ = boxed.CompareTo(new ComparableStruct { Value = 10 });
 
             // Generic method with interface constraint — the constraint
@@ -207,20 +284,31 @@ namespace GCAllocTest.EdgeCases
 
         void DoNullableBoxing()
         {
+            if (m_Optimized)
+            {
+                int? nullableInt = 42;
+                if (nullableInt.HasValue) _ = nullableInt.Value;
+                Vector3? nullableVec = Vector3.one;
+                if (nullableVec.HasValue) _ = nullableVec.Value;
+                AcceptValue(nullableInt);
+                AcceptValue(nullableVec);
+                return;
+            }
+
             // Nullable int — boxes the int when assigned to object
-            int? nullableInt = 42;
-            object boxedInt = nullableInt;
+            int? nullableInt2 = 42;
+            object boxedInt = nullableInt2;
             _ = boxedInt;
 
             // Nullable Vector3 — boxes the entire 12-byte struct
-            Vector3? nullableVec = Vector3.one;
-            object boxedVec = nullableVec;
+            Vector3? nullableVec2 = Vector3.one;
+            object boxedVec = nullableVec2;
             _ = boxedVec;
 
             // Passing nullable through an object parameter forces boxing
             // at the call site.
-            AcceptObject(nullableInt);
-            AcceptObject(nullableVec);
+            AcceptObject(nullableInt2);
+            AcceptObject(nullableVec2);
         }
 
         /// <summary>
@@ -228,6 +316,14 @@ namespace GCAllocTest.EdgeCases
         /// the caller must box the argument.
         /// </summary>
         static void AcceptObject(object obj)
+        {
+            _ = obj;
+        }
+
+        /// <summary>
+        /// Generic acceptor — avoids boxing by keeping the type parameter.
+        /// </summary>
+        static void AcceptValue<T>(T obj)
         {
             _ = obj;
         }
@@ -240,6 +336,20 @@ namespace GCAllocTest.EdgeCases
 
         void DoStringEdgeCases()
         {
+            if (m_Optimized)
+            {
+                m_SharedSB.Clear();
+                m_SharedSB.Append("a").Append("b").Append("c").Append(m_Frame).Append("e");
+                m_SharedSB.Clear();
+                for (int i = 0; i < 10; i++)
+                    m_SharedSB.Append(i);
+                m_SharedSB.Clear();
+                m_SharedSB.Append(3.14159f);
+                m_SharedSB.Clear();
+                m_SharedSB.Append(m_Frame);
+                return;
+            }
+
             // 5-part concatenation — the compiler chains Concat calls,
             // producing intermediate strings for each step.
             _ = "a" + "b" + "c" + m_Frame.ToString() + "e";
@@ -266,6 +376,17 @@ namespace GCAllocTest.EdgeCases
 
         void DoCollectionResizing()
         {
+            if (m_Optimized)
+            {
+                m_ResizeList.Clear();
+                for (int i = 0; i < 100; i++)
+                    m_ResizeList.Add(i);
+                m_ResizeDict.Clear();
+                for (int i = 0; i < 20; i++)
+                    m_ResizeDict[m_DictKeys[i]] = i;
+                return;
+            }
+
             // List<int> starts at capacity 4, doubles at 4→8→16→32→64→128
             // to hold 100 elements. Each doubling allocates a new int[].
             var list = new List<int>(4);

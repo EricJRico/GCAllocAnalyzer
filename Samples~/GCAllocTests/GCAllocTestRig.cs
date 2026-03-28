@@ -17,9 +17,40 @@ namespace GCAllocTest
     ///
     /// Each component can be toggled on/off in the Inspector.
     /// Individual allocation patterns within each component can also be toggled.
+    /// Assign a TestProfile to switch between Baseline (allocating) and Optimized
+    /// (same work, fewer allocs) code paths for compare testing.
     /// </summary>
     public class GCAllocTestRig : MonoBehaviour
     {
+        [SerializeField] TestProfile m_Profile;
+
+        public static AllocMode CurrentMode { get; private set; }
+
+#if UNITY_EDITOR
+        void OnValidate()
+        {
+            if (m_Profile != null)
+                return;
+
+            var guids = UnityEditor.AssetDatabase.FindAssets("t:TestProfile");
+            foreach (var guid in guids)
+            {
+                var path = UnityEditor.AssetDatabase.GUIDToAssetPath(guid);
+                var profile = UnityEditor.AssetDatabase.LoadAssetAtPath<TestProfile>(path);
+                if (profile != null && profile.mode == AllocMode.Baseline)
+                {
+                    m_Profile = profile;
+                    break;
+                }
+            }
+        }
+#endif
+
+        void Awake()
+        {
+            CurrentMode = m_Profile != null ? m_Profile.mode : AllocMode.Baseline;
+        }
+
 #if UNITY_EDITOR
         [UnityEditor.MenuItem("Tools/GC Alloc Test/Create Test Rig")]
         static void CreateTestRig()

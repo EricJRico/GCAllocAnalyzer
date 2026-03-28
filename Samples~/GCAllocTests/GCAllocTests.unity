@@ -119,7 +119,7 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
---- !u!1 &378677376
+--- !u!1 &701516333
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -127,18 +127,18 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 378677388}
-  - component: {fileID: 378677387}
-  - component: {fileID: 378677386}
-  - component: {fileID: 378677385}
-  - component: {fileID: 378677384}
-  - component: {fileID: 378677383}
-  - component: {fileID: 378677382}
-  - component: {fileID: 378677381}
-  - component: {fileID: 378677380}
-  - component: {fileID: 378677379}
-  - component: {fileID: 378677378}
-  - component: {fileID: 378677377}
+  - component: {fileID: 701516345}
+  - component: {fileID: 701516344}
+  - component: {fileID: 701516343}
+  - component: {fileID: 701516342}
+  - component: {fileID: 701516341}
+  - component: {fileID: 701516340}
+  - component: {fileID: 701516339}
+  - component: {fileID: 701516338}
+  - component: {fileID: 701516337}
+  - component: {fileID: 701516336}
+  - component: {fileID: 701516335}
+  - component: {fileID: 701516334}
   m_Layer: 0
   m_Name: "\u2500\u2500 GC Alloc Test Rig \u2500\u2500"
   m_TagString: Untagged
@@ -146,54 +146,54 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &378677377
+--- !u!114 &701516334
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 8081db5dbdee62243a5369b86714e321, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GCAllocTest.EdgeCases.ParamsAndBoxingEdgeCases
+  m_EditorClassIdentifier: GCAllocTests::GCAllocTest.EdgeCases.ParamsAndBoxingEdgeCases
   m_EnableParams: 1
   m_EnableEnumBoxing: 1
   m_EnableInterfaceBoxing: 1
   m_EnableNullable: 1
   m_EnableStringEdgeCases: 1
   m_EnableCollectionResizing: 1
---- !u!114 &378677378
+--- !u!114 &701516335
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: c4c36a72b8547c94383cefa00deed20e, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GCAllocTest.UnityAPIs.UnityAPIAllocPatterns
+  m_EditorClassIdentifier: GCAllocTests::GCAllocTest.UnityAPIs.UnityAPIAllocPatterns
   m_EnableMesh: 1
   m_EnableMaterial: 1
   m_EnablePhysics: 1
   m_EnableStringAPIs: 1
   m_EnableHierarchy: 1
   m_EnableSerialization: 1
---- !u!114 &378677379
+--- !u!114 &701516336
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 1650b9721917b2b4a96ae417ba443d01, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GCAllocTest.LINQPatterns.LINQAllocPatterns
+  m_EditorClassIdentifier: GCAllocTests::GCAllocTest.LINQPatterns.LINQAllocPatterns
   m_EnableFilter: 1
   m_EnableProjection: 1
   m_EnableSort: 1
@@ -202,83 +202,83 @@ MonoBehaviour:
   m_EnableAnyFirst: 1
   m_EnableChained: 1
   m_EnableDictionaryLinq: 1
---- !u!114 &378677380
+--- !u!114 &701516337
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 43970b7d313a10644b97043df2431f75, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GCAllocTest.Threading.ThreadedAllocator
+  m_EditorClassIdentifier: GCAllocTests::GCAllocTest.Threading.ThreadedAllocator
   m_EnableRawThread: 1
   m_EnableThreadPool: 1
   m_EnableTaskRun: 1
---- !u!114 &378677381
+--- !u!114 &701516338
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: d03c6014228ef2a418044e0a230f696f, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GCAllocTest.DeepStacks.DeepCallstackAllocator
+  m_EditorClassIdentifier: GCAllocTests::GCAllocTest.DeepStacks.DeepCallstackAllocator
   m_EnableLinearChain: 1
   m_EnableRecursive: 1
   m_EnableMixed: 1
   m_RecursionDepth: 12
---- !u!114 &378677382
+--- !u!114 &701516339
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: d563f73c3dc04064ea889728ca0ba139, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GCAllocTest.Systems.EventDriven.EventAllocGenerator
+  m_EditorClassIdentifier: GCAllocTests::GCAllocTest.Systems.EventDriven.EventAllocGenerator
   lambdaSubscription: 1
   eventHandlerAllocs: 1
   deepCallStack: 1
   recursiveAlloc: 1
   recursionDepth: 5
---- !u!114 &378677383
+--- !u!114 &701516340
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: baa02f115ead5ef43890a8a43661febc, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::InitAndPeriodicAllocs
+  m_EditorClassIdentifier: GCAllocTests::InitAndPeriodicAllocs
   awakeStringCount: 200
   startObjectCount: 100
   spikeIntervalFrames: 60
   spikeBufferSize: 65536
   lowFreqIntervalFrames: 10
---- !u!114 &378677384
+--- !u!114 &701516341
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 2d9adafe4d67a514386ae37fd0d734d1, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GCAllocTest.DataStructures.VariedSizeAllocator
+  m_EditorClassIdentifier: GCAllocTests::GCAllocTest.DataStructures.VariedSizeAllocator
   tinyAllocs: 1
   smallAllocs: 1
   mediumAllocs: 1
@@ -287,18 +287,18 @@ MonoBehaviour:
   hugeAllocInterval: 120
   nestedClassAllocs: 1
   genericAllocs: 1
---- !u!114 &378677385
+--- !u!114 &701516342
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 028ce8c1e3714df40b252934a8f1d53a, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GCAllocTest.CoroutineAllocGenerator
+  m_EditorClassIdentifier: GCAllocTests::GCAllocTest.CoroutineAllocGenerator
   startCoroutineEveryN: 1
   coroutineInterval: 30
   yieldNewWait: 1
@@ -306,18 +306,18 @@ MonoBehaviour:
   yieldBoxedValue: 1
   nestedCoroutines: 1
   nestingDepth: 3
---- !u!114 &378677386
+--- !u!114 &701516343
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 6c91fc4a3fee5eb40be03069d61b7a61, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GCAllocTest.CommonAllocPatterns
+  m_EditorClassIdentifier: GCAllocTests::GCAllocTest.CommonAllocPatterns
   stringConcat: 1
   stringFormat: 1
   valueTypeToString: 1
@@ -331,25 +331,26 @@ MonoBehaviour:
   gameObjectName: 1
   gameObjectTag: 1
   getComponents: 1
---- !u!114 &378677387
+--- !u!114 &701516344
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: ea1743baf5e43c140892208d61db7f8e, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GCAllocTest.GCAllocTestRig
---- !u!4 &378677388
+  m_EditorClassIdentifier: GCAllocTests::GCAllocTest.GCAllocTestRig
+  m_Profile: {fileID: 11400000, guid: cb7d8c21e7b17ff41aac8a90110ac003, type: 2}
+--- !u!4 &701516345
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 378677376}
+  m_GameObject: {fileID: 701516333}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
@@ -362,4 +363,4 @@ Transform:
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
-  - {fileID: 378677388}
+  - {fileID: 701516345}

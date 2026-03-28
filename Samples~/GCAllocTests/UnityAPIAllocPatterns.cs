@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 namespace GCAllocTest.UnityAPIs
@@ -44,6 +46,20 @@ namespace GCAllocTest.UnityAPIs
         Rigidbody m_Rigidbody;
         RaycastHit[] m_RaycastHitBuffer;
 
+        // ── Optimized-mode fields ────────────────────────────────────
+        bool m_Optimized;
+        List<Vector3> m_VertexList;
+        List<Vector3> m_NormalList;
+        List<int> m_TriList;
+        List<Vector2> m_UVList;
+        Collider[] m_OverlapBuffer;
+        string m_CachedName;
+        string m_CachedTag;
+        string m_CachedChildName;
+        List<Transform> m_TransformListBuffer;
+        SerializablePayload m_CachedPayload;
+        StringBuilder m_SharedSB;
+
         // ═══════════════════════════════════════════════════════════════
         //  Setup & Teardown
         // ═══════════════════════════════════════════════════════════════
@@ -68,6 +84,20 @@ namespace GCAllocTest.UnityAPIs
 
             // Pre-allocate buffer for NonAlloc contrast
             m_RaycastHitBuffer = new RaycastHit[32];
+
+            // Optimized-mode setup
+            m_Optimized = GCAllocTestRig.CurrentMode == AllocMode.Optimized;
+            m_VertexList = new List<Vector3>();
+            m_NormalList = new List<Vector3>();
+            m_TriList = new List<int>();
+            m_UVList = new List<Vector2>();
+            m_OverlapBuffer = new Collider[32];
+            m_CachedName = gameObject.name;
+            m_CachedTag = gameObject.tag;
+            m_CachedChildName = m_Child.name;
+            m_TransformListBuffer = new List<Transform>();
+            m_CachedPayload = new SerializablePayload { values = new float[3] };
+            m_SharedSB = new StringBuilder(128);
         }
 
         void OnDestroy()
@@ -109,13 +139,25 @@ namespace GCAllocTest.UnityAPIs
 
         void DoMeshAllocations()
         {
-            Mesh mesh = m_ChildMeshFilter.sharedMesh;
+            if (m_Optimized)
+            {
+                Mesh mesh = m_ChildMeshFilter.sharedMesh;
+                mesh.GetVertices(m_VertexList);
+                mesh.GetNormals(m_NormalList);
+                mesh.GetTriangles(m_TriList, 0);
+                mesh.GetUVs(0, m_UVList);
+                return;
+            }
 
-            // Each getter allocates a fresh managed array every call
-            _ = mesh.vertices;   // new Vector3[]
-            _ = mesh.normals;    // new Vector3[]
-            _ = mesh.triangles;  // new int[]
-            _ = mesh.uv;         // new Vector2[]
+            {
+                Mesh mesh = m_ChildMeshFilter.sharedMesh;
+
+                // Each getter allocates a fresh managed array every call
+                _ = mesh.vertices;   // new Vector3[]
+                _ = mesh.normals;    // new Vector3[]
+                _ = mesh.triangles;  // new int[]
+                _ = mesh.uv;         // new Vector2[]
+            }
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -124,6 +166,14 @@ namespace GCAllocTest.UnityAPIs
 
         void DoMaterialAllocations()
         {
+            if (m_Optimized)
+            {
+                // Use sharedMaterial only — no clone, no allocation
+                _ = m_ChildRenderer.sharedMaterial;
+                _ = m_ChildRenderer.sharedMaterial;
+                return;
+            }
+
             // .material clones the shared material on first access per
             // renderer instance (allocates). Subsequent calls return the
             // existing clone.
@@ -143,14 +193,25 @@ namespace GCAllocTest.UnityAPIs
 
         void DoPhysicsAllocations()
         {
-            Vector3 origin = transform.position;
+            if (m_Optimized)
+            {
+                Vector3 origin = transform.position;
+                Physics.RaycastNonAlloc(origin, Vector3.forward, m_RaycastHitBuffer, 100f);
+                Physics.OverlapSphereNonAlloc(origin, 5f, m_OverlapBuffer);
+                Physics.RaycastNonAlloc(origin, Vector3.forward, m_RaycastHitBuffer, 100f);
+                return;
+            }
 
-            // These allocate fresh arrays every call
-            _ = Physics.RaycastAll(origin, Vector3.forward, 100f);
-            _ = Physics.OverlapSphere(origin, 5f);
+            {
+                Vector3 origin = transform.position;
 
-            // Contrast: NonAlloc writes into a pre-allocated buffer — no alloc
-            Physics.RaycastNonAlloc(origin, Vector3.forward, m_RaycastHitBuffer, 100f);
+                // These allocate fresh arrays every call
+                _ = Physics.RaycastAll(origin, Vector3.forward, 100f);
+                _ = Physics.OverlapSphere(origin, 5f);
+
+                // Contrast: NonAlloc writes into a pre-allocated buffer — no alloc
+                Physics.RaycastNonAlloc(origin, Vector3.forward, m_RaycastHitBuffer, 100f);
+            }
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -159,6 +220,16 @@ namespace GCAllocTest.UnityAPIs
 
         void DoStringAPIAllocations()
         {
+            if (m_Optimized)
+            {
+                _ = m_CachedTag;
+                _ = m_CachedName;
+                _ = m_CachedChildName;
+                _ = m_CachedChildName;
+                _ = gameObject.CompareTag("Untagged");
+                return;
+            }
+
             // Each of these allocates a new managed string
             _ = gameObject.tag;
             _ = gameObject.name;
@@ -177,6 +248,20 @@ namespace GCAllocTest.UnityAPIs
 
         void DoHierarchyAllocations()
         {
+            if (m_Optimized)
+            {
+                // Index-based iteration — no enumerator allocation
+                for (int i = 0; i < transform.childCount; i++)
+                    _ = transform.GetChild(i);
+
+                // List overload — fills existing list, no array allocation
+                m_TransformListBuffer.Clear();
+                GetComponentsInChildren(m_TransformListBuffer);
+
+                // FindObjectsByType has no non-alloc variant — skip in optimized mode
+                return;
+            }
+
             // foreach over Transform allocates an enumerator
             foreach (Transform child in transform)
             {
@@ -196,6 +281,21 @@ namespace GCAllocTest.UnityAPIs
 
         void DoSerializationAllocations()
         {
+            if (m_Optimized)
+            {
+                m_CachedPayload.id = m_Frame;
+                m_SharedSB.Clear();
+                m_SharedSB.Append("test_").Append(m_Frame);
+                m_CachedPayload.name = m_SharedSB.ToString(); // one string alloc unavoidable
+                m_CachedPayload.values[0] = 1f;
+                m_CachedPayload.values[1] = 2f;
+                m_CachedPayload.values[2] = 3f;
+
+                var payloadString = JsonUtility.ToJson(m_CachedPayload); // unavoidable string alloc
+                JsonUtility.FromJsonOverwrite(payloadString, m_CachedPayload); // reuse existing object
+                return;
+            }
+
             // Object + string + array allocation in the payload itself
             var payload = new SerializablePayload
             {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 namespace GCAllocTest.Systems.EventDriven
@@ -25,9 +26,33 @@ namespace GCAllocTest.Systems.EventDriven
         public bool recursiveAlloc = true;
         public int recursionDepth = 5;
 
+        // ═══════════════════════════════════════════════════════
+        //  Optimized-mode fields
+        // ═══════════════════════════════════════════════════════
+
+        bool m_Optimized;
+        StringBuilder m_SharedSB;
+        Action<string> m_CachedLambdaHandler;
+
+        internal static StringBuilder s_SharedSB;
+        internal static float[] s_ContactBuffer;
+
         // Events
         public event Action<string> OnStatusChanged;
         public event Action<int, float> OnDamageDealt;
+
+        // ═══════════════════════════════════════════════════════
+        //  Lifecycle
+        // ═══════════════════════════════════════════════════════
+
+        void Awake()
+        {
+            m_Optimized = GCAllocTestRig.CurrentMode == AllocMode.Optimized;
+            m_SharedSB = new StringBuilder(256);
+            m_CachedLambdaHandler = HandleLambdaMessage;
+            s_SharedSB = m_SharedSB;
+            s_ContactBuffer = new float[3];
+        }
 
         void OnEnable()
         {
@@ -47,13 +72,37 @@ namespace GCAllocTest.Systems.EventDriven
             if (lambdaSubscription) DoLambdaSubscription();
             if (eventHandlerAllocs) DoEventHandlerAllocs();
             if (deepCallStack) DoDeepCallStack();
-            if (recursiveAlloc) DoRecursiveAlloc(recursionDepth, "root");
+            if (recursiveAlloc)
+            {
+                if (m_Optimized) m_SharedSB.Clear();
+                DoRecursiveAlloc(recursionDepth, "root");
+            }
         }
 
-        // ── Lambda subscription churn ───────────────────────
+        // ═══════════════════════════════════════════════════════
+        //  Optimized-mode handler for cached lambda
+        // ═══════════════════════════════════════════════════════
+
+        void HandleLambdaMessage(string msg)
+        {
+            m_SharedSB.Clear();
+            m_SharedSB.Append(msg).Append(Time.frameCount);
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  Lambda subscription churn
+        // ═══════════════════════════════════════════════════════
 
         void DoLambdaSubscription()
         {
+            if (m_Optimized)
+            {
+                OnStatusChanged += m_CachedLambdaHandler;
+                OnStatusChanged?.Invoke("tick");
+                OnStatusChanged -= m_CachedLambdaHandler;
+                return;
+            }
+
             int frame = Time.frameCount;
 
             // This creates a new closure + delegate each frame
@@ -63,7 +112,9 @@ namespace GCAllocTest.Systems.EventDriven
             OnStatusChanged -= handler;
         }
 
-        // ── Event handler allocations ───────────────────────
+        // ═══════════════════════════════════════════════════════
+        //  Event handler allocations
+        // ═══════════════════════════════════════════════════════
 
         void DoEventHandlerAllocs()
         {
@@ -74,32 +125,60 @@ namespace GCAllocTest.Systems.EventDriven
 
         void HandleStatusChanged(string status)
         {
+            if (m_Optimized)
+            {
+                m_SharedSB.Clear();
+                m_SharedSB.Append("[Status] ").Append(status).Append(" at ").Append(Time.time);
+                return;
+            }
             // Allocates via string concat
             string log = "[Status] " + status + " at " + Time.time;
         }
 
         void HandleDamageDealt(int amount, float time)
         {
+            if (m_Optimized)
+            {
+                m_SharedSB.Clear();
+                m_SharedSB.Append("Damage: ").Append(amount).Append(" at t=").Append(time);
+                return;
+            }
             // Allocates via boxing + string format
             string log = string.Format("Damage: {0} at t={1:F2}", amount, time);
         }
 
-        // ── Deep call stacks ────────────────────────────────
+        // ═══════════════════════════════════════════════════════
+        //  Deep call stacks
+        // ═══════════════════════════════════════════════════════
 
         void DoDeepCallStack()
         {
             SystemManager.ProcessFrame(Time.frameCount);
         }
 
-        // ── Recursive allocation ────────────────────────────
+        // ═══════════════════════════════════════════════════════
+        //  Recursive allocation
+        // ═══════════════════════════════════════════════════════
 
         void DoRecursiveAlloc(int depth, string prefix)
         {
+            if (m_Optimized)
+            {
+                DoRecursiveAllocOpt(depth);
+                return;
+            }
             if (depth <= 0) return;
 
             // Allocates a new string at each recursion level
             string next = prefix + "." + depth;
             DoRecursiveAlloc(depth - 1, next);
+        }
+
+        void DoRecursiveAllocOpt(int depth)
+        {
+            if (depth <= 0) return;
+            m_SharedSB.Append('.').Append(depth);
+            DoRecursiveAllocOpt(depth - 1);
         }
     }
 
@@ -133,6 +212,17 @@ namespace GCAllocTest.Systems.EventDriven
 
         static void AllocateContactData(int frame, int index)
         {
+            if (GCAllocTestRig.CurrentMode == AllocMode.Optimized)
+            {
+                var sb = EventAllocGenerator.s_SharedSB;
+                sb.Clear();
+                sb.Append("Contact_").Append(frame).Append("_").Append(index);
+                var buf = EventAllocGenerator.s_ContactBuffer;
+                buf[0] = index;
+                buf[1] = frame;
+                buf[2] = UnityEngine.Time.deltaTime;
+                return;
+            }
             // The actual allocation — deep in the stack
             string contactInfo = CreateContactString(frame, index);
             var contactData = new float[] { index, frame, UnityEngine.Time.deltaTime };

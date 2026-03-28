@@ -4,63 +4,114 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GC Alloc Compare</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: #1a1a2e;
-  color: #e0e0e0;
-  min-height: 100vh;
+:root {
+  --bg-base: #080c14;
+  --bg-surface: #0d1219;
+  --bg-elevated: #141c28;
+  --bg-hover: #1a2538;
+  --border-subtle: #172033;
+  --border-default: #1e2d44;
+  --border-accent: #2a3f5f;
+  --text-primary: #e4eaf4;
+  --text-secondary: #8494ad;
+  --text-muted: #4e6180;
+  --green: #22c55e;
+  --green-dim: rgba(34, 197, 94, 0.12);
+  --green-glow: rgba(34, 197, 94, 0.06);
+  --red: #ef4444;
+  --red-dim: rgba(239, 68, 68, 0.12);
+  --red-glow: rgba(239, 68, 68, 0.06);
+  --teal: #06b6d4;
+  --teal-dim: rgba(6, 182, 212, 0.12);
+  --orange: #f59e0b;
+  --orange-dim: rgba(245, 158, 11, 0.12);
+  --clr-before: #e5953e;
+  --clr-after: #22b8a0;
+  --font-sans: 'Plus Jakarta Sans', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', monospace;
 }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+.hidden { display: none !important; }
 
 /* ═══════════════════════════════════════════════════
    HEADER
    ═══════════════════════════════════════════════════ */
 
 .header {
-  background: #16213e;
-  border-bottom: 1px solid #2a2a4a;
-  padding: 12px 24px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 28px;
+  height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
-.header h1 {
-  font-size: 18px;
-  font-weight: 600;
-  color: #a8b4ce;
-  letter-spacing: 0.5px;
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
+
+.header-brand svg { opacity: 0.5; }
+
+.header h1 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.header-center {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.header-center .file-label { color: var(--text-secondary); font-weight: 600; }
+.header-center .file-sep { color: var(--border-accent); }
 
 .header-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
-
-.header-files {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  font-size: 13px;
-  color: #8892a8;
-}
-
-.header-files span { font-weight: 600; color: #a8b4ce; }
 
 .btn {
-  padding: 6px 14px;
-  border: 1px solid #3a3a5a;
-  border-radius: 4px;
-  background: #2a2a4a;
-  color: #c0c8d8;
+  padding: 5px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: all 0.15s;
 }
 
-.btn:hover { background: #3a3a5a; }
+.btn:hover { background: var(--bg-hover); border-color: var(--border-accent); color: var(--text-primary); }
 
 /* ═══════════════════════════════════════════════════
    LANDING / DROP ZONES
@@ -71,68 +122,74 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 60px 24px;
+  padding: 80px 28px;
+  min-height: calc(100vh - 52px);
 }
 
 .landing h2 {
-  font-size: 28px;
-  font-weight: 300;
-  color: #a8b4ce;
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
   margin-bottom: 8px;
 }
 
 .landing p {
-  color: #6a7a8a;
-  margin-bottom: 40px;
-  font-size: 14px;
+  color: var(--text-muted);
+  font-size: 15px;
+  margin-bottom: 48px;
 }
 
 .drop-zones {
-  display: flex;
-  gap: 32px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
   width: 100%;
-  max-width: 800px;
+  max-width: 680px;
 }
 
 .drop-zone {
-  flex: 1;
-  border: 2px dashed #3a3a5a;
-  border-radius: 8px;
-  padding: 40px 24px;
+  border: 2px dashed var(--border-default);
+  border-radius: 12px;
+  padding: 44px 24px;
   text-align: center;
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
+  transition: all 0.25s;
   position: relative;
+  background: var(--bg-surface);
 }
 
 .drop-zone:hover, .drop-zone.drag-over {
-  border-color: #5a6aaa;
-  background: rgba(90, 106, 170, 0.08);
+  border-color: var(--border-accent);
+  background: var(--bg-elevated);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
 }
 
 .drop-zone.loaded {
-  border-color: #4a8a6a;
+  border-color: var(--green);
   border-style: solid;
-  background: rgba(74, 138, 106, 0.06);
+  background: var(--green-glow);
 }
 
 .drop-zone-label {
   font-size: 14px;
-  font-weight: 600;
-  color: #8892a8;
-  margin-bottom: 8px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
 }
 
 .drop-zone-hint {
   font-size: 12px;
-  color: #5a6a7a;
+  color: var(--text-muted);
 }
 
 .drop-zone-summary {
-  margin-top: 12px;
-  font-size: 12px;
-  color: #7a9a8a;
-  line-height: 1.6;
+  margin-top: 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--green);
+  line-height: 1.7;
 }
 
 .drop-zone input[type="file"] {
@@ -146,63 +203,161 @@ body {
    SUMMARY CARDS
    ═══════════════════════════════════════════════════ */
 
-.comparison { display: none; padding: 20px 24px; }
-.comparison.visible { display: block; }
+.comparison { padding: 24px 28px; }
 
-.summary-cards {
+.summary-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 14px;
+  margin-bottom: 24px;
 }
 
-.card {
-  background: #16213e;
-  border: 1px solid #2a2a4a;
-  border-radius: 6px;
-  padding: 14px 16px;
+.summary-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 18px 20px;
+  position: relative;
+  overflow: hidden;
 }
 
-.card-title {
-  font-size: 11px;
+.summary-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--border-accent);
+}
+
+.card-label {
+  font-size: 10px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: #6a7a8a;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.card-hero {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
   margin-bottom: 8px;
+  color: var(--text-primary);
 }
 
-.card-values {
+.card-sub {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
   display: flex;
-  gap: 12px;
-  align-items: baseline;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
-.card-before, .card-after {
-  font-size: 13px;
-  color: #8892a8;
-}
-
-.card-delta {
-  font-size: 15px;
-  font-weight: 600;
-}
+.card-sub .arrow { color: var(--text-muted); font-size: 10px; }
 
 .card-detail {
   font-size: 12px;
-  color: #8892a8;
-  margin-top: 6px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.positive { color: #ef5350; }
-.negative { color: #66bb6a; }
-.neutral { color: #6a7a8a; }
+.card-detail .dot { color: var(--text-muted); margin: 0 4px; }
+
+.clr-green { color: var(--green); }
+.clr-red { color: var(--red); }
+.clr-teal { color: var(--teal); }
+.clr-orange { color: var(--orange); }
+.clr-muted { color: var(--text-muted); }
+.clr-before { color: var(--clr-before); }
+.clr-after { color: var(--clr-after); }
 
 /* ═══════════════════════════════════════════════════
-   FILTER BAR
+   PAIRED BAR CHART
    ═══════════════════════════════════════════════════ */
 
-.filter-bar {
+.chart-section {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.chart-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.chart-legend-swatch.swatch-before { background: var(--clr-before); }
+.chart-legend-swatch.swatch-after { background: var(--clr-after); }
+
+.chart-section .table-wrap { border: none; }
+
+.chart-bar-cell {
+  min-width: 120px;
+  padding: 4px 4px;
+}
+
+.chart-bar-cell .bar-wrap {
+  display: flex;
+  height: 14px;
+}
+
+.chart-bar-cell.chart-before .bar-wrap { justify-content: flex-end; }
+.chart-bar-cell.chart-after .bar-wrap { justify-content: flex-start; }
+
+.chart-bar-cell .tbl-bar {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.chart-before .tbl-bar { background: var(--clr-before); }
+.chart-after .tbl-bar { background: var(--clr-after); }
+
+/* ═══════════════════════════════════════════════════
+   TOOLBAR (FILTER BAR)
+   ═══════════════════════════════════════════════════ */
+
+.toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -210,50 +365,65 @@ body {
   flex-wrap: wrap;
 }
 
-.filter-bar input {
-  padding: 6px 12px;
-  border: 1px solid #3a3a5a;
-  border-radius: 4px;
-  background: #16213e;
-  color: #c0c8d8;
+.toolbar input {
+  padding: 7px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
   font-size: 13px;
-  width: 240px;
+  width: 200px;
   outline: none;
+  transition: border-color 0.15s;
 }
 
-.filter-bar input:focus { border-color: #5a6aaa; }
+.toolbar input:focus { border-color: var(--border-accent); }
+.toolbar input::placeholder { color: var(--text-muted); }
 
-.filter-bar input::placeholder { color: #4a5a6a; }
+.toolbar input.exclude { width: 160px; }
 
-.category-btn {
-  padding: 4px 12px;
-  border: 1px solid #3a3a5a;
-  border-radius: 12px;
+.pill-group {
+  display: flex;
+  gap: 4px;
+}
+
+.pill {
+  padding: 4px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
   background: transparent;
-  color: #8892a8;
-  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
+  white-space: nowrap;
 }
 
-.category-btn:hover { border-color: #5a6aaa; color: #c0c8d8; }
-.category-btn.active { background: #2a3a5a; border-color: #5a6aaa; color: #e0e8f8; }
+.pill:hover { border-color: var(--border-accent); color: var(--text-secondary); }
+.pill.active { background: var(--bg-elevated); border-color: var(--border-accent); color: var(--text-primary); }
+.pill .pill-count { color: var(--text-muted); margin-left: 2px; }
 
 .result-count {
   margin-left: auto;
-  font-size: 12px;
-  color: #6a7a8a;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 /* ═══════════════════════════════════════════════════
-   COMPARISON TABLE
+   TABLE
    ═══════════════════════════════════════════════════ */
 
 .table-wrap {
-  overflow-x: auto;
-  border: 1px solid #2a2a4a;
-  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  overflow: hidden;
 }
+
+.table-scroll { overflow-x: auto; }
 
 table {
   width: 100%;
@@ -262,79 +432,135 @@ table {
 }
 
 th {
-  background: #16213e;
-  border-bottom: 2px solid #2a2a4a;
-  padding: 8px 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-default);
+  border-right: 1px solid var(--border-subtle);
+  padding: 10px 14px;
   text-align: left;
-  font-weight: 600;
-  color: #8892a8;
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-weight: 700;
+  color: var(--text-muted);
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.06em;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
   position: sticky;
   top: 0;
+  z-index: 10;
 }
 
-th:hover { color: #c0c8d8; }
+th:hover { color: var(--text-secondary); }
 
 th .sort-arrow {
-  margin-left: 4px;
-  font-size: 10px;
-  color: #5a6aaa;
+  margin-left: 3px;
+  font-size: 9px;
+  color: var(--border-accent);
 }
 
 th.num { text-align: right; }
 
-td { padding: 6px 12px; border-bottom: 1px solid #1e1e3a; }
-td.num { text-align: right; font-variant-numeric: tabular-nums; }
-td.name-cell { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+th:last-child { border-right: none; }
 
-tr:hover { background: rgba(90, 106, 170, 0.06); }
+td {
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  line-height: 1.3;
+}
 
-tr.status-improved { background: rgba(102, 187, 106, 0.06); }
-tr.status-regressed { background: rgba(239, 83, 80, 0.06); }
-tr.status-new { background: rgba(255, 152, 0, 0.06); }
-tr.status-removed { background: rgba(0, 150, 136, 0.06); }
+td:last-child { border-right: none; }
+
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+td.name-cell {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+tr:hover td { background: var(--bg-hover); }
+
+tr.row-regressed td { background: var(--red-glow); }
+tr.row-regressed:hover td { background: var(--red-dim); }
 
 .badge {
   display: inline-block;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 10px;
-  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  font-size: 9px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.04em;
 }
 
-.badge-improved { background: rgba(102, 187, 106, 0.15); color: #66bb6a; }
-.badge-regressed { background: rgba(239, 83, 80, 0.15); color: #ef5350; }
-.badge-new { background: rgba(255, 152, 0, 0.15); color: #ff9800; }
-.badge-removed { background: rgba(0, 150, 136, 0.15); color: #26a69a; }
-.badge-unchanged { background: rgba(120, 120, 140, 0.15); color: #78788c; }
+.badge-improved { background: var(--green-dim); color: var(--green); }
+.badge-regressed { background: var(--red-dim); color: var(--red); }
+.badge-new { background: var(--orange-dim); color: var(--orange); }
+.badge-removed { background: var(--teal-dim); color: var(--teal); }
+.badge-unchanged { background: rgba(100,100,120,0.12); color: var(--text-muted); }
 
-@media (max-width: 900px) {
-  .summary-cards { grid-template-columns: repeat(2, 1fr); }
-  .drop-zones { flex-direction: column; }
+.bar-cell {
+  min-width: 120px;
+  padding: 6px 4px;
+}
+
+.bar-cell .bar-wrap {
+  display: flex;
+  height: 14px;
+}
+
+.bar-cell .tbl-bar {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.bar-before-cell .bar-wrap { justify-content: flex-end; }
+.bar-before-cell .tbl-bar { background: var(--clr-before); }
+
+.bar-after-cell .bar-wrap { justify-content: flex-start; }
+.bar-after-cell .tbl-bar { background: var(--clr-after); }
+
+@media (max-width: 1200px) {
+  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 768px) {
+  .summary-grid { grid-template-columns: 1fr; }
+  .drop-zones { grid-template-columns: 1fr; }
 }
 </style>
 </head>
 <body>
 
-<div class="header" id="header">
-  <h1>GC Alloc Compare</h1>
-  <div class="header-files" id="headerFiles"></div>
-  <div class="header-actions" id="headerActions" style="display:none">
-    <button class="btn" id="swapBtn" title="Swap before/after">Swap</button>
+<div class="header">
+  <div class="header-brand">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+    <h1>GC Alloc Compare</h1>
+  </div>
+  <div class="header-center" id="headerFiles"></div>
+  <div class="header-actions hidden" id="headerActions">
+    <button class="btn" id="swapBtn">Swap</button>
     <button class="btn" id="resetBtn">Reset</button>
   </div>
 </div>
 
 <div class="landing" id="landing">
-  <h2>GC Alloc Compare</h2>
-  <p>Drop two marker table CSVs to compare GC allocation changes</p>
+  <h2>Compare GC Allocations</h2>
+  <p>Drop two marker-table CSVs to visualize allocation changes</p>
   <div class="drop-zones">
     <div class="drop-zone" id="dropBefore">
       <input type="file" accept=".csv" data-slot="before">
@@ -351,40 +577,94 @@ tr.status-removed { background: rgba(0, 150, 136, 0.06); }
   </div>
 </div>
 
-<div class="comparison" id="comparison">
-  <div class="summary-cards" id="summaryCards"></div>
-  <div class="filter-bar">
-    <input type="text" id="nameFilter" placeholder="Filter by method name...">
-    <button class="category-btn active" data-cat="all">All</button>
-    <button class="category-btn" data-cat="improved">Improved</button>
-    <button class="category-btn" data-cat="regressed">Regressed</button>
-    <button class="category-btn" data-cat="new">New</button>
-    <button class="category-btn" data-cat="removed">Removed</button>
-    <button class="category-btn" data-cat="unchanged">Unchanged</button>
+<div class="comparison hidden" id="comparison">
+  <div class="summary-grid" id="summaryCards"></div>
+
+  <div class="chart-section">
+    <div class="chart-header">
+      <div class="chart-title">Top Changes by Impact</div>
+      <div class="chart-legend">
+        <div class="chart-legend-item"><div class="chart-legend-swatch swatch-before"></div> Before</div>
+        <div class="chart-legend-item"><div class="chart-legend-swatch swatch-after"></div> After</div>
+      </div>
+    </div>
+    <div class="table-wrap"><div class="table-scroll">
+      <table id="tornadoChart"></table>
+    </div></div>
+  </div>
+
+  <div class="toolbar">
+    <input type="text" id="nameFilter" placeholder="Filter methods...">
+    <input type="text" id="excludeFilter" class="exclude" placeholder="Exclude...">
+    <div class="pill-group" id="pillGroup">
+      <button class="pill active" data-cat="all">All</button>
+      <button class="pill" data-cat="improved">Improved</button>
+      <button class="pill" data-cat="regressed">Regressed</button>
+      <button class="pill" data-cat="new">New</button>
+      <button class="pill" data-cat="removed">Removed</button>
+      <button class="pill" data-cat="unchanged">Unchanged</button>
+    </div>
     <span class="result-count" id="resultCount"></span>
   </div>
+
   <div class="table-wrap">
-    <table>
-      <thead id="tableHead"></thead>
-      <tbody id="tableBody"></tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
 <script>
 // ═══════════════════════════════════════════════════
+//  CONSTANTS
+// ═══════════════════════════════════════════════════
+
+var STATUS = {
+  IMPROVED:  'improved',
+  REGRESSED: 'regressed',
+  NEW:       'new',
+  REMOVED:   'removed',
+  UNCHANGED: 'unchanged'
+};
+
+var STORAGE = {
+  BEFORE:      'gccompare_before',
+  BEFORE_NAME: 'gccompare_before_name',
+  AFTER:       'gccompare_after',
+  AFTER_NAME:  'gccompare_after_name'
+};
+
+var CSV = {
+  NAME:  'Name',
+  BYTES: 'Bytes',
+  COUNT: 'Count',
+  MEAN:  'Mean/Frame'
+};
+
+var FILTER_ALL = 'all';
+var CHART_TOP_N = 14;
+
+// ═══════════════════════════════════════════════════
 //  STATE
 // ═══════════════════════════════════════════════════
 
-let beforeData = null;
-let afterData = null;
-let beforeName = '';
-let afterName = '';
-let comparison = [];
-let sortCol = 'absDeltaBytes';
-let sortAsc = false;
-let filterCategory = 'all';
-let filterText = '';
+var beforeData = null;
+var afterData = null;
+var beforeCsv = '';
+var afterCsv = '';
+var beforeName = '';
+var afterName = '';
+var comparison = [];
+var compResult = null;
+var sortCol = 'absDeltaBytes';
+var sortDisplayCol = 'absDeltaBytes';
+var sortAsc = false;
+var filterCategory = FILTER_ALL;
+var filterText = '';
+var excludeText = '';
 
 // ═══════════════════════════════════════════════════
 //  CSV PARSER (RFC 4180)
@@ -402,50 +682,18 @@ function parseCSV(text) {
     var ch = text[i];
     if (inQuotes) {
       if (ch === '"') {
-        if (i + 1 < len && text[i + 1] === '"') {
-          field += '"';
-          i += 2;
-        } else {
-          inQuotes = false;
-          i++;
-        }
-      } else {
-        field += ch;
-        i++;
-      }
+        if (i + 1 < len && text[i + 1] === '"') { field += '"'; i += 2; }
+        else { inQuotes = false; i++; }
+      } else { field += ch; i++; }
     } else {
-      if (ch === '"') {
-        inQuotes = true;
-        i++;
-      } else if (ch === ',') {
-        row.push(field);
-        field = '';
-        i++;
-      } else if (ch === '\r') {
-        row.push(field);
-        field = '';
-        lines.push(row);
-        row = [];
-        i++;
-        if (i < len && text[i] === '\n') i++;
-      } else if (ch === '\n') {
-        row.push(field);
-        field = '';
-        lines.push(row);
-        row = [];
-        i++;
-      } else {
-        field += ch;
-        i++;
-      }
+      if (ch === '"') { inQuotes = true; i++; }
+      else if (ch === ',') { row.push(field); field = ''; i++; }
+      else if (ch === '\r') { row.push(field); field = ''; lines.push(row); row = []; i++; if (i < len && text[i] === '\n') i++; }
+      else if (ch === '\n') { row.push(field); field = ''; lines.push(row); row = []; i++; }
+      else { field += ch; i++; }
     }
   }
-
-  if (field.length > 0 || row.length > 0) {
-    row.push(field);
-    lines.push(row);
-  }
-
+  if (field.length > 0 || row.length > 0) { row.push(field); lines.push(row); }
   if (lines.length < 2) return [];
 
   var headers = lines[0];
@@ -454,18 +702,14 @@ function parseCSV(text) {
     var cols = lines[r];
     if (cols.length < 2) continue;
     var obj = {};
-    for (var c = 0; c < headers.length; c++) {
+    for (var c = 0; c < headers.length; c++)
       obj[headers[c].trim()] = c < cols.length ? cols[c].trim() : '';
-    }
     rows.push(obj);
   }
   return rows;
 }
 
-function parseNum(val) {
-  var n = parseFloat(val);
-  return isNaN(n) ? 0 : n;
-}
+function parseNum(val) { var n = parseFloat(val); return isNaN(n) ? 0 : n; }
 
 // ═══════════════════════════════════════════════════
 //  FORMATTING
@@ -480,27 +724,35 @@ function formatBytes(bytes) {
 
 function formatDelta(bytes) {
   if (bytes === 0) return '0 B';
-  var prefix = bytes > 0 ? '+' : '';
-  return prefix + formatBytes(bytes);
+  return (bytes > 0 ? '+' : '') + formatBytes(bytes);
 }
 
 function formatPct(pct) {
   if (!isFinite(pct)) return 'new';
   if (pct === 0) return '0%';
-  var prefix = pct > 0 ? '+' : '';
-  return prefix + pct.toFixed(1) + '%';
+  return (pct > 0 ? '+' : '') + pct.toFixed(1) + '%';
 }
 
 function formatCount(n) {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  var abs = Math.abs(n);
+  var sign = n < 0 ? '-' : '';
+  if (abs >= 1000000) return sign + (abs / 1000000).toFixed(1) + 'M';
+  if (abs >= 1000) return sign + (abs / 1000).toFixed(1) + 'K';
   return '' + n;
 }
 
-function deltaClass(val) {
-  if (val < 0) return 'negative';
-  if (val > 0) return 'positive';
-  return 'neutral';
+function clr(val) { return val < 0 ? 'clr-green' : val > 0 ? 'clr-red' : 'clr-muted'; }
+
+function truncateName(name) {
+  var short = name;
+  var dblColon = short.lastIndexOf('::');
+  if (dblColon > 0) short = short.substring(dblColon + 2);
+  var dashIdx = short.indexOf(' \u2014 ');
+  if (dashIdx === -1) dashIdx = short.indexOf('\u2014');
+  if (dashIdx > 0) short = short.substring(0, dashIdx);
+  var parenIdx = short.indexOf('(');
+  if (parenIdx > 0) short = short.substring(0, parenIdx) + '()';
+  return short;
 }
 
 // ═══════════════════════════════════════════════════
@@ -508,145 +760,80 @@ function deltaClass(val) {
 // ═══════════════════════════════════════════════════
 
 function buildComparison(before, after) {
-  var beforeMap = {};
-  var totalBytesBefore = 0;
-  var totalCountBefore = 0;
+  var beforeMap = {}, totalBytesBefore = 0, totalCountBefore = 0;
   for (var i = 0; i < before.length; i++) {
-    var b = before[i];
-    beforeMap[b.Name] = b;
-    totalBytesBefore += parseNum(b.Bytes);
-    totalCountBefore += parseNum(b.Count);
+    beforeMap[before[i][CSV.NAME]] = before[i];
+    totalBytesBefore += parseNum(before[i][CSV.BYTES]);
+    totalCountBefore += parseNum(before[i][CSV.COUNT]);
   }
 
-  var afterMap = {};
-  var totalBytesAfter = 0;
-  var totalCountAfter = 0;
+  var afterMap = {}, totalBytesAfter = 0, totalCountAfter = 0;
   for (var i = 0; i < after.length; i++) {
-    var a = after[i];
-    afterMap[a.Name] = a;
-    totalBytesAfter += parseNum(a.Bytes);
-    totalCountAfter += parseNum(a.Count);
+    afterMap[after[i][CSV.NAME]] = after[i];
+    totalBytesAfter += parseNum(after[i][CSV.BYTES]);
+    totalCountAfter += parseNum(after[i][CSV.COUNT]);
   }
 
   var allNames = {};
-  for (var i = 0; i < before.length; i++) allNames[before[i].Name] = true;
-  for (var i = 0; i < after.length; i++) allNames[after[i].Name] = true;
+  for (var i = 0; i < before.length; i++) allNames[before[i][CSV.NAME]] = true;
+  for (var i = 0; i < after.length; i++) allNames[after[i][CSV.NAME]] = true;
 
   var results = [];
   var names = Object.keys(allNames);
   for (var i = 0; i < names.length; i++) {
     var name = names[i];
-    var bRow = beforeMap[name];
-    var aRow = afterMap[name];
+    var bRow = beforeMap[name], aRow = afterMap[name];
     var entry = { name: name };
 
     if (bRow && aRow) {
-      entry.beforeBytes = parseNum(bRow.Bytes);
-      entry.afterBytes = parseNum(aRow.Bytes);
+      entry.beforeBytes = parseNum(bRow[CSV.BYTES]);
+      entry.afterBytes = parseNum(aRow[CSV.BYTES]);
       entry.deltaBytes = entry.afterBytes - entry.beforeBytes;
       entry.deltaPct = entry.beforeBytes !== 0 ? (entry.deltaBytes / entry.beforeBytes) * 100 : 0;
-      entry.beforeMean = parseNum(bRow['Mean/Frame']);
-      entry.afterMean = parseNum(aRow['Mean/Frame']);
+      entry.beforeMean = parseNum(bRow[CSV.MEAN]);
+      entry.afterMean = parseNum(aRow[CSV.MEAN]);
       entry.deltaMean = entry.afterMean - entry.beforeMean;
-      entry.beforeCount = parseNum(bRow.Count);
-      entry.afterCount = parseNum(aRow.Count);
+      entry.beforeCount = parseNum(bRow[CSV.COUNT]);
+      entry.afterCount = parseNum(aRow[CSV.COUNT]);
       entry.deltaCount = entry.afterCount - entry.beforeCount;
-      if (entry.deltaBytes < 0) entry.status = 'improved';
-      else if (entry.deltaBytes > 0) entry.status = 'regressed';
-      else entry.status = 'unchanged';
+      entry.status = entry.deltaBytes < 0 ? STATUS.IMPROVED : entry.deltaBytes > 0 ? STATUS.REGRESSED : STATUS.UNCHANGED;
     } else if (bRow) {
-      entry.beforeBytes = parseNum(bRow.Bytes);
+      entry.beforeBytes = parseNum(bRow[CSV.BYTES]);
       entry.afterBytes = null;
       entry.deltaBytes = -entry.beforeBytes;
       entry.deltaPct = -100;
-      entry.beforeMean = parseNum(bRow['Mean/Frame']);
+      entry.beforeMean = parseNum(bRow[CSV.MEAN]);
       entry.afterMean = null;
       entry.deltaMean = -entry.beforeMean;
-      entry.beforeCount = parseNum(bRow.Count);
+      entry.beforeCount = parseNum(bRow[CSV.COUNT]);
       entry.afterCount = null;
       entry.deltaCount = -entry.beforeCount;
-      entry.status = 'removed';
+      entry.status = STATUS.REMOVED;
     } else {
       entry.beforeBytes = null;
-      entry.afterBytes = parseNum(aRow.Bytes);
+      entry.afterBytes = parseNum(aRow[CSV.BYTES]);
       entry.deltaBytes = entry.afterBytes;
       entry.deltaPct = Infinity;
       entry.beforeMean = null;
-      entry.afterMean = parseNum(aRow['Mean/Frame']);
+      entry.afterMean = parseNum(aRow[CSV.MEAN]);
       entry.deltaMean = entry.afterMean;
       entry.beforeCount = null;
-      entry.afterCount = parseNum(aRow.Count);
+      entry.afterCount = parseNum(aRow[CSV.COUNT]);
       entry.deltaCount = entry.afterCount;
-      entry.status = 'new';
+      entry.status = STATUS.NEW;
     }
-
     entry.absDeltaBytes = Math.abs(entry.deltaBytes);
+    entry.improvementMag = entry.deltaBytes < 0 ? -entry.deltaBytes : 0;
+    entry.regressionMag = entry.deltaBytes > 0 ? entry.deltaBytes : 0;
     results.push(entry);
   }
 
-  return {
-    rows: results,
-    totalBytesBefore: totalBytesBefore,
-    totalBytesAfter: totalBytesAfter,
-    totalCountBefore: totalCountBefore,
-    totalCountAfter: totalCountAfter
-  };
+  return { rows: results, totalBytesBefore: totalBytesBefore, totalBytesAfter: totalBytesAfter, totalCountBefore: totalCountBefore, totalCountAfter: totalCountAfter };
 }
 
 // ═══════════════════════════════════════════════════
-//  RENDERING
+//  RENDERING — SUMMARY CARDS
 // ═══════════════════════════════════════════════════
-
-var columns = [
-  { key: 'name',        label: 'Name',            num: false },
-  { key: 'status',      label: 'Status',          num: false },
-  { key: 'beforeBytes', label: 'Before Bytes',    num: true },
-  { key: 'afterBytes',  label: 'After Bytes',     num: true },
-  { key: 'deltaBytes',  label: 'Delta Bytes',     num: true },
-  { key: 'deltaPct',    label: 'Delta %',         num: true },
-  { key: 'beforeMean',  label: 'Before Mean/F',   num: true },
-  { key: 'afterMean',   label: 'After Mean/F',    num: true },
-  { key: 'deltaMean',   label: 'Delta Mean/F',    num: true },
-  { key: 'beforeCount', label: 'Before Count',    num: true },
-  { key: 'afterCount',  label: 'After Count',     num: true }
-];
-
-var statusOrder = { regressed: 0, 'new': 1, improved: 2, removed: 3, unchanged: 4 };
-
-function sortRows(rows) {
-  var col = sortCol;
-  var asc = sortAsc;
-  rows.sort(function(a, b) {
-    var va, vb;
-    if (col === 'name') {
-      va = a.name.toLowerCase();
-      vb = b.name.toLowerCase();
-      return asc ? (va < vb ? -1 : va > vb ? 1 : 0) : (vb < va ? -1 : vb > va ? 1 : 0);
-    }
-    if (col === 'status') {
-      va = statusOrder[a.status];
-      vb = statusOrder[b.status];
-    } else {
-      va = a[col];
-      vb = b[col];
-      if (va === null) va = asc ? Infinity : -Infinity;
-      if (vb === null) vb = asc ? Infinity : -Infinity;
-    }
-    return asc ? va - vb : vb - va;
-  });
-}
-
-function filterRows(rows) {
-  var filtered = [];
-  var text = filterText.toLowerCase();
-  for (var i = 0; i < rows.length; i++) {
-    var r = rows[i];
-    if (filterCategory !== 'all' && r.status !== filterCategory) continue;
-    if (text && r.name.toLowerCase().indexOf(text) === -1) continue;
-    filtered.push(r);
-  }
-  return filtered;
-}
 
 function renderSummary(comp) {
   var deltaBytes = comp.totalBytesAfter - comp.totalBytesBefore;
@@ -654,121 +841,236 @@ function renderSummary(comp) {
   var deltaBytesPct = comp.totalBytesBefore !== 0 ? (deltaBytes / comp.totalBytesBefore) * 100 : 0;
   var deltaCountPct = comp.totalCountBefore !== 0 ? (deltaCount / comp.totalCountBefore) * 100 : 0;
 
-  var improved = 0, regressed = 0, unchanged = 0, added = 0, removed = 0;
-  for (var i = 0; i < comp.rows.length; i++) {
-    var s = comp.rows[i].status;
-    if (s === 'improved') improved++;
-    else if (s === 'regressed') regressed++;
-    else if (s === 'unchanged') unchanged++;
-    else if (s === 'new') added++;
-    else if (s === 'removed') removed++;
+  var counts = {};
+  counts[STATUS.IMPROVED] = 0; counts[STATUS.REGRESSED] = 0; counts[STATUS.UNCHANGED] = 0; counts[STATUS.NEW] = 0; counts[STATUS.REMOVED] = 0;
+  for (var i = 0; i < comp.rows.length; i++) counts[comp.rows[i].status]++;
+
+  var h = '';
+
+  // Card 1: Total Bytes
+  h += '<div class="summary-card">';
+  h += '<div class="card-label">Total Bytes</div>';
+  h += '<div class="card-hero">' + formatDelta(deltaBytes) + '</div>';
+  h += '<div class="card-sub"><span class="clr-before">' + formatBytes(comp.totalBytesBefore) + '</span><span class="arrow">&rarr;</span><span class="clr-after">' + formatBytes(comp.totalBytesAfter) + '</span></div>';
+  h += '<div class="card-detail">' + formatPct(deltaBytesPct) + '</div>';
+  h += '</div>';
+
+  // Card 2: Total Allocations
+  h += '<div class="summary-card">';
+  h += '<div class="card-label">Total Allocations</div>';
+  h += '<div class="card-hero">' + (deltaCount > 0 ? '+' : '') + formatCount(deltaCount) + '</div>';
+  h += '<div class="card-sub"><span class="clr-before">' + formatCount(comp.totalCountBefore) + '</span><span class="arrow">&rarr;</span><span class="clr-after">' + formatCount(comp.totalCountAfter) + '</span></div>';
+  h += '<div class="card-detail">' + formatPct(deltaCountPct) + '</div>';
+  h += '</div>';
+
+  // Card 3: Methods Changed
+  h += '<div class="summary-card">';
+  h += '<div class="card-label">Methods Changed</div>';
+  h += '<div class="card-hero">' + (counts[STATUS.IMPROVED] + counts[STATUS.REGRESSED] + counts[STATUS.NEW] + counts[STATUS.REMOVED]) + '</div>';
+  h += '<div class="card-detail">';
+  h += '<span class="clr-green">' + counts[STATUS.IMPROVED] + ' improved</span><span class="dot">&middot;</span>';
+  h += '<span class="clr-red">' + counts[STATUS.REGRESSED] + ' regressed</span><span class="dot">&middot;</span>';
+  h += counts[STATUS.UNCHANGED] + ' unchanged';
+  h += '</div></div>';
+
+  // Card 4: Added / Removed
+  h += '<div class="summary-card">';
+  h += '<div class="card-label">Added / Removed</div>';
+  h += '<div class="card-hero">' + (counts[STATUS.NEW] + counts[STATUS.REMOVED]) + '</div>';
+  h += '<div class="card-detail">';
+  h += '<span class="clr-orange">' + counts[STATUS.NEW] + ' new</span><span class="dot">&middot;</span>';
+  h += '<span class="clr-teal">' + counts[STATUS.REMOVED] + ' removed</span>';
+  h += '</div></div>';
+
+  document.getElementById('summaryCards').innerHTML = h;
+
+  // Update pill counts
+  var pills = document.querySelectorAll('.pill');
+  for (var i = 0; i < pills.length; i++) {
+    var cat = pills[i].dataset.cat;
+    if (cat === FILTER_ALL) {
+      pills[i].innerHTML = 'All <span class="pill-count">' + comp.rows.length + '</span>';
+    } else {
+      var c = counts[cat] || 0;
+      pills[i].innerHTML = cat.charAt(0).toUpperCase() + cat.slice(1) + ' <span class="pill-count">' + c + '</span>';
+    }
   }
-
-  var html = '';
-
-  html += '<div class="card">';
-  html += '<div class="card-title">Total Bytes</div>';
-  html += '<div class="card-values">';
-  html += '<span class="card-before">' + formatBytes(comp.totalBytesBefore) + '</span>';
-  html += '<span style="color:#4a5a6a">&rarr;</span>';
-  html += '<span class="card-after">' + formatBytes(comp.totalBytesAfter) + '</span>';
-  html += '</div>';
-  html += '<div class="card-detail"><span class="' + deltaClass(deltaBytes) + '">' + formatDelta(deltaBytes) + ' (' + formatPct(deltaBytesPct) + ')</span></div>';
-  html += '</div>';
-
-  html += '<div class="card">';
-  html += '<div class="card-title">Total Allocations</div>';
-  html += '<div class="card-values">';
-  html += '<span class="card-before">' + formatCount(comp.totalCountBefore) + '</span>';
-  html += '<span style="color:#4a5a6a">&rarr;</span>';
-  html += '<span class="card-after">' + formatCount(comp.totalCountAfter) + '</span>';
-  html += '</div>';
-  html += '<div class="card-detail"><span class="' + deltaClass(deltaCount) + '">' + formatDelta(deltaCount).replace(/[KMB]/g, '') + ' (' + formatPct(deltaCountPct) + ')</span></div>';
-  html += '</div>';
-
-  html += '<div class="card">';
-  html += '<div class="card-title">Methods Changed</div>';
-  html += '<div class="card-detail" style="margin-top:0">';
-  html += '<span class="negative">' + improved + ' improved</span> &middot; ';
-  html += '<span class="positive">' + regressed + ' regressed</span> &middot; ';
-  html += '<span class="neutral">' + unchanged + ' unchanged</span>';
-  html += '</div></div>';
-
-  html += '<div class="card">';
-  html += '<div class="card-title">Methods Added / Removed</div>';
-  html += '<div class="card-detail" style="margin-top:0">';
-  html += '<span class="positive">' + added + ' new</span> &middot; ';
-  html += '<span class="negative">' + removed + ' removed</span>';
-  html += '</div></div>';
-
-  document.getElementById('summaryCards').innerHTML = html;
 }
 
-function renderHeader() {
-  var files = document.getElementById('headerFiles');
-  var actions = document.getElementById('headerActions');
+// ═══════════════════════════════════════════════════
+//  RENDERING — PAIRED BAR CHART (sorted by Abs Diff)
+// ═══════════════════════════════════════════════════
 
-  if (beforeData && afterData) {
-    files.innerHTML = '<span>Before:</span> ' + esc(beforeName) + ' &nbsp;&middot;&nbsp; <span>After:</span> ' + esc(afterName);
-    actions.style.display = 'flex';
-  } else {
-    files.innerHTML = '';
-    actions.style.display = 'none';
+function renderTornadoChart(rows) {
+  var sorted = rows.slice().sort(function(a, b) { return b.absDeltaBytes - a.absDeltaBytes; });
+  var top = sorted.slice(0, CHART_TOP_N);
+  if (top.length === 0) { document.getElementById('tornadoChart').innerHTML = ''; return; }
+
+  var maxAbsDelta = top[0].absDeltaBytes;
+  if (maxAbsDelta === 0) return;
+
+  var h = '<thead><tr>';
+  h += '<th>Name</th>';
+  h += '<th class="num clr-before">Before</th>';
+  h += '<th>&lt;</th>';
+  h += '<th>&gt;</th>';
+  h += '<th class="num clr-after">After</th>';
+  h += '<th class="num">Abs Diff</th>';
+  h += '</tr></thead><tbody>';
+
+  for (var i = 0; i < top.length; i++) {
+    var r = top[i];
+    var bv = r.beforeBytes !== null ? r.beforeBytes : 0;
+    var av = r.afterBytes !== null ? r.afterBytes : 0;
+    var barPct = Math.max(1, Math.round((r.absDeltaBytes / maxAbsDelta) * 100));
+    var showLeft = r.deltaBytes < 0;
+    var showRight = r.deltaBytes > 0;
+    var shortName = truncateName(r.name);
+
+    h += '<tr>';
+    h += '<td class="name-cell" title="' + esc(r.name) + '">' + esc(shortName) + '</td>';
+    h += '<td class="num">' + (bv > 0 ? formatBytes(bv) : '-') + '</td>';
+    h += '<td class="chart-bar-cell chart-before"><div class="bar-wrap">';
+    if (showLeft) h += '<div class="tbl-bar" style="width:' + barPct + '%"></div>';
+    h += '</div></td>';
+    h += '<td class="chart-bar-cell chart-after"><div class="bar-wrap">';
+    if (showRight) h += '<div class="tbl-bar" style="width:' + barPct + '%"></div>';
+    h += '</div></td>';
+    h += '<td class="num">' + (av > 0 ? formatBytes(av) : '-') + '</td>';
+    h += '<td class="num">' + formatBytes(r.absDeltaBytes) + '</td>';
+    h += '</tr>';
   }
+
+  h += '</tbody>';
+  document.getElementById('tornadoChart').innerHTML = h;
+}
+
+// ═══════════════════════════════════════════════════
+//  RENDERING — TABLE
+// ═══════════════════════════════════════════════════
+
+var columns = [
+  { key: 'name',        label: 'Method',       num: false },
+  { key: 'status',      label: 'Status',       num: false },
+  { key: 'beforeBytes', label: 'Before',       num: true },
+  { key: '_barBefore',  label: '&lt;',         num: false, sortKey: 'improvementMag' },
+  { key: '_barAfter',   label: '&gt;',         num: false, sortKey: 'regressionMag' },
+  { key: 'afterBytes',  label: 'After',        num: true },
+  { key: 'deltaBytes',  label: 'Diff',         num: true },
+  { key: 'absDeltaBytes', label: 'Abs Diff',   num: true },
+  { key: 'deltaPct',    label: 'Change',       num: true },
+  { key: 'deltaMean',   label: '\u0394 Mean/F', num: true },
+  { key: 'beforeCount', label: 'Count Before', num: true },
+  { key: 'afterCount',  label: 'Count After',  num: true }
+];
+
+var statusOrder = {};
+statusOrder[STATUS.REGRESSED] = 0;
+statusOrder[STATUS.NEW] = 1;
+statusOrder[STATUS.IMPROVED] = 2;
+statusOrder[STATUS.REMOVED] = 3;
+statusOrder[STATUS.UNCHANGED] = 4;
+
+function sortRows(rows) {
+  var col = sortCol, asc = sortAsc;
+  rows.sort(function(a, b) {
+    var va, vb;
+    if (col === 'name') {
+      va = a.name.toLowerCase(); vb = b.name.toLowerCase();
+      return asc ? (va < vb ? -1 : va > vb ? 1 : 0) : (vb < va ? -1 : vb > va ? 1 : 0);
+    }
+    if (col === 'status') { va = statusOrder[a.status]; vb = statusOrder[b.status]; }
+    else { va = a[col]; vb = b[col]; if (va === null) va = asc ? Infinity : -Infinity; if (vb === null) vb = asc ? Infinity : -Infinity; }
+    return asc ? va - vb : vb - va;
+  });
+}
+
+function filterRows(rows) {
+  var filtered = [];
+  var text = filterText.toLowerCase();
+  var excl = excludeText.toLowerCase();
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (filterCategory !== FILTER_ALL && r.status !== filterCategory) continue;
+    if (text && r.name.toLowerCase().indexOf(text) === -1) continue;
+    if (excl && r.name.toLowerCase().indexOf(excl) !== -1) continue;
+    filtered.push(r);
+  }
+  return filtered;
 }
 
 function renderTable() {
   var head = document.getElementById('tableHead');
   var body = document.getElementById('tableBody');
 
-  var headerHtml = '<tr>';
+  var hh = '<tr>';
   for (var i = 0; i < columns.length; i++) {
     var c = columns[i];
+    var effectiveKey = c.sortKey || c.key;
     var arrow = '';
-    if (sortCol === c.key) arrow = '<span class="sort-arrow">' + (sortAsc ? '\u25B2' : '\u25BC') + '</span>';
-    else if (sortCol === 'absDeltaBytes' && c.key === 'deltaBytes') arrow = '<span class="sort-arrow">' + (sortAsc ? '\u25B2' : '\u25BC') + '</span>';
-    headerHtml += '<th class="' + (c.num ? 'num' : '') + '" data-col="' + c.key + '">' + c.label + arrow + '</th>';
+    if (sortDisplayCol === c.key)
+      arrow = '<span class="sort-arrow">' + (sortAsc ? '\u25B2' : '\u25BC') + '</span>';
+    hh += '<th class="' + (c.num ? 'num' : '') + '" data-col="' + c.key + '">' + c.label + arrow + '</th>';
   }
-  headerHtml += '</tr>';
-  head.innerHTML = headerHtml;
+  hh += '</tr>';
+  head.innerHTML = hh;
 
   var visible = filterRows(comparison);
   sortRows(visible);
+  document.getElementById('resultCount').textContent = visible.length + ' / ' + comparison.length;
 
-  document.getElementById('resultCount').textContent = visible.length + ' of ' + comparison.length + ' methods';
-
-  var rowsHtml = '';
-  for (var i = 0; i < visible.length; i++) {
-    var r = visible[i];
-    rowsHtml += '<tr class="status-' + r.status + '">';
-
-    rowsHtml += '<td class="name-cell" title="' + esc(r.name) + '">' + esc(r.name) + '</td>';
-
-    rowsHtml += '<td><span class="badge badge-' + r.status + '">' + r.status + '</span></td>';
-
-    rowsHtml += '<td class="num">' + (r.beforeBytes !== null ? formatBytes(r.beforeBytes) : '') + '</td>';
-    rowsHtml += '<td class="num">' + (r.afterBytes !== null ? formatBytes(r.afterBytes) : '') + '</td>';
-    rowsHtml += '<td class="num ' + deltaClass(r.deltaBytes) + '">' + formatDelta(r.deltaBytes) + '</td>';
-    rowsHtml += '<td class="num ' + deltaClass(r.deltaBytes) + '">' + formatPct(r.deltaPct) + '</td>';
-
-    rowsHtml += '<td class="num">' + (r.beforeMean !== null ? formatBytes(r.beforeMean) : '') + '</td>';
-    rowsHtml += '<td class="num">' + (r.afterMean !== null ? formatBytes(r.afterMean) : '') + '</td>';
-    rowsHtml += '<td class="num ' + deltaClass(r.deltaMean) + '">' + formatDelta(Math.round(r.deltaMean)) + '</td>';
-
-    rowsHtml += '<td class="num">' + (r.beforeCount !== null ? formatCount(r.beforeCount) : '') + '</td>';
-    rowsHtml += '<td class="num">' + (r.afterCount !== null ? formatCount(r.afterCount) : '') + '</td>';
-
-    rowsHtml += '</tr>';
+  // Shared scale: both < and > bars scaled against the same max absolute delta
+  var maxAbsDelta = 0;
+  for (var i = 0; i < comparison.length; i++) {
+    if (comparison[i].absDeltaBytes > maxAbsDelta) maxAbsDelta = comparison[i].absDeltaBytes;
   }
 
-  body.innerHTML = rowsHtml;
+  var rh = '';
+  for (var i = 0; i < visible.length; i++) {
+    var r = visible[i];
+    var showLeft = r.deltaBytes < 0;
+    var showRight = r.deltaBytes > 0;
+    var barPct = maxAbsDelta > 0 ? Math.max(1, Math.round((r.absDeltaBytes / maxAbsDelta) * 100)) : 0;
+
+    rh += '<tr' + (r.status === STATUS.REGRESSED ? ' class="row-regressed"' : '') + '>';
+    rh += '<td class="name-cell" title="' + esc(r.name) + '">' + esc(r.name) + '</td>';
+    rh += '<td><span class="badge badge-' + r.status + '">' + r.status + '</span></td>';
+    rh += '<td class="num">' + (r.beforeBytes !== null ? formatBytes(r.beforeBytes) : '-') + '</td>';
+
+    // < bar (right-justified, amber — shows improvement magnitude)
+    rh += '<td class="bar-cell bar-before-cell"><div class="bar-wrap">';
+    if (showLeft) rh += '<div class="tbl-bar" style="width:' + barPct + '%"></div>';
+    rh += '</div></td>';
+    // > bar (left-justified, teal — shows regression magnitude)
+    rh += '<td class="bar-cell bar-after-cell"><div class="bar-wrap">';
+    if (showRight) rh += '<div class="tbl-bar" style="width:' + barPct + '%"></div>';
+    rh += '</div></td>';
+
+    rh += '<td class="num">' + (r.afterBytes !== null ? formatBytes(r.afterBytes) : '-') + '</td>';
+    rh += '<td class="num">' + formatDelta(r.deltaBytes) + '</td>';
+    rh += '<td class="num">' + formatBytes(r.absDeltaBytes) + '</td>';
+    rh += '<td class="num">' + formatPct(r.deltaPct) + '</td>';
+    rh += '<td class="num">' + formatDelta(Math.round(r.deltaMean)) + '</td>';
+    rh += '<td class="num">' + (r.beforeCount !== null ? formatCount(r.beforeCount) : '-') + '</td>';
+    rh += '<td class="num">' + (r.afterCount !== null ? formatCount(r.afterCount) : '-') + '</td>';
+    rh += '</tr>';
+  }
+  body.innerHTML = rh;
 }
 
-function esc(str) {
-  var d = document.createElement('div');
-  d.textContent = str;
-  return d.innerHTML;
+function renderHeader() {
+  var el = document.getElementById('headerFiles');
+  var actions = document.getElementById('headerActions');
+  if (beforeData && afterData) {
+    el.innerHTML = '<span class="file-label clr-before">Before:</span> ' + esc(beforeName) + ' <span class="file-sep">&middot;</span> <span class="file-label clr-after">After:</span> ' + esc(afterName);
+    actions.classList.remove('hidden');
+  } else {
+    el.innerHTML = '';
+    actions.classList.add('hidden');
+  }
 }
+
+function esc(str) { var d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
 
 // ═══════════════════════════════════════════════════
 //  FILE LOADING
@@ -777,19 +1079,13 @@ function esc(str) {
 function loadFile(file, slot) {
   var reader = new FileReader();
   reader.onload = function(e) {
-    var rows = parseCSV(e.target.result);
+    var csv = e.target.result;
+    var rows = parseCSV(csv);
     if (rows.length === 0) return;
-
-    if (slot === 'before') {
-      beforeData = rows;
-      beforeName = file.name;
-      updateDropZone('before', rows, file.name);
-    } else {
-      afterData = rows;
-      afterName = file.name;
-      updateDropZone('after', rows, file.name);
-    }
-
+    if (slot === 'before') { beforeData = rows; beforeCsv = csv; beforeName = file.name; updateDropZone('before', rows, file.name); }
+    else { afterData = rows; afterCsv = csv; afterName = file.name; updateDropZone('after', rows, file.name); }
+    var keys = slot === 'before' ? [STORAGE.BEFORE, STORAGE.BEFORE_NAME] : [STORAGE.AFTER, STORAGE.AFTER_NAME];
+    try { localStorage.setItem(keys[0], csv); localStorage.setItem(keys[1], file.name); } catch(e) {}
     if (beforeData && afterData) showComparison();
   };
   reader.readAsText(file);
@@ -798,58 +1094,41 @@ function loadFile(file, slot) {
 function updateDropZone(slot, rows, fileName) {
   var zone = document.getElementById(slot === 'before' ? 'dropBefore' : 'dropAfter');
   var summary = document.getElementById(slot === 'before' ? 'summaryBefore' : 'summaryAfter');
-
   zone.classList.add('loaded');
-
-  var totalBytes = 0;
-  var totalCount = 0;
-  for (var i = 0; i < rows.length; i++) {
-    totalBytes += parseNum(rows[i].Bytes);
-    totalCount += parseNum(rows[i].Count);
-  }
-
-  summary.innerHTML = '<strong>' + esc(fileName) + '</strong><br>' +
-    rows.length + ' methods &middot; ' + formatBytes(totalBytes) + ' &middot; ' + formatCount(totalCount) + ' allocs';
+  var totalBytes = 0, totalCount = 0;
+  for (var i = 0; i < rows.length; i++) { totalBytes += parseNum(rows[i][CSV.BYTES]); totalCount += parseNum(rows[i][CSV.COUNT]); }
+  summary.innerHTML = '<strong>' + esc(fileName) + '</strong><br>' + rows.length + ' methods &middot; ' + formatBytes(totalBytes) + ' &middot; ' + formatCount(totalCount) + ' allocs';
 }
 
 function showComparison() {
-  var comp = buildComparison(beforeData, afterData);
-  comparison = comp.rows;
-
-  document.getElementById('landing').style.display = 'none';
-  document.getElementById('comparison').classList.add('visible');
-
+  compResult = buildComparison(beforeData, afterData);
+  comparison = compResult.rows;
+  document.getElementById('landing').classList.add('hidden');
+  document.getElementById('comparison').classList.remove('hidden');
   renderHeader();
-  renderSummary(comp);
+  renderSummary(compResult);
+  renderTornadoChart(comparison);
   renderTable();
 }
 
 function reset() {
-  beforeData = null;
-  afterData = null;
-  beforeName = '';
-  afterName = '';
-  comparison = [];
-  sortCol = 'absDeltaBytes';
-  sortAsc = false;
-  filterCategory = 'all';
-  filterText = '';
-
-  document.getElementById('landing').style.display = '';
-  document.getElementById('comparison').classList.remove('visible');
+  beforeData = null; afterData = null; beforeCsv = ''; afterCsv = ''; beforeName = ''; afterName = '';
+  comparison = []; compResult = null;
+  sortCol = 'absDeltaBytes'; sortDisplayCol = 'absDeltaBytes'; sortAsc = false;
+  try { localStorage.removeItem(STORAGE.BEFORE); localStorage.removeItem(STORAGE.BEFORE_NAME); localStorage.removeItem(STORAGE.AFTER); localStorage.removeItem(STORAGE.AFTER_NAME); } catch(e) {}
+  filterCategory = FILTER_ALL; filterText = ''; excludeText = '';
+  document.getElementById('landing').classList.remove('hidden');
+  document.getElementById('comparison').classList.add('hidden');
   document.getElementById('headerFiles').innerHTML = '';
-  document.getElementById('headerActions').style.display = 'none';
-
+  document.getElementById('headerActions').classList.add('hidden');
   var zones = document.querySelectorAll('.drop-zone');
   for (var i = 0; i < zones.length; i++) zones[i].classList.remove('loaded');
   document.getElementById('summaryBefore').innerHTML = '';
   document.getElementById('summaryAfter').innerHTML = '';
   document.getElementById('nameFilter').value = '';
-
-  var btns = document.querySelectorAll('.category-btn');
-  for (var i = 0; i < btns.length; i++) {
-    btns[i].classList.toggle('active', btns[i].dataset.cat === 'all');
-  }
+  document.getElementById('excludeFilter').value = '';
+  var pills = document.querySelectorAll('.pill');
+  for (var i = 0; i < pills.length; i++) pills[i].classList.toggle('active', pills[i].dataset.cat === FILTER_ALL);
 }
 
 // ═══════════════════════════════════════════════════
@@ -858,58 +1137,36 @@ function reset() {
 
 function setupDropZone(zoneId, slot) {
   var zone = document.getElementById(zoneId);
-
-  zone.addEventListener('dragover', function(e) {
-    e.preventDefault();
-    zone.classList.add('drag-over');
-  });
-
-  zone.addEventListener('dragleave', function() {
-    zone.classList.remove('drag-over');
-  });
-
-  zone.addEventListener('drop', function(e) {
-    e.preventDefault();
-    zone.classList.remove('drag-over');
-    var files = e.dataTransfer.files;
-    if (files.length > 0) loadFile(files[0], slot);
-  });
-
-  var input = zone.querySelector('input[type="file"]');
-  input.addEventListener('change', function() {
-    if (this.files.length > 0) loadFile(this.files[0], slot);
-  });
+  zone.addEventListener('dragover', function(e) { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', function() { zone.classList.remove('drag-over'); });
+  zone.addEventListener('drop', function(e) { e.preventDefault(); zone.classList.remove('drag-over'); if (e.dataTransfer.files.length > 0) loadFile(e.dataTransfer.files[0], slot); });
+  zone.querySelector('input[type="file"]').addEventListener('change', function() { if (this.files.length > 0) loadFile(this.files[0], slot); });
 }
 
 setupDropZone('dropBefore', 'before');
 setupDropZone('dropAfter', 'after');
 
 document.getElementById('swapBtn').addEventListener('click', function() {
-  var tmpData = beforeData;
-  var tmpName = beforeName;
-  beforeData = afterData;
-  beforeName = afterName;
-  afterData = tmpData;
-  afterName = tmpName;
+  var td = beforeData, tc = beforeCsv, tn = beforeName;
+  beforeData = afterData; beforeCsv = afterCsv; beforeName = afterName;
+  afterData = td; afterCsv = tc; afterName = tn;
+  try { localStorage.setItem(STORAGE.BEFORE, beforeCsv); localStorage.setItem(STORAGE.BEFORE_NAME, beforeName); localStorage.setItem(STORAGE.AFTER, afterCsv); localStorage.setItem(STORAGE.AFTER_NAME, afterName); } catch(e) {}
   showComparison();
 });
 
 document.getElementById('resetBtn').addEventListener('click', reset);
 
-document.getElementById('nameFilter').addEventListener('input', function() {
-  filterText = this.value;
-  renderTable();
-});
+document.getElementById('nameFilter').addEventListener('input', function() { filterText = this.value; renderTable(); });
+document.getElementById('excludeFilter').addEventListener('input', function() { excludeText = this.value; renderTable(); });
 
-document.querySelectorAll('.category-btn').forEach(function(btn) {
-  btn.addEventListener('click', function() {
+var allPills = document.querySelectorAll('.pill');
+for (var i = 0; i < allPills.length; i++) {
+  allPills[i].addEventListener('click', function() {
     filterCategory = this.dataset.cat;
-    document.querySelectorAll('.category-btn').forEach(function(b) {
-      b.classList.toggle('active', b.dataset.cat === filterCategory);
-    });
+    for (var j = 0; j < allPills.length; j++) allPills[j].classList.toggle('active', allPills[j].dataset.cat === filterCategory);
     renderTable();
   });
-});
+}
 
 document.getElementById('tableHead').addEventListener('click', function(e) {
   var th = e.target.closest('th');
@@ -917,37 +1174,44 @@ document.getElementById('tableHead').addEventListener('click', function(e) {
   var col = th.dataset.col;
   if (!col) return;
 
-  if (col === 'deltaBytes') {
-    if (sortCol === 'absDeltaBytes') {
-      sortAsc = !sortAsc;
-    } else if (sortCol === 'deltaBytes') {
-      sortCol = 'absDeltaBytes';
-      sortAsc = false;
-    } else {
-      sortCol = 'deltaBytes';
-      sortAsc = true;
-    }
-  } else {
-    if (sortCol === col) {
-      sortAsc = !sortAsc;
-    } else {
-      sortCol = col;
-      sortAsc = col === 'name';
+  // Resolve the actual sort key from the column definition
+  var actualKey = col;
+  for (var i = 0; i < columns.length; i++) {
+    if (columns[i].key === col && columns[i].sortKey) {
+      actualKey = columns[i].sortKey;
+      break;
     }
   }
+
+  if (sortDisplayCol === col) sortAsc = !sortAsc;
+  else sortAsc = actualKey === 'name';
+
+  sortCol = actualKey;
+  sortDisplayCol = col;
   renderTable();
 });
 
-// Handle drag-and-drop anywhere on the page when comparison is visible
-document.addEventListener('dragover', function(e) {
-  if (!beforeData || !afterData) return;
-  e.preventDefault();
-});
+document.addEventListener('dragover', function(e) { if (beforeData && afterData) e.preventDefault(); });
+document.addEventListener('drop', function(e) { if (beforeData && afterData) e.preventDefault(); });
 
-document.addEventListener('drop', function(e) {
-  if (!beforeData || !afterData) return;
-  e.preventDefault();
-});
+// Restore from localStorage on page load
+(function() {
+  try {
+    var bCsv = localStorage.getItem(STORAGE.BEFORE);
+    var bName = localStorage.getItem(STORAGE.BEFORE_NAME);
+    var aCsv = localStorage.getItem(STORAGE.AFTER);
+    var aName = localStorage.getItem(STORAGE.AFTER_NAME);
+    if (bCsv && aCsv) {
+      beforeData = parseCSV(bCsv);
+      beforeCsv = bCsv;
+      beforeName = bName || 'before.csv';
+      afterData = parseCSV(aCsv);
+      afterCsv = aCsv;
+      afterName = aName || 'after.csv';
+      if (beforeData.length > 0 && afterData.length > 0) showComparison();
+    }
+  } catch(e) {}
+})();
 </script>
 </body>
 </html>

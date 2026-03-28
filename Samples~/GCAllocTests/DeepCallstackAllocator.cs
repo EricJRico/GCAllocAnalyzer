@@ -29,7 +29,17 @@ namespace GCAllocTest.DeepStacks
         // ═══════════════════════════════════════════════════════════════════════
 
         int m_Frame;
+        bool m_Optimized;
         StringBuilder m_SharedSB;
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // Static Buffers (optimized mode)
+        // ═══════════════════════════════════════════════════════════════════════
+
+        internal static byte[] s_LeafBuffer;
+        internal static List<float> s_RecursiveLeafList;
+        internal static byte[] s_RecursiveLeafBuffer;
+        internal static byte[] s_MixedLeafBuffer;
 
         // ═══════════════════════════════════════════════════════════════════════
         // MonoBehaviour
@@ -38,6 +48,11 @@ namespace GCAllocTest.DeepStacks
         void Awake()
         {
             m_SharedSB = new StringBuilder(256);
+            m_Optimized = GCAllocTestRig.CurrentMode == AllocMode.Optimized;
+            s_LeafBuffer = new byte[128];
+            s_RecursiveLeafList = new List<float>(12);
+            s_RecursiveLeafBuffer = new byte[64];
+            s_MixedLeafBuffer = new byte[96];
         }
 
         void Update()
@@ -54,7 +69,16 @@ namespace GCAllocTest.DeepStacks
             // Pattern 2: Recursive — every 5 frames
             if (m_EnableRecursive && m_Frame % 5 == 0)
             {
-                RecursiveAlloc(m_RecursionDepth, "R");
+                if (m_Optimized)
+                {
+                    m_SharedSB.Clear();
+                    m_SharedSB.Append("R");
+                    RecursiveAllocOpt(m_RecursionDepth);
+                }
+                else
+                {
+                    RecursiveAlloc(m_RecursionDepth, "R");
+                }
             }
 
             // Pattern 3: Mixed — every 15 frames
@@ -83,6 +107,22 @@ namespace GCAllocTest.DeepStacks
             }
 
             RecursiveAlloc(depth - 1, current);
+        }
+
+        void RecursiveAllocOpt(int depth)
+        {
+            m_SharedSB.Append("_L").Append(depth);
+
+            if (depth == 0)
+            {
+                s_RecursiveLeafList.Clear();
+                for (int i = 0; i < m_RecursionDepth; i++)
+                    s_RecursiveLeafList.Add(0f);
+                s_RecursiveLeafBuffer[0] = 0xFF;
+                return;
+            }
+
+            RecursiveAllocOpt(depth - 1);
         }
 
         // ═══════════════════════════════════════════════════════════════════════
@@ -136,6 +176,13 @@ namespace GCAllocTest.DeepStacks
 
         public static void Step18(StringBuilder sb)
         {
+            if (GCAllocTestRig.CurrentMode == AllocMode.Optimized)
+            {
+                DeepCallstackAllocator.s_LeafBuffer[0] = 0xFF;
+                sb.Append("DeepChainLeaf");
+                return;
+            }
+
             // Leaf: allocate here so the full 18-level callstack is visible
             _ = new byte[128];
             sb.Append("DeepChainLeaf");
@@ -174,6 +221,12 @@ namespace GCAllocTest.DeepStacks
     {
         public static void Walk(string node, int depth)
         {
+            if (GCAllocTestRig.CurrentMode == AllocMode.Optimized)
+            {
+                WalkOpt(depth);
+                return;
+            }
+
             // Allocate a small string at every level
             string label = node + ".child_" + depth.ToString();
             _ = label;
@@ -187,6 +240,16 @@ namespace GCAllocTest.DeepStacks
             }
 
             Walk(label, depth - 1);
+        }
+
+        static void WalkOpt(int depth)
+        {
+            if (depth <= 0)
+            {
+                DeepCallstackAllocator.s_MixedLeafBuffer[0] = 0xFF;
+                return;
+            }
+            WalkOpt(depth - 1);
         }
     }
 }
