@@ -175,7 +175,6 @@ namespace GCAllocBreakdown.Editor
         // Reusable buffers
         readonly StringBuilder m_SharedSB = new(1024);
         readonly StringBuilder m_TimingLog = new(512);
-        readonly StringBuilder m_SelectionDiag = new(512); // temporary — remove after debugging
 
         void LogTiming(Stopwatch sw, string label)
         {
@@ -386,16 +385,11 @@ namespace GCAllocBreakdown.Editor
             RestoreMarkerSortIndicator();
 
             // ── 4. Graph state (viewport + Y-axis) ──
-            m_SelectionDiag.Append("  ApplyWindowState(");
-            m_SelectionDiag.Append(hasAllocs);
-            m_SelectionDiag.Append("): bars=");
-            m_SelectionDiag.Append(state.Graph.SelectedBars?.Length ?? -1);
-            m_SelectionDiag.Append('\n');
             m_GraphController.RestoreState(state.Graph);
             m_GraphController.RebuildGraph();
             // Re-apply selection — RebuildGraph calls SetData which clears it
             m_GraphController.RestoreSegmentSelection(state.Graph);
-            m_GraphController.RestoreBarSelection(state.Graph, m_SelectionDiag);
+            m_GraphController.RestoreBarSelection(state.Graph);
 
             // ── 5. Marker selection (ApplyFilters defaults to index 0) ──
             if (state.SelectedMarkerIndex >= 0 && state.SelectedMarkerIndex < m_FilteredGroups.Count)
@@ -431,14 +425,6 @@ namespace GCAllocBreakdown.Editor
         {
             GCAllocSettings.SettingsChanged -= OnSettingsChanged;
             m_SavedState = CaptureWindowState();
-
-            // Selection diagnostic (temporary)
-            m_SelectionDiag.Clear();
-            m_SelectionDiag.Append("[GCAllocAnalyzer][Selection] OnDisable: captured=");
-            m_SelectionDiag.Append(m_SavedState.Graph.SelectedBars?.Length ?? -1);
-            m_SelectionDiag.Append(", IsValid=");
-            m_SelectionDiag.Append(m_SavedState.Graph.IsValid);
-            Debug.Log(m_SelectionDiag.ToString());
 
             // If background write already completed, nothing to do.
             // If still in progress, spin-wait (must finish before domain unloads).
@@ -536,15 +522,6 @@ namespace GCAllocBreakdown.Editor
         /// </summary>
         void TryRestoreAfterReload()
         {
-            // Selection diagnostic (temporary)
-            m_SelectionDiag.Clear();
-            m_SelectionDiag.Append("[GCAllocAnalyzer][Selection] Restore trace:\n");
-            m_SelectionDiag.Append("  Deserialized: SelectedBars=");
-            m_SelectionDiag.Append(m_SavedState.Graph.SelectedBars?.Length ?? -1);
-            m_SelectionDiag.Append(", IsValid=");
-            m_SelectionDiag.Append(m_SavedState.Graph.IsValid);
-            m_SelectionDiag.Append('\n');
-
             m_SavedState.EnsureValid();
             m_Snapshot.EnsureNonSerializedLists();
             if (!m_Snapshot.HasData) return;
@@ -853,24 +830,11 @@ namespace GCAllocBreakdown.Editor
             if (isSubRange)
                 RebuildFromCache(subRangeStart, subRangeEnd);
 
-            // Selection diagnostic (temporary)
-            m_SelectionDiag.Append("  AllocRestore: isSubRange=");
-            m_SelectionDiag.Append(isSubRange);
-            m_SelectionDiag.Append(", savedBars=");
-            m_SelectionDiag.Append(m_SavedState.Graph.SelectedBars?.Length ?? -1);
-            m_SelectionDiag.Append('\n');
-
             long msPreApply = sw.ElapsedMilliseconds;
             m_IsRestoringState = true;
             ApplyWindowState(true);
             m_IsRestoringState = false;
             long msApply = sw.ElapsedMilliseconds - msPreApply;
-
-            // Selection diagnostic final state (temporary)
-            m_SelectionDiag.Append("  Final: HasFrameSelection=");
-            m_SelectionDiag.Append(m_GraphController.HasFrameSelection);
-            m_SelectionDiag.Append('\n');
-            Debug.Log(m_SelectionDiag.ToString());
 
             m_SaveBtn.SetEnabled(true);
             m_ExportBtn.SetEnabled(true);

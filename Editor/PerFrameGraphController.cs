@@ -923,31 +923,25 @@ namespace GCAllocBreakdown.Editor
 
         public BarGraphViewSnapshot CaptureState()
         {
-            // Diagnostic (temporary)
-            var sb = new StringBuilder(256);
-            sb.Append("[GCAllocAnalyzer][Selection] CaptureState:\n");
-            sb.Append("  SelectedBars(HashSet)=");
-            sb.Append(m_BarGraph.ViewState.SelectedBars.Count);
-            sb.Append("  m_HasSelection=");
-            sb.Append(m_HasSelection);
-            sb.Append("  m_SelectionBuffer=");
-            if (m_SelectionBuffer == null)
-                sb.Append("null");
-            else
-            {
-                int trueCount = 0;
-                int len = Math.Min(m_SelectionBuffer.Length, m_BarEntryCount);
-                for (int i = 0; i < len; i++)
-                    if (m_SelectionBuffer[i]) trueCount++;
-                sb.Append(trueCount);
-                sb.Append('/');
-                sb.Append(len);
-            }
-            sb.Append("  m_BarEntryCount=");
-            sb.Append(m_BarEntryCount);
-            UnityEngine.Debug.Log(sb.ToString());
+            var snap = m_BarGraph.CreateViewSnapshot();
 
-            return m_BarGraph.CreateViewSnapshot();
+            // SelectedBars (HashSet) is cleared by SetData → OnDataChanged during
+            // sub-range analysis, but m_SelectionBuffer retains the selection.
+            // Capture from the surviving source so the snapshot has the correct data.
+            if (m_HasSelection && m_SelectionBuffer != null)
+            {
+                int count = Math.Min(m_SelectionBuffer.Length, m_BarEntryCount);
+                int selected = 0;
+                for (int i = 0; i < count; i++)
+                    if (m_SelectionBuffer[i]) selected++;
+
+                var bars = new int[selected];
+                int idx = 0;
+                for (int i = 0; i < count; i++)
+                    if (m_SelectionBuffer[i]) bars[idx++] = i;
+                snap.SelectedBars = bars;
+            }
+            return snap;
         }
 
         public void RestoreState(BarGraphViewSnapshot state)
@@ -973,38 +967,29 @@ namespace GCAllocBreakdown.Editor
         /// Re-apply bar selection after RebuildGraph, which calls SetData
         /// and clears SelectedBars via OnDataChanged.
         /// </summary>
-        public void RestoreBarSelection(BarGraphViewSnapshot state, StringBuilder diag = null)
+        public void RestoreBarSelection(BarGraphViewSnapshot state)
         {
-            if (!state.IsValid || state.SelectedBars == null || state.SelectedBars.Length == 0)
-            {
-                diag?.Append("  RestoreBarSel: skipped (");
-                diag?.Append(state.IsValid ? "valid" : "invalid");
-                diag?.Append(", bars=");
-                diag?.Append(state.SelectedBars?.Length ?? -1);
-                diag?.Append(")\n");
-                return;
-            }
+            if (!state.IsValid || state.SelectedBars == null || state.SelectedBars.Length == 0) return;
+
+            // Populate m_SelectionBuffer directly from the snapshot. Do NOT
+            // populate ChartViewState.SelectedBars — it was empty before reload
+            // and populating it would activate the widget's selection highlight
+            // overlay and alpha dimming that weren't visible before.
+            if (m_SelectionBuffer == null || m_SelectionBuffer.Length < m_BarEntryCount)
+                m_SelectionBuffer = new bool[m_BarEntryCount];
+            else
+                Array.Clear(m_SelectionBuffer, 0, m_BarEntryCount);
 
             for (int i = 0; i < state.SelectedBars.Length; i++)
             {
                 int idx = state.SelectedBars[i];
                 if (idx >= 0 && idx < m_BarEntryCount)
-                    m_BarGraph.ViewState.SelectedBars.Add(idx);
+                    m_SelectionBuffer[idx] = true;
             }
 
-            PopulateSelectionBuffer();
+            m_HasSelection = true;
             m_OverviewStrip.BarVisualProvider = GetOverviewBarVisual;
             m_BarGraph.MarkDirtyRepaint();
-
-            diag?.Append("  RestoreBarSel: input=");
-            diag?.Append(state.SelectedBars.Length);
-            diag?.Append(" barCount=");
-            diag?.Append(m_BarEntryCount);
-            diag?.Append(" added=");
-            diag?.Append(m_BarGraph.ViewState.SelectedBars.Count);
-            diag?.Append(" hasSel=");
-            diag?.Append(m_HasSelection);
-            diag?.Append('\n');
         }
 
         // ═══════════════════════════════════════════════════
