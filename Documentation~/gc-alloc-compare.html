@@ -332,27 +332,6 @@ body {
 
 .chart-section .table-wrap { border: none; }
 
-.chart-bar-cell {
-  min-width: 120px;
-  padding: 4px 4px;
-}
-
-.chart-bar-cell .bar-wrap {
-  display: flex;
-  height: 14px;
-}
-
-.chart-bar-cell.chart-before .bar-wrap { justify-content: flex-end; }
-.chart-bar-cell.chart-after .bar-wrap { justify-content: flex-start; }
-
-.chart-bar-cell .tbl-bar {
-  height: 100%;
-  border-radius: 2px;
-}
-
-.chart-before .tbl-bar { background: var(--clr-before); }
-.chart-after .tbl-bar { background: var(--clr-after); }
-
 /* ═══════════════════════════════════════════════════
    TOOLBAR (FILTER BAR)
    ═══════════════════════════════════════════════════ */
@@ -523,16 +502,16 @@ tr.row-regressed:hover td { background: var(--red-dim); }
   height: 14px;
 }
 
-.bar-cell .tbl-bar {
+.bar-cell .bar-fill {
   height: 100%;
   border-radius: 2px;
 }
 
-.bar-before-cell .bar-wrap { justify-content: flex-end; }
-.bar-before-cell .tbl-bar { background: var(--clr-before); }
+.bar-before .bar-wrap { justify-content: flex-end; }
+.bar-before .bar-fill { background: var(--clr-before); }
 
-.bar-after-cell .bar-wrap { justify-content: flex-start; }
-.bar-after-cell .tbl-bar { background: var(--clr-after); }
+.bar-after .bar-wrap { justify-content: flex-start; }
+.bar-after .bar-fill { background: var(--clr-after); }
 
 @media (max-width: 1200px) {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
@@ -657,7 +636,6 @@ var beforeCsv = '';
 var afterCsv = '';
 var beforeName = '';
 var afterName = '';
-var comparison = [];
 var compResult = null;
 var sortCol = 'absDeltaBytes';
 var sortDisplayCol = 'absDeltaBytes';
@@ -742,6 +720,17 @@ function formatCount(n) {
 }
 
 function clr(val) { return val < 0 ? 'clr-green' : val > 0 ? 'clr-red' : 'clr-muted'; }
+
+function renderBarPair(deltaBytes, absDeltaBytes, maxAbsDelta) {
+  var barPct = maxAbsDelta > 0 ? Math.max(1, Math.round((absDeltaBytes / maxAbsDelta) * 100)) : 0;
+  var h = '<td class="bar-cell bar-before"><div class="bar-wrap">';
+  if (deltaBytes < 0) h += '<div class="bar-fill" style="width:' + barPct + '%"></div>';
+  h += '</div></td>';
+  h += '<td class="bar-cell bar-after"><div class="bar-wrap">';
+  if (deltaBytes > 0) h += '<div class="bar-fill" style="width:' + barPct + '%"></div>';
+  h += '</div></td>';
+  return h;
+}
 
 function truncateName(name) {
   var short = name;
@@ -922,20 +911,12 @@ function renderTornadoChart(rows) {
     var r = top[i];
     var bv = r.beforeBytes !== null ? r.beforeBytes : 0;
     var av = r.afterBytes !== null ? r.afterBytes : 0;
-    var barPct = Math.max(1, Math.round((r.absDeltaBytes / maxAbsDelta) * 100));
-    var showLeft = r.deltaBytes < 0;
-    var showRight = r.deltaBytes > 0;
     var shortName = truncateName(r.name);
 
     h += '<tr>';
     h += '<td class="name-cell" title="' + esc(r.name) + '">' + esc(shortName) + '</td>';
     h += '<td class="num">' + (bv > 0 ? formatBytes(bv) : '-') + '</td>';
-    h += '<td class="chart-bar-cell chart-before"><div class="bar-wrap">';
-    if (showLeft) h += '<div class="tbl-bar" style="width:' + barPct + '%"></div>';
-    h += '</div></td>';
-    h += '<td class="chart-bar-cell chart-after"><div class="bar-wrap">';
-    if (showRight) h += '<div class="tbl-bar" style="width:' + barPct + '%"></div>';
-    h += '</div></td>';
+    h += renderBarPair(r.deltaBytes, r.absDeltaBytes, maxAbsDelta);
     h += '<td class="num">' + (av > 0 ? formatBytes(av) : '-') + '</td>';
     h += '<td class="num">' + formatBytes(r.absDeltaBytes) + '</td>';
     h += '</tr>';
@@ -1015,36 +996,25 @@ function renderTable() {
   hh += '</tr>';
   head.innerHTML = hh;
 
-  var visible = filterRows(comparison);
+  var rows = compResult.rows;
+  var visible = filterRows(rows);
   sortRows(visible);
-  document.getElementById('resultCount').textContent = visible.length + ' / ' + comparison.length;
+  document.getElementById('resultCount').textContent = visible.length + ' / ' + rows.length;
 
   // Shared scale: both < and > bars scaled against the same max absolute delta
   var maxAbsDelta = 0;
-  for (var i = 0; i < comparison.length; i++) {
-    if (comparison[i].absDeltaBytes > maxAbsDelta) maxAbsDelta = comparison[i].absDeltaBytes;
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].absDeltaBytes > maxAbsDelta) maxAbsDelta = rows[i].absDeltaBytes;
   }
 
   var rh = '';
   for (var i = 0; i < visible.length; i++) {
     var r = visible[i];
-    var showLeft = r.deltaBytes < 0;
-    var showRight = r.deltaBytes > 0;
-    var barPct = maxAbsDelta > 0 ? Math.max(1, Math.round((r.absDeltaBytes / maxAbsDelta) * 100)) : 0;
-
     rh += '<tr' + (r.status === STATUS.REGRESSED ? ' class="row-regressed"' : '') + '>';
     rh += '<td class="name-cell" title="' + esc(r.name) + '">' + esc(r.name) + '</td>';
     rh += '<td><span class="badge badge-' + r.status + '">' + r.status + '</span></td>';
     rh += '<td class="num">' + (r.beforeBytes !== null ? formatBytes(r.beforeBytes) : '-') + '</td>';
-
-    // < bar (right-justified, amber — shows improvement magnitude)
-    rh += '<td class="bar-cell bar-before-cell"><div class="bar-wrap">';
-    if (showLeft) rh += '<div class="tbl-bar" style="width:' + barPct + '%"></div>';
-    rh += '</div></td>';
-    // > bar (left-justified, teal — shows regression magnitude)
-    rh += '<td class="bar-cell bar-after-cell"><div class="bar-wrap">';
-    if (showRight) rh += '<div class="tbl-bar" style="width:' + barPct + '%"></div>';
-    rh += '</div></td>';
+    rh += renderBarPair(r.deltaBytes, r.absDeltaBytes, maxAbsDelta);
 
     rh += '<td class="num">' + (r.afterBytes !== null ? formatBytes(r.afterBytes) : '-') + '</td>';
     rh += '<td class="num">' + formatDelta(r.deltaBytes) + '</td>';
@@ -1102,18 +1072,17 @@ function updateDropZone(slot, rows, fileName) {
 
 function showComparison() {
   compResult = buildComparison(beforeData, afterData);
-  comparison = compResult.rows;
   document.getElementById('landing').classList.add('hidden');
   document.getElementById('comparison').classList.remove('hidden');
   renderHeader();
   renderSummary(compResult);
-  renderTornadoChart(comparison);
+  renderTornadoChart(compResult.rows);
   renderTable();
 }
 
 function reset() {
   beforeData = null; afterData = null; beforeCsv = ''; afterCsv = ''; beforeName = ''; afterName = '';
-  comparison = []; compResult = null;
+  compResult = null;
   sortCol = 'absDeltaBytes'; sortDisplayCol = 'absDeltaBytes'; sortAsc = false;
   try { localStorage.removeItem(STORAGE.BEFORE); localStorage.removeItem(STORAGE.BEFORE_NAME); localStorage.removeItem(STORAGE.AFTER); localStorage.removeItem(STORAGE.AFTER_NAME); } catch(e) {}
   filterCategory = FILTER_ALL; filterText = ''; excludeText = '';
