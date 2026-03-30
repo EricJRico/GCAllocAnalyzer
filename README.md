@@ -14,7 +14,7 @@ A Unity Editor tool for profiling and analyzing garbage collection allocations. 
 ## GC Alloc Analyzer
 
 <p align="center">
-  <img src="Documentation~/images/graph-drag-select.gif" alt="Graph Drag Select"/>
+  <img src="Documentation~/images/gc-alloc-analyzer.png" alt="Graph Drag Select"/>
 </p>
 
 ## Table of Contents
@@ -24,11 +24,9 @@ A Unity Editor tool for profiling and analyzing garbage collection allocations. 
     - [Filtering](#filtering)
     - [Top Offenders](#top-offenders)
     - [Selected Allocation Site](#selected-allocation-site)
-    - [Customizable Severity Colors](#customizable-severity-colors)
+    - [Customizable Colors](#customizable-colors)
   - [Per-Frame Graph](#per-frame-graph)
-    - [Zoom & Pan](#zoom--pan)
-    - [Y-Axis Zoom](#y-axis-zoom)
-    - [Drag Select](#drag-select)
+    - [Graph Controls](#graph-controls)
     - [Stacked Segments](#stacked-segments)
     - [Overlay Mode](#overlay-mode)
     - [Overview Strip](#overview-strip)
@@ -38,7 +36,6 @@ A Unity Editor tool for profiling and analyzing garbage collection allocations. 
 - [Getting Started](#getting-started)
   - [Installation](#installation)
   - [Usage](#usage)
-- [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Requirements](#requirements)
 - [Roadmap](#roadmap)
 
@@ -56,18 +53,26 @@ Analyze GC allocations across any range of profiled frames. Click **Pull Data** 
 
 - **Sortable, resizable columns** — Allocation Site, Bytes, Count, Avg, %, and per-frame statistics (Median, Mean, Min, Max, Range, First). Click any column header to sort; click again to reverse.
 - **Call-stack grouping** — toggle between full call stack (default) and top-level allocation method grouping
-- **Color-coded severity** — allocation sizes are colored by threshold (red, yellow, gray) to highlight the worst offenders at a glance
+- **Color-coded severity** — allocation sizes are colored by threshold (red > 10 KB, yellow > 1 KB, gray) to highlight the worst offenders at a glance
 - **Context menus** — right-click any allocation site row to copy the name, add it to the name or exclude filter, or open the source file in your IDE
+- **No-callstack fallback** — when Profiler call stacks aren't enabled, automatically falls back to hierarchy path resolution so you still get useful grouping
+
+<p align="center">
+  <img src="Documentation~/images/toolbar.png" alt="Toolbar"/>
+</p>
 
 #### Filtering
 
 Filter the allocation site table to focus on what matters.
 
-<!-- TODO: Add screenshot showing filter area -->
+<p align="center">
+  <img src="Documentation~/images/filtering.png" alt="Filtering"/>
+</p>
 
 - **Name Filter** — include only allocation sites matching this text
 - **Exclude Filter** — hide allocation sites matching this text
-- **Threads** — multi-select dropdown to filter by specific threads, or view all
+- **Threads** — multi-select dropdown to filter by specific threads, or view all. Quick-select options for Main Thread Only and Render Thread Only.
+- **Group By Full Callsite** — toggle between full call stack grouping (default) and top-level allocation method grouping
 - **Show Assembly** — toggle assembly prefixes on method names (e.g., `UnityEngine.Object::Instantiate` vs `Object::Instantiate`)
 
 #### Top Offenders
@@ -76,16 +81,15 @@ Filter the allocation site table to focus on what matters.
   <img src="Documentation~/images/top-offenders.png" width="70%" alt="Top Offenders Panel"/>
 </p>
 
-The right panel ranks the worst allocation sites in two views:
+The right panel ranks the worst allocation sites in three views:
 
-- **By Total Bytes** — top 10 sites by cumulative allocation across all analyzed frames, showing rank, total bytes, percentage, and method name
-- **Largest Single Allocations** — top 10 individual `GC.Alloc` events by size, showing the allocation size, frame number, and method name. Click an entry to select it in the individual allocations list.
+- **By Total Bytes** — top N sites by cumulative allocation across all analyzed frames, showing rank, total bytes, percentage, and method name
+- **Avg / Frame** — top N sites by average bytes per frame, useful for identifying consistent per-frame allocators
+- **Largest Single Allocations** — top N individual `GC.Alloc` events by size, showing the allocation size, frame number, and method name. Click an entry to select it in the individual allocations list.
+
+The dropdown lets you choose how many entries to show (1-10, default 3).
 
 #### Selected Allocation Site
-
-<p align="center">
-  <img src="Documentation~/images/sync-with-profiler.gif" alt="Sync With Profiler"/>
-</p>
 
 Clicking any row in the allocation site table opens a detail panel on the right:
 
@@ -97,67 +101,111 @@ Clicking any row in the allocation site table opens a detail panel on the right:
   <img src="Documentation~/images/script-open.png" width="80%" alt="Open in IDE"/>
 </p>
 
-- **Individual Allocations** — every `GC.Alloc` event for this site with size, frame number, and thread. Right-click any row to jump to that frame in the Profiler.
+- **Individual Allocations** — every `GC.Alloc` event for this site with size, frame number, and thread
+- **Profiler Sync** — click any individual allocation to jump to that frame in the Profiler's CPU module, or click a marker row to sync the Profiler to the frame with the largest allocation for that site
 
-#### Customizable Severity Colors
+<p align="center">
+  <img src="Documentation~/images/sync-with-profiler.gif" alt="Sync With Profiler"/>
+</p>
 
-Configure allocation severity colors and byte thresholds via **Preferences > Analysis > GC Alloc Analyzer**.
+#### Customizable Colors
+
+Configure allocation severity colors, byte thresholds, and graph appearance via **Preferences > Analysis > GC Alloc Analyzer**.
 
 <p align="center">
   <img src="Documentation~/images/preferences.png" width="50%" alt="GC Alloc Analyzer Preferences"/>
 </p>
 
-- **Severity Colors** — customize High (default red), Medium (default yellow), and Low/Normal (default gray)
-- **Severity Thresholds** — set the byte boundaries for Medium (default 1,024 B) and High (default 10,240 B)
+**Severity Colors** — control the color coding in the marker list's Bytes column:
+- **High** (default red) — allocations above the high threshold (default 10,240 B)
+- **Medium** (default yellow) — allocations above the medium threshold (default 1,024 B)
+- **Low/Normal** (default gray) — allocations below the medium threshold
+
+**Graph Colors** — customize the per-frame bar chart appearance:
+- **Bar Color** — primary bar fill (default blue)
+- **Dim Bar Color** — unselected/dimmed bars when a selection is active
+- **Overlay Highlight** — color for the method overlay band
+- **Highlight Tint / Outline** — selected bar/segment highlight
+- **Bar Spacing** — gap between bars (0-50%)
 
 ### Per-Frame Graph
 
 Interactive bar chart showing GC allocations per frame.
 
-#### Zoom & Pan
+#### Graph Controls
+
+**Zoom & Pan**
+
+| Input | Action |
+|-------|--------|
+| `Mouse Wheel` | Zoom X-axis (centered on cursor) |
+| `Ctrl+Mouse Wheel` | Zoom Y-axis |
+| `W` / `S` | Zoom in / out (centered on visible range) |
+| `A` / `D` | Pan left / right |
+| `Middle-Mouse Drag` | Pan both axes (drag to scroll) |
+| `Alt+Left Drag` | Pan both axes (alternative to middle mouse) |
+| `Y-Axis Drag` | Drag on Y-axis labels to zoom vertically |
+
+| | |
+|---|---|
+| <img src="Documentation~/images/ctrl-zoom-x.gif" alt="Zoom X"/> | <img src="Documentation~/images/ctrl-zoom-y.gif" alt="Zoom Y"/> |
+| Mouse wheel zoom | Ctrl+Mouse wheel Y zoom |
+| <img src="Documentation~/images/ctrl-pan.gif" alt="Pan"/> | <img src="Documentation~/images/ctrl-zoom-y-drag.gif" alt="Y-Axis Drag"/> |
+| Middle-mouse / Alt+Left drag pan | Y-axis label drag zoom |
+
+**Selection & Navigation**
+
+| Input | Action |
+|-------|--------|
+| `Left Click` | Select bar (navigates Profiler to that frame) |
+| `Left Drag` | Select frame range (drag across bars) |
+| `Ctrl+Left Click` | Additive select (add bar to existing selection) |
+| `Left` / `Right` | Move to adjacent bar (selects it, syncs Profiler) |
+| `Up` / `Down` | Move to adjacent segment within the current bar |
 
 <p align="center">
-  <img src="Documentation~/images/graph-zoom-pan.gif" width="70%" alt="Graph Zoom and Pan"/>
+  <img src="Documentation~/images/ctrl-drag-select.gif" alt="Drag Select"/><br>
+  <em>Left drag to select frame range</em>
 </p>
-
-Mouse wheel or `W`/`S` to zoom in and out, anchored at the cursor position. `A`/`D` keys to pan left and right through frames.
-
-#### Y-Axis Zoom
-
-<!-- TODO: Add gif showing Y-axis zoom -->
-
-Zoom the Y-axis to focus on smaller allocations without losing large spikes off-screen. `Ctrl+Mouse Wheel` to zoom vertically, or drag directly on the Y-axis labels. Click **Reset Y** to restore auto-fit.
-
-#### Drag Select
 
 <p align="center">
-  <img src="Documentation~/images/graph-drag-select.gif" alt="Graph Drag Select"/>
+  <img src="Documentation~/images/ctrl-bar-nav.gif" alt="Bar Navigation"/><br>
+  <em>Left/Right arrow key bar navigation</em>
 </p>
 
-Drag across bars to select a sub-range and instantly re-analyze from cache — no re-extraction needed. Click **Reset to Full Range** to restore the original analysis.
+<p align="center">
+  <img src="Documentation~/images/ctrl-segment-nav.gif" alt="Segment Navigation"/><br>
+  <em>Up/Down arrow key segment navigation</em>
+</p>
 
 #### Stacked Segments
 
-<!-- TODO: Add gif showing stacked segments at full zoom -->
+<p align="center">
+  <img src="Documentation~/images/ctrl-stacked-segments.gif" alt="Stacked Segments"/>
+</p>
 
-When zoomed in far enough that each bar represents a single frame, bars split into colored segments showing the top allocation methods. Click a segment to select that method in the marker list.
+When zoomed in far enough that each bar represents a single frame, bars split into colored segments showing the top allocation methods. Each method is assigned a distinct color from a 16-color palette ranked by total bytes; methods beyond the top 16 are grouped as gray "Others". Hover over a segment to see the method name and allocation size. Click a segment to select that method in the marker list.
 
 #### Overlay Mode
 
-<!-- TODO: Add gif showing overlay mode -->
+<p align="center">
+  <img src="Documentation~/images/ctrl-overlay-mode.gif" alt="Overlay Mode"/>
+</p>
 
-Select an allocation site in the marker table to see its per-frame contribution overlaid on the graph in a separate color. Instantly visualize how a single allocation site contributes across your frame range.
+Select an allocation site in the marker table to see its per-frame contribution overlaid on the graph. The overlay band shows how much of each frame's total GC is attributable to that single method. When zoomed in to segment level, the matching segment is highlighted with a gold tint and outline.
 
 #### Overview Strip
 
-<!-- TODO: Add gif showing overview strip interaction -->
+<p align="center">
+  <img src="Documentation~/images/ctrl-overview-strip.gif" alt="Overview Strip"/>
+</p>
 
-A miniature full-range view that appears when zoomed in. Shows a viewport indicator of your current position. Click anywhere on the strip to jump there, or drag the viewport rectangle to scroll.
+A miniature full-range view that appears when zoomed in. Shows a viewport indicator of your current position. Click anywhere on the strip to jump there, drag the viewport rectangle to scroll, or drag its edges to resize (zoom).
 
 #### Order by Size
 
 <p align="center">
-  <img src="Documentation~/images/order-by-size.gif" width="70%" alt="Order By Size"/>
+  <img src="Documentation~/images/order-by-size.gif" alt="Order By Size"/>
 </p>
 
 Toggle between chronological frame order and size-descending order to spot the largest spikes. Useful for identifying outlier frames that may otherwise be lost in a long recording.
@@ -178,11 +226,14 @@ A dedicated **GC Alloc** module inside Unity's Profiler window for per-frame ana
 
 ### Save, Load & Export
 
-<!-- TODO: Add screenshot showing toolbar with Save/Load/Export buttons -->
-
-- **Save/Load snapshots** — save analysis results as `.json` for sharing or later review. Load snapshots without needing the original Profiler data.
+- **Save/Load snapshots** — save analysis results as `.gcas` binary snapshots for sharing or later review. Load snapshots without needing the original Profiler data. Snapshot files use a two-part format: a lightweight skeleton (markers, groups, stats) for instant UI restore, and a heavy payload (individual allocations) for full interactivity.
 - **Export Marker Table CSV** — export the filtered allocation site table with all statistics (Bytes, Count, Avg, %, Median, Mean, Min, Max, Range, First)
 - **Export Individual Allocations CSV** — export every raw `GC.Alloc` event with size, frame, thread, and full call stack
+- **Open Compare Tool** — launch a standalone HTML comparison tool to diff two exported CSV files side-by-side
+<p align="center">
+  <img src="Documentation~/images/compare-tool.png" alt="GC Alloc Module"/>
+</p>
+
 
 ---
 
@@ -212,26 +263,9 @@ https://github.com/EricJRico/GCAllocAnalyzer.git
 2. **Open the analyzer** — Go to **Window > Analysis > GC Alloc Analyzer**.
 3. **Pull Data** — Click **Pull Data** to read per-frame GC totals from the Profiler. This populates the per-frame graph.
 4. **Analyze** — Set your frame range and click **Analyze** for full call-stack extraction.
-5. **Explore** — Sort, filter, and click allocation sites to see call stacks, per-frame overlays, and individual allocations. Drag-select on the graph to analyze sub-ranges instantly.
+5. **Explore** — Sort, filter, and click allocation sites to see call stacks, per-frame overlays, and individual allocations. Drag-select on the graph to analyze sub-ranges instantly from cache.
 
 > **Tip:** For the best results, enable **Call Stacks > GC.Alloc** in the Profiler toolbar *before* entering Play Mode. Without call stacks, you'll see hierarchy paths instead of resolved method names.
-
----
-
-## Keyboard Shortcuts
-
-Graph shortcuts are active when the graph is focused (automatic on hover).
-
-| Input | Action |
-|-------|--------|
-| `Mouse Wheel` | Zoom in / out (centered on cursor) |
-| `Ctrl+Mouse Wheel` | Zoom Y-axis in / out |
-| `W` / `S` | Zoom in / out (centered on cursor) |
-| `A` / `D` | Pan left / right |
-| `Middle-Mouse Drag` | Pan both axes |
-| `Left` / `Right` | Navigate one bar at a time |
-| `Shift+Left` / `Shift+Right` | Navigate 10 bars at a time |
-| `Y-Axis Drag` | Drag down to zoom Y in, up to zoom out |
 
 ---
 
@@ -252,6 +286,7 @@ See [CHANGELOG](CHANGELOG.md) for release history.
 
 ## Technical Documentation
 
+- [Package Architecture](Documentation~/gcalloc-analyzer-architecture.md) — comprehensive architecture reference covering data model, analysis pipeline, rendering engine, domain reload, serialization format, and all subsystems
 - [Domain Reload System](Documentation~/domain-reload-system.md) — how analysis state survives Unity's domain reload using two-phase binary serialization
 
 ---
