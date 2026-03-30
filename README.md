@@ -286,8 +286,8 @@ See [CHANGELOG](CHANGELOG.md) for release history.
 
 ## Technical Documentation
 
-- [Package Architecture](Documentation~/gcalloc-analyzer-architecture.md) — comprehensive architecture reference covering data model, analysis pipeline, rendering engine, domain reload, serialization format, and all subsystems
-- [Domain Reload System](Documentation~/domain-reload-system.md) — how analysis state survives Unity's domain reload using two-phase binary serialization
+- [Package Architecture](Documentation~/architecture/gcalloc-analyzer-architecture.md) — comprehensive architecture reference covering data model, analysis pipeline, rendering engine, domain reload, serialization format, and all subsystems
+- [Domain Reload System](Documentation~/architecture/domain-reload-system.md) — how analysis state survives Unity's domain reload using two-phase binary serialization
 
 ---
 
