@@ -1493,7 +1493,11 @@ namespace GCAllocBreakdown.Editor
                 menu.AddItem(label, on, () => OnThreadMenuToggle(thread));
             }
 
+#if UNITY_6000_3_OR_NEWER
             menu.DropDown(m_ThreadFilterBtn.worldBound, m_ThreadFilterBtn, DropdownMenuSizeMode.Content);
+#else
+            menu.DropDown(m_ThreadFilterBtn.worldBound, m_ThreadFilterBtn, false);
+#endif
         }
 
         void OnThreadMenuAll()
@@ -1595,7 +1599,11 @@ namespace GCAllocBreakdown.Editor
             menu.AddItem("Individual Allocations CSV", false, () => GCAllocExporter.ExportAllocationsCSV(m_Snapshot));
             menu.AddSeparator("");
             menu.AddItem("Open Compare Tool", false, GCAllocExporter.OpenCompareTool);
+#if UNITY_6000_3_OR_NEWER
             menu.DropDown(m_ExportBtn.worldBound, m_ExportBtn, DropdownMenuSizeMode.Content);
+#else
+            menu.DropDown(m_ExportBtn.worldBound, m_ExportBtn, false);
+#endif
         }
 
         // ═══════════════════════════════════════════════════
