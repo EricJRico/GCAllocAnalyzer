@@ -1911,6 +1911,8 @@ namespace GCAllocBreakdown.Editor
                         for (int i = 0; i < raw.sampleCount; i++)
                         {
                             if (raw.GetSampleMarkerId(i) != gcAllocId) continue;
+                            // Some GC.Alloc samples carry no byte-count metadata; reading metadata[0] when count is 0 throws.
+                            if (raw.GetSampleMetadataCount(i) == 0) continue;
                             long bytes = raw.GetSampleMetadataAsLong(i, 0);
                             if (bytes > 0)
                                 frameTotal += bytes;
@@ -2120,6 +2122,8 @@ namespace GCAllocBreakdown.Editor
 
                             if (markerId == gcAllocId)
                             {
+                                // Some GC.Alloc samples carry no byte-count metadata; reading metadata[0] when count is 0 throws.
+                                if (raw.GetSampleMetadataCount(i) == 0) goto pushDepth;
                                 long bytes = raw.GetSampleMetadataAsLong(i, 0);
                                 if (bytes <= 0) goto pushDepth;
                                 totalBytes += bytes;

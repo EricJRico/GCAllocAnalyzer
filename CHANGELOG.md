@@ -5,6 +5,11 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-05-28
+
+### Fixed
+- `IndexOutOfRangeException` when a GC.Alloc sample has no byte-count metadata. Some samples (worker-thread allocations, certain IL2CPP captures) are bare markers with `GetSampleMetadataCount == 0`; reading `GetSampleMetadataAsLong(i, 0)` threw. These are now skipped in both the Editor Window (Pull + Analyze) and the Profiler Module. Such allocations remain uncounted in byte totals (known limitation).
+
 ## [0.2.1] - 2026-04-17
 
 ### Fixed

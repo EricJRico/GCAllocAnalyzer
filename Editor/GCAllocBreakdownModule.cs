@@ -282,7 +282,8 @@ namespace GCAllocBreakdown.Editor
                     if (m_DepthStack.Count > 0)
                         m_DepthStack[m_DepthStack.Count - 1].Remaining--;
 
-                    if (markerId == gcAllocId)
+                    // Some GC.Alloc samples carry no byte-count metadata; reading metadata[0] when count is 0 throws.
+                    if (markerId == gcAllocId && raw.GetSampleMetadataCount(i) > 0)
                     {
                         long bytes = raw.GetSampleMetadataAsLong(i, 0);
                         if (bytes > 0)
