@@ -169,6 +169,12 @@ namespace GCAllocBreakdown.Editor
         int[] m_ThreadAllocCountBuf;
         int[] m_ThreadDenseIdxBuf;
 
+        // threadId → unique display name, built in the Phase-1 thread scan and read
+        // during extraction. Threads that share a Profiler group+name (e.g. the 11
+        // "Thread Pool Worker" threads) get a " #N" suffix in slot order so they no
+        // longer collapse into a single row; threads with a unique name get no suffix.
+        readonly Dictionary<ulong, string> m_ThreadIdToDisplay = new(64);
+
         // Reusable lookup for RebuildGroupThreadIndices (thread display name → dense index)
         readonly Dictionary<string, int> m_ThreadNameToIdx = new(32);
 
@@ -1875,16 +1881,9 @@ namespace GCAllocBreakdown.Editor
             int totalFrames = last - first + 1;
             long[] fullFrameBytes = new long[totalFrames];
 
-            // Pre-scan the first frame to find thread indices that carry GC.Alloc.
-            var pullGcThreads = new List<int>(16);
-            for (int t = 0; t < 256; t++)
-            {
-                using var tv = ProfilerDriver.GetRawFrameDataView(first, t);
-                if (!tv.valid) break;
-                if (tv.GetMarkerId("GC.Alloc") != FrameDataView.invalidMarkerId)
-                    pullGcThreads.Add(t);
-            }
-
+            // Enumerate every thread per frame via GetThreadCount (no hard 256 cap) so
+            // GC.Alloc on threads that first appear after frame `first` is still counted.
+            var pullIter = new ProfilerFrameDataIterator();
             try
             {
                 for (int f = first; f <= last; f++)
@@ -1900,9 +1899,10 @@ namespace GCAllocBreakdown.Editor
                     }
 
                     long frameTotal = 0;
-                    for (int ti = 0; ti < pullGcThreads.Count; ti++)
+                    int threadCount = pullIter.GetThreadCount(f);
+                    for (int t = 0; t < threadCount; t++)
                     {
-                        using var raw = ProfilerDriver.GetRawFrameDataView(f, pullGcThreads[ti]);
+                        using var raw = ProfilerDriver.GetRawFrameDataView(f, t);
                         if (!raw.valid) continue;
 
                         int gcAllocId = raw.GetMarkerId("GC.Alloc");
@@ -1925,6 +1925,7 @@ namespace GCAllocBreakdown.Editor
             finally
             {
                 EditorUtility.ClearProgressBar();
+                pullIter.Dispose();
             }
 
             m_FrameStore.FullFrameStart = first;
@@ -1967,6 +1968,14 @@ namespace GCAllocBreakdown.Editor
         //  DATA EXTRACTION
         // ═══════════════════════════════════════════════════
 
+        // Combines Profiler thread group + name the same way the Profiler does:
+        // "Group.Name", or just "Name" when the thread has no group.
+        static string CombineThreadName(string group, string name)
+        {
+            name ??= "";
+            return string.IsNullOrEmpty(group) ? name : string.Concat(group, ".", name);
+        }
+
         void RunAnalysis(int startFrame, int endFrame)
         {
             m_SwTotal.Restart();
@@ -1981,6 +1990,7 @@ namespace GCAllocBreakdown.Editor
             m_ThreadAllocCounts.Clear();
             m_ThreadIndexNames.Clear();
             m_ThreadInfoCache.Clear();
+            m_ThreadIdToDisplay.Clear();
             m_DepthStackCache.Clear();
             m_MethodInfoCache.Clear();
             m_CallStackCache.Clear();
@@ -2001,23 +2011,73 @@ namespace GCAllocBreakdown.Editor
             for (int i = 0; i < totalFrames; i++)
                 m_FormattedFrameStrs[i] = GCAllocUtils.DisplayFrame(startFrame + i).ToString();
 
-            // ── Phase 1: Pre-scan thread indices ──
+            // ── Phase 1: thread discovery + identity ──
+            // Enumerate every thread across the whole range via ProfilerFrameDataIterator
+            // (GetThreadCount — no hard 256 cap). Each distinct threadId is characterized
+            // once; threads that share a group+name are collected in slot order so we can
+            // hand out collision-disambiguated display names ("Group.Name #N"). Scanning
+            // all frames — not just the start frame — also discovers threads that first
+            // allocate later in the range.
             m_SwThreadScan.Restart();
             int maxThreadIdx = 0;
             var gcThreadIndices = new List<int>(16);
             {
-                using var probe = ProfilerDriver.GetRawFrameDataView(startFrame, 0);
-                if (probe.valid)
+                var gcSlotSeen = new HashSet<int>();
+                var seenIds = new HashSet<ulong>(64);
+                // "Group.Name" base → distinct threadIds carrying it, in first-seen (slot) order
+                var comboToIds = new Dictionary<string, List<ulong>>(64);
+
+                var iter = new ProfilerFrameDataIterator();
+                try
                 {
-                    for (int t = 0; t < 256; t++)
+                    for (int f = startFrame; f <= endFrame; f++)
                     {
-                        using var tv = ProfilerDriver.GetRawFrameDataView(startFrame, t);
-                        if (!tv.valid) break;
-                        maxThreadIdx = t + 1;
-                        if (tv.GetMarkerId("GC.Alloc") != FrameDataView.invalidMarkerId)
-                            gcThreadIndices.Add(t);
+                        int threadCount = iter.GetThreadCount(f);
+                        for (int t = 0; t < threadCount; t++)
+                        {
+                            using var tv = ProfilerDriver.GetRawFrameDataView(f, t);
+                            if (!tv.valid) break;
+                            if (t + 1 > maxThreadIdx) maxThreadIdx = t + 1;
+
+                            ulong id = tv.threadId;
+                            if (!seenIds.Add(id)) continue;   // already characterized this thread
+
+                            if (tv.GetMarkerId("GC.Alloc") != FrameDataView.invalidMarkerId && gcSlotSeen.Add(t))
+                                gcThreadIndices.Add(t);
+
+                            string baseName = CombineThreadName(tv.threadGroupName, tv.threadName);
+                            if (!comboToIds.TryGetValue(baseName, out var ids))
+                            {
+                                ids = new List<ulong>(1);
+                                comboToIds[baseName] = ids;
+                            }
+                            ids.Add(id);
+                        }
                     }
                 }
+                finally
+                {
+                    iter.Dispose();
+                }
+
+                // Lone threads keep the base name; collisions get a " #N" suffix by slot
+                // order, matching the Profiler's lane numbering. Keyed by threadId so two
+                // distinct threads sharing a name never resolve to the same label.
+                foreach (var kv in comboToIds)
+                {
+                    var ids = kv.Value;
+                    if (ids.Count == 1)
+                    {
+                        m_ThreadIdToDisplay[ids[0]] = kv.Key;
+                    }
+                    else
+                    {
+                        for (int r = 0; r < ids.Count; r++)
+                            m_ThreadIdToDisplay[ids[r]] = string.Concat(kv.Key, " #", r.ToString());
+                    }
+                }
+
+                gcThreadIndices.Sort();
             }
             m_SwThreadScan.Stop();
 
@@ -2082,19 +2142,18 @@ namespace GCAllocBreakdown.Editor
                         {
                             string tn = raw.threadName;
                             string tg = raw.threadGroupName;
-                            m_SharedSB.Clear();
-                            if (!string.IsNullOrEmpty(tg))
-                            {
-                                m_SharedSB.Append(tg);
-                                m_SharedSB.Append('.');
-                            }
-                            m_SharedSB.Append(tn);
+                            ulong tid = raw.threadId;
+                            // Unique display name resolved in Phase 1 (keyed by threadId).
+                            // Fall back to the plain combined name for any thread the scan
+                            // didn't characterize (should not happen — kept for safety).
+                            if (!m_ThreadIdToDisplay.TryGetValue(tid, out string display))
+                                display = CombineThreadName(tg, tn);
                             threadInfo = new CachedThreadInfo
                             {
-                                DisplayName = m_SharedSB.ToString(),
+                                DisplayName = display,
                                 Name = tn,
                                 GroupName = tg,
-                                Id = raw.threadId
+                                Id = tid
                             };
                             m_ThreadInfoCache[threadIdx] = threadInfo;
                         }
