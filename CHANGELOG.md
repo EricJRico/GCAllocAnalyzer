@@ -5,6 +5,14 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-06-18
+
+### Fixed
+- Thread filter no longer collides same-named threads. Allocations on distinct threads that share a display name (e.g. multiple "Worker Thread") are now tracked separately instead of being merged.
+- Sub-range analysis (drag-select on the per-frame graph) no longer empties the marker list when a thread filter is active. Sub-range groups now have their `ThreadIndices` stamped before the group lists are compacted, so `PassesThreadFilter` matches correctly.
+- Changing a filter now keeps the user on their selected callsite (falling back to the first row only if it was filtered out) and refreshes the right-panel detail and graph overlay immediately, fixing a stale allocation list after a filter change.
+- The per-callsite allocation list now honors the active thread filter, showing only allocations from the selected thread(s).
+
 ## [0.2.2] - 2026-05-28
 
 ### Fixed

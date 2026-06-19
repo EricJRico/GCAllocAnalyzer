@@ -2698,6 +2698,13 @@ namespace GCAllocBreakdown.Editor
 
             LogTiming(sw, "singlePass");
 
+            // Stamp ThreadIndices on the sub-range groups. The positional mapping
+            // (alloc.FullCallstackGroupIndex -> list slot) is only valid BEFORE
+            // RemoveEmptyGroups compacts the lists, so it must run here. Without it
+            // the fresh groups from InitGroupSlots keep ThreadIndices == null and
+            // PassesThreadFilter rejects every group once a thread filter is active.
+            RebuildGroupThreadIndices();
+
             // Finalize groups: remove empty slots, compute stats
             RemoveEmptyGroups(fullTarget);
             RemoveEmptyGroups(topTarget);
@@ -2730,7 +2737,8 @@ namespace GCAllocBreakdown.Editor
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
-            // ThreadIndices on groups carry over from full-range BuildGrouping
+            // ThreadIndices stamped above by RebuildGroupThreadIndices (sub-range
+            // groups from InitGroupSlots do NOT carry over from BuildGrouping)
             BuildTopOffenders_GroupsOnly();
             LogTiming(sw, "topOff");
             ApplyFilters();
@@ -2915,6 +2923,13 @@ namespace GCAllocBreakdown.Editor
 
             LogTiming(sw, "singlePass");
 
+            // Stamp ThreadIndices on the sub-range groups. The positional mapping
+            // (alloc.FullCallstackGroupIndex -> list slot) is only valid BEFORE
+            // RemoveEmptyGroups compacts the lists, so it must run here. Without it
+            // the fresh groups from InitGroupSlots keep ThreadIndices == null and
+            // PassesThreadFilter rejects every group once a thread filter is active.
+            RebuildGroupThreadIndices();
+
             // Finalize groups: remove empty slots, compute stats
             RemoveEmptyGroups(fullTarget);
             RemoveEmptyGroups(topTarget);
@@ -2947,7 +2962,8 @@ namespace GCAllocBreakdown.Editor
 
             m_ActiveGroups = m_GroupByCallsite.value
                 ? m_Snapshot.GroupsByFullCallstack : m_Snapshot.GroupsByTopFrame;
-            // ThreadIndices on groups carry over from full-range BuildGrouping
+            // ThreadIndices stamped above by RebuildGroupThreadIndices (sub-range
+            // groups from InitGroupSlots do NOT carry over from BuildGrouping)
             BuildTopOffenders_GroupsOnly();
             LogTiming(sw, "topOff");
             ApplyFilters();
@@ -3454,6 +3470,13 @@ namespace GCAllocBreakdown.Editor
         {
             if (m_ActiveGroups == null) return;
 
+            // Remember the selected callsite so a filter change keeps the user on it,
+            // and so we can refresh its detail even when its index is unchanged.
+            CallsiteGroup prevSelection = null;
+            int prevSelIdx = m_MarkerListView.selectedIndex;
+            if (prevSelIdx >= 0 && prevSelIdx < m_FilteredGroups.Count)
+                prevSelection = m_FilteredGroups[prevSelIdx];
+
             string nameFilter = m_NameFilter != null ? m_NameFilter.value : "";
             string excludeFilter = m_ExcludeFilter != null ? m_ExcludeFilter.value : "";
             bool allThreads = m_SelectedThreads.Count == 0;
@@ -3487,7 +3510,23 @@ namespace GCAllocBreakdown.Editor
             RefreshMarkerListView();
 
             if (m_FilteredGroups.Count > 0)
-                m_MarkerListView.selectedIndex = 0;
+            {
+                // Keep the user on their selected callsite if it survived the filter,
+                // else fall back to the first. Set the selection silently and drive the
+                // detail refresh explicitly: assigning an unchanged selectedIndex is a
+                // no-op that won't fire selectionChanged, which is why the thread-filtered
+                // allocation list went stale until a callsite was re-picked.
+                int newSelIdx = 0;
+                if (prevSelection != null)
+                {
+                    int found = m_FilteredGroups.IndexOf(prevSelection);
+                    if (found >= 0) newSelIdx = found;
+                }
+                m_MarkerListView.SetSelectionWithoutNotify(new[] { newSelIdx });
+                m_MarkerListView.ScrollToItem(newSelIdx);
+                UpdateMarkerSummary(m_FilteredGroups[newSelIdx]);
+                UpdateGraphOverlay(m_FilteredGroups[newSelIdx]);
+            }
             else
                 ClearMarkerSummary();
         }
@@ -4060,16 +4099,22 @@ namespace GCAllocBreakdown.Editor
             // Call stack
             BuildCallStackDisplay(group);
 
-            // Individual allocations — filter from snapshot on demand
+            // Individual allocations — filter from snapshot on demand.
+            // Honors the active thread filter so the list matches the selected
+            // thread(s); empty selection ("All Threads") shows every thread.
             m_SelectedAllocations.Clear();
             bool byFull = m_GroupByCallsite.value;
             int groupIdx = group.GroupIndex;
+            bool allThreads = m_SelectedThreads.Count == 0;
             var allocs = m_Snapshot.RawAllocations;
             for (int i = 0; i < allocs.Count; i++)
             {
                 var a = allocs[i];
-                if ((byFull ? a.FullCallstackGroupIndex : a.TopFrameGroupIndex) == groupIdx)
-                    m_SelectedAllocations.Add(a);
+                if ((byFull ? a.FullCallstackGroupIndex : a.TopFrameGroupIndex) != groupIdx)
+                    continue;
+                if (!allThreads && !m_SelectedThreads.Contains(a.ThreadDisplayName))
+                    continue;
+                m_SelectedAllocations.Add(a);
             }
             SortAllocsInPlace();
             m_AllocListView.itemsSource = m_SelectedAllocations;
