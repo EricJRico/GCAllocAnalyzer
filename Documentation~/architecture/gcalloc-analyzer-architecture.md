@@ -1,7 +1,7 @@
 # GC Alloc Analyzer — Package Architecture
 
-> **Package**: `com.ericjrico.gcalloc-analyzer@0.1.0`
-> **Unity Requirement**: 6000.0+
+> **Package**: `com.ericjrico.gcalloc-analyzer@0.2.4`
+> **Unity Requirement**: 2022.3+
 > **License**: MIT
 > **Author**: Eric J Rico
 > **Namespace**: `GCAllocBreakdown.Editor` (main), `GCAllocBreakdown.BarChart` (graph subsystem)
@@ -37,9 +37,9 @@
 | Field | Value |
 |-------|-------|
 | Package Name | `com.ericjrico.gcalloc-analyzer` |
-| Version | `0.1.0` |
+| Version | `0.2.4` |
 | Display Name | GC Alloc Analyzer |
-| Unity | 6000.0+ |
+| Unity | 2022.3+ |
 | License | MIT |
 | Author | Eric J Rico |
 
@@ -698,31 +698,31 @@ Handlers are registered in order on the `BarGraphElement`:
 
 ### BarGraphElement (`Core/BarGraphElement.cs`, 2,460 lines + 2 partial files)
 
-High-performance stacked vertical bar graph using direct quad rendering via `MeshGenerationContext`. Chrome elements (grid lines, axes, highlights, drag rectangles) use `Painter2D` since their vertex counts are trivially bounded. Bar geometry bypasses `Painter2D` entirely to avoid tessellation overhead and the 65,535-vertex ceiling.
+High-performance stacked vertical bar graph using direct quad rendering via `MeshGenerationContext`. Chrome elements (grid lines, axes, highlights, drag rectangles) use `Painter2D`. Bar geometry bypasses `Painter2D` to avoid tessellation overhead. Unity 2022 still applies a 65,535-vertex aggregate limit to one `VisualElement`; start with the [one-page rendering-change summary](unity-2022-render-host-summary.md), then consult the [detailed render-host plan](../plans/2026-10-13-unity-2022-render-host.md).
+
+The render-backend Strategy is implemented. `Unity6RenderBackend` retains the single-element path, while `Unity2022RenderBackend` owns pooled child-element delivery for the ordered bar-quad stream. Both use the same `ChartDataModel`, `ChartViewState` mappings, direct/LOD algorithms, hit-testing, and input architecture. `PerFrameGraphController` and `ProfilerSelectionHandler` remain unchanged.
+
+Unity 2022 root-only repaint is observed by a minimal root callback. If that root repaint was not already accompanied by a typed backend invalidation, the backend invalidates every child on the next legal scheduler tick because UI Toolkit forbids dirtying elements during `generateVisualContent`. Built-in bar geometry is paged; arbitrary callback output and opt-in dense Painter2D chrome still retain UI Toolkit's per-element ceiling and are documented limitations rather than silently reduced rendering detail.
 
 ### Rendering Pipeline (`OnGenerateVisualContent`)
 
 ```mermaid
 flowchart TD
-    A[OnGenerateVisualContent] --> B[Resolve USS custom properties]
-    B --> C[Draw background]
-    C --> D[Draw grid lines]
-    D --> E[Call OnDrawBeforeBars callback]
-    E --> F{Bar width >= 1px?}
-    F -->|Yes| G[DrawDirectBars]
-    F -->|No| H[DrawLodBars]
-    G --> I["Quad per segment per bar"]
-    H --> J["Pixel-column aggregation"]
-    I --> K[Flush quad buffer]
-    J --> K
-    K --> L[Position Y-axis labels]
-    L --> M[Draw axes]
-    M --> N[Draw hover tint]
-    N --> O[Draw selection overlay]
-    O --> P[Draw tag highlight]
-    P --> Q[Draw drag rect]
-    Q --> R[Call OnDrawAfterChrome callback]
-    R --> S["FlushQuads → MeshGenerationContext.Allocate()"]
+    A[OnGenerateVisualContent] --> B[Ensure sort map]
+    B --> C[Background and plot bounds]
+    C --> D[Grid and view slice]
+    D --> E[OnDrawBeforeBars]
+    E --> F[Primary bars: existing direct or LOD path]
+    F --> G[Overlay bars when enabled]
+    G --> H[FlushQuads]
+    H --> I[OnDrawAfterBars]
+    I --> J[Selection fills and rims]
+    J --> K[Focus, bar hover, selected segment]
+    K --> L[Tag outlines, then hovered segment]
+    L --> M[Drag rectangle]
+    M --> N[Padding overdraw and axes]
+    N --> O[OnDrawAfterChrome]
+    O --> P[Cache layout for deferred label update]
 ```
 
 The actual code flow is:
@@ -735,7 +735,7 @@ The actual code flow is:
 6. **Overlay bars** — same position mapping with tinted alpha (suppressed when tag highlight is active in direct mode, as segment-level tint provides the same information)
 7. **FlushQuads** — all accumulated bar quads flushed to GPU via `MeshGenerationContext.Allocate()`
 8. **OnDrawAfterBars** — user draw hook
-9. **DrawHighlights** — selection fill, selection rim, hover tint, segment selection, tag highlight, focused bar indicator
+9. **DrawHighlights** — selected-bar fills and rims, focused bar indicator, hovered-bar tint, selected-segment highlight, tag outlines, then hovered-segment highlight. Segment tag tint is already generated in the primary bar pass.
 10. **Drag rectangle** — if drag-selecting
 11. **Padding overdraw** — re-fill four padding strips with background color to create a clean frame
 12. **Axes** — drawn on top of bars and overdraw
@@ -749,7 +749,7 @@ When bar slot width >= 1 screen pixel:
 - One quad per segment per bar (within viewport)
 - Segment-level LOD: sub-pixel segments are merged in a single O(n) pass, capping output to ~plotHeight rects per bar regardless of segment count
 - Mapping: `screenY = plotY2 - (value / effectiveMaxY) * plotH * zoomY + panY * plotH`
-- Quads written to `_quadBuf[]`, flushed via `FlushQuads()` in chunks of <= 16,383 quads (respects 65,535-vertex ceiling per `Allocate()` call, 4 vertices per quad)
+- Quads written to `_quadBuf[]`, flushed via `FlushQuads()` in chunks of <= 16,383 quads (respects the 65,535-vertex limit per `Allocate()` call, 4 vertices per quad). On Unity 2022/2023, contiguous ranges are also distributed across pooled child elements to respect the aggregate per-element limit.
 
 ### LOD Rendering (`DrawLodBars`)
 
@@ -1110,7 +1110,7 @@ Comprehensive assertion system that verifies structural invariants (groups exist
 | **LRU frame cache** | Profiler module | 512 frames cached — instant frame switching when scrubbing the Profiler timeline |
 | **DisplayRow pooling** | Profiler module | Rows reset and reused, not allocated fresh each `FlattenAndRefresh` |
 | **Zero-GC rendering** | BarGraphElement | Backing arrays (`_quadBuf`) grow via doubling, never shrink — zero GC in steady state |
-| **Quad buffer chunking** | BarGraphElement | <= 16,383 quads per `Allocate()` call — respects 65,535 vertex limit (4 vertices per quad) with unlimited chunks per repaint |
+| **Quad buffer chunking** | BarGraphElement | <= 16,383 quads per `Allocate()` call — respects the allocation limit; Unity 2022 additionally limits aggregate geometry per `VisualElement` |
 | **LOD bar aggregation** | BarGraphElement | Pixel-column mode when bar slot width < 1px — O(pixelWidth) not O(barCount) |
 | **Segment-level LOD** | BarGraphElement | Sub-pixel segments merged in O(n) pass — caps output to ~plotHeight rects per bar |
 | **Skeleton/heavy split** | SnapshotSerializer | UI appears in < 100ms; full data loads on background thread |

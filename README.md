@@ -1,6 +1,6 @@
 # GC Alloc Analyzer
 
-[![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-blue.svg)](https://unity.com/)
+[![Unity 2022.3+](https://img.shields.io/badge/Unity-2022.3%2B-blue.svg)](https://unity.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CodeQL](https://github.com/EricJRico/GCAllocAnalyzer/actions/workflows/github-code-scanning/codeql/badge.svg?branch=develop)](https://github.com/EricJRico/GCAllocAnalyzer/actions/workflows/github-code-scanning/codeql)
 
@@ -271,7 +271,7 @@ https://github.com/EricJRico/GCAllocAnalyzer.git
 
 ## Requirements
 
-- **Unity 6000.0+**
+- **Unity 2022.3+**
 - **Profiler data** — requires an active or loaded Profiler session
 - **Call stacks** — enable **Call Stacks > GC.Alloc** in the Profiler toolbar for full call-stack resolution (otherwise falls back to hierarchy paths)
 

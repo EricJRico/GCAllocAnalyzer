@@ -1128,29 +1128,21 @@ namespace GCAllocBreakdown.Editor
 
             var filterRow1 = new VisualElement
             {
-                style = { flexDirection = FlexDirection.Row, marginBottom = 4, flexWrap = Wrap.Wrap }
+                style =
+                {
+                    flexDirection = FlexDirection.Row,
+                    alignItems = Align.Center,
+                    marginBottom = 4,
+                    flexWrap = Wrap.Wrap
+                }
             };
 
-            m_NameFilter = new TextField("Name:")
-            {
-                style = { minWidth = 150, flexGrow = 1, marginRight = 12 }
-            };
-            m_NameFilter.labelElement.style.minWidth = StyleKeyword.Auto;
-            m_NameFilter.labelElement.style.width = StyleKeyword.Auto;
-            m_NameFilter.labelElement.style.marginRight = 4;
-            m_NameFilter.SetValueWithoutNotify(m_SavedState.NameFilter);
-            m_NameFilter.RegisterValueChangedCallback(OnNameFilterChanged);
+            m_NameFilter = MakeSingleLineFilterField(
+                "Name:", m_SavedState.NameFilter, OnNameFilterChanged);
             filterRow1.Add(m_NameFilter);
 
-            m_ExcludeFilter = new TextField("Exclude:")
-            {
-                style = { minWidth = 150, flexGrow = 1, marginRight = 12 }
-            };
-            m_ExcludeFilter.labelElement.style.minWidth = StyleKeyword.Auto;
-            m_ExcludeFilter.labelElement.style.width = StyleKeyword.Auto;
-            m_ExcludeFilter.labelElement.style.marginRight = 4;
-            m_ExcludeFilter.SetValueWithoutNotify(m_SavedState.ExcludeFilter);
-            m_ExcludeFilter.RegisterValueChangedCallback(OnExcludeFilterChanged);
+            m_ExcludeFilter = MakeSingleLineFilterField(
+                "Exclude:", m_SavedState.ExcludeFilter, OnExcludeFilterChanged);
             filterRow1.Add(m_ExcludeFilter);
 
             var threadGroup = new VisualElement
@@ -1208,9 +1200,13 @@ namespace GCAllocBreakdown.Editor
                 selectionType = SelectionType.Single,
                 showBorder = true,
                 showAlternatingRowBackgrounds = AlternatingRowBackground.ContentOnly,
-                sortingMode = ColumnSortingMode.Custom,
                 style = { flexGrow = 1 }
             };
+#if UNITY_6000_0_OR_NEWER
+            m_MarkerListView.sortingMode = ColumnSortingMode.Custom;
+#else
+            m_MarkerListView.sortingEnabled = true;
+#endif
 
             m_MarkerListView.columns.Add(new Column { name = k_ColSite, title = "Allocation Site",
                 stretchable = true, minWidth = 200, sortable = true,
@@ -1261,6 +1257,31 @@ namespace GCAllocBreakdown.Editor
             return left;
         }
 
+        static TextField MakeSingleLineFilterField(
+            string label,
+            string value,
+            EventCallback<ChangeEvent<string>> valueChanged)
+        {
+            var field = new TextField(label)
+            {
+                multiline = false,
+                style =
+                {
+                    minWidth = 150,
+                    height = EditorGUIUtility.singleLineHeight,
+                    flexGrow = 1,
+                    flexShrink = 1,
+                    marginRight = 12
+                }
+            };
+            field.labelElement.style.minWidth = StyleKeyword.Auto;
+            field.labelElement.style.width = StyleKeyword.Auto;
+            field.labelElement.style.marginRight = 4;
+            field.SetValueWithoutNotify(value);
+            field.RegisterValueChangedCallback(valueChanged);
+            return field;
+        }
+
         // ═══════════════════════════════════════════════════
         //  PER-FRAME BAR GRAPH — delegated to PerFrameGraphController
         // ═══════════════════════════════════════════════════
@@ -1308,107 +1329,93 @@ namespace GCAllocBreakdown.Editor
             RebuildFromCache(m_FrameStore.FullFrameStart, m_FrameStore.FullFrameEnd);
         }
 
-        void OnGraphFrameSelected(int frameIndex, string methodName)
+        void OnGraphFrameSelected(GraphAllocationSelection selection)
         {
+            if (TryResolveGraphAllocation(selection, out int groupListIndex, out RawAllocation allocation))
+            {
+                SelectGraphAllocation(groupListIndex, allocation);
+                return;
+            }
+
             EnsureProfilerRef();
-            if (m_ProfilerWindow != null)
-            {
-                try { m_ProfilerWindow.selectedFrameIndex = frameIndex; }
-                catch (Exception e)
-                {
-                    Debug.LogWarning(string.Concat("[GC Alloc Analyzer] Graph click frame=", frameIndex.ToString(), ": ", e.Message));
-                }
-            }
+            if (m_ProfilerWindow == null) return;
 
-            if (methodName != null)
-                SelectAllocatorByMethodForFrame(frameIndex, methodName);
-            else
-                SelectTopAllocatorForFrame(frameIndex);
+            try { m_ProfilerWindow.selectedFrameIndex = selection.FrameIndex; }
+            catch (Exception e)
+            {
+                Debug.LogWarning(string.Concat("[GC Alloc Analyzer] Graph click frame=", selection.FrameIndex.ToString(), ": ", e.Message));
+            }
         }
 
-        void SelectTopAllocatorForFrame(int frameIndex)
+        bool TryResolveGraphAllocation(
+            GraphAllocationSelection selection,
+            out int groupListIndex,
+            out RawAllocation allocation)
         {
-            if (m_FilteredGroups.Count == 0) return;
+            groupListIndex = -1;
+            allocation = null;
+            if (m_FilteredGroups.Count == 0 || m_Snapshot?.RawAllocations == null)
+                return false;
 
-            // Build GroupIndex → filtered list index mapping
             bool byFull = m_GroupByCallsite.value;
             var groupIdxToFiltered = new Dictionary<int, int>(m_FilteredGroups.Count);
             for (int g = 0; g < m_FilteredGroups.Count; g++)
                 groupIdxToFiltered[m_FilteredGroups[g].GroupIndex] = g;
 
-            // Sum bytes per filtered group for this frame in one pass
             var bytesPerGroup = new long[m_FilteredGroups.Count];
+            var largestAllocationPerGroup = new RawAllocation[m_FilteredGroups.Count];
             var allocs = m_Snapshot.RawAllocations;
+            bool allThreads = m_SelectedThreads.Count == 0;
             for (int i = 0; i < allocs.Count; i++)
             {
                 var a = allocs[i];
-                if (a.FrameIndex != frameIndex) continue;
+                if (a.FrameIndex != selection.FrameIndex) continue;
+                if (!allThreads && !m_SelectedThreads.Contains(a.ThreadDisplayName)) continue;
+                if (selection.SegmentMethodIndex >= 0 &&
+                    a.SegmentMethodIndex != selection.SegmentMethodIndex)
+                    continue;
+
                 int gIdx = byFull ? a.FullCallstackGroupIndex : a.TopFrameGroupIndex;
-                if (groupIdxToFiltered.TryGetValue(gIdx, out int filteredIdx))
-                    bytesPerGroup[filteredIdx] += a.Bytes;
+                if (!groupIdxToFiltered.TryGetValue(gIdx, out int filteredIdx)) continue;
+
+                bytesPerGroup[filteredIdx] += a.Bytes;
+                var currentLargest = largestAllocationPerGroup[filteredIdx];
+                if (currentLargest == null || a.Bytes > currentLargest.Bytes)
+                    largestAllocationPerGroup[filteredIdx] = a;
             }
 
-            int bestIdx = -1;
             long bestBytes = 0;
             for (int g = 0; g < m_FilteredGroups.Count; g++)
             {
                 if (bytesPerGroup[g] > bestBytes)
                 {
                     bestBytes = bytesPerGroup[g];
-                    bestIdx = g;
+                    groupListIndex = g;
                 }
             }
 
-            if (bestIdx >= 0 && bestIdx != m_MarkerListView.selectedIndex)
-            {
-                m_MarkerListView.selectedIndex = bestIdx;
-                m_MarkerListView.ScrollToItem(bestIdx);
-            }
+            if (groupListIndex < 0) return false;
+            allocation = largestAllocationPerGroup[groupListIndex];
+            return allocation != null;
         }
 
-        void SelectAllocatorByMethodForFrame(int frameIndex, string methodName)
+        void SelectGraphAllocation(int groupListIndex, RawAllocation allocation)
         {
-            if (m_FilteredGroups.Count == 0) return;
+            var group = m_FilteredGroups[groupListIndex];
+            m_MarkerListView.SetSelectionWithoutNotify(new[] { groupListIndex });
+            m_MarkerListView.ScrollToItem(groupListIndex);
+            UpdateMarkerSummary(group);
+            UpdateGraphOverlay(group);
 
-            // Build GroupIndex → filtered list index mapping
-            bool byFull = m_GroupByCallsite.value;
-            var groupIdxToFiltered = new Dictionary<int, int>(m_FilteredGroups.Count);
-            for (int g = 0; g < m_FilteredGroups.Count; g++)
-                groupIdxToFiltered[m_FilteredGroups[g].GroupIndex] = g;
-
-            // Sum bytes per filtered group for matching allocs in one pass
-            var bytesPerGroup = new long[m_FilteredGroups.Count];
-            var allocs = m_Snapshot.RawAllocations;
-            for (int i = 0; i < allocs.Count; i++)
+            int allocationListIndex = m_SelectedAllocations.IndexOf(allocation);
+            if (allocationListIndex >= 0)
             {
-                var a = allocs[i];
-                if (a.FrameIndex != frameIndex || a.DisplayName != methodName) continue;
-                int gIdx = byFull ? a.FullCallstackGroupIndex : a.TopFrameGroupIndex;
-                if (groupIdxToFiltered.TryGetValue(gIdx, out int filteredIdx))
-                    bytesPerGroup[filteredIdx] += a.Bytes;
+                m_AllocListView.SetSelectionWithoutNotify(new[] { allocationListIndex });
+                m_AllocListView.ScrollToItem(allocationListIndex);
             }
 
-            int bestIdx = -1;
-            long bestBytes = 0;
-            for (int g = 0; g < m_FilteredGroups.Count; g++)
-            {
-                if (bytesPerGroup[g] > bestBytes)
-                {
-                    bestBytes = bytesPerGroup[g];
-                    bestIdx = g;
-                }
-            }
-
-            if (bestIdx >= 0 && bestIdx != m_MarkerListView.selectedIndex)
-            {
-                m_MarkerListView.selectedIndex = bestIdx;
-                m_MarkerListView.ScrollToItem(bestIdx);
-            }
-            else if (bestIdx < 0)
-            {
-                // Grouping mode mismatch — fall back to top allocator
-                SelectTopAllocatorForFrame(frameIndex);
-            }
+            if (!m_IsLoadedSnapshot)
+                SelectInCpuModule(allocation);
         }
 
         void RebuildGraph()
@@ -1766,9 +1773,13 @@ namespace GCAllocBreakdown.Editor
                 selectionType = SelectionType.Single,
                 showBorder = true,
                 showAlternatingRowBackgrounds = AlternatingRowBackground.ContentOnly,
-                sortingMode = ColumnSortingMode.Custom,
                 style = { flexGrow = 1, minHeight = 80 }
             };
+#if UNITY_6000_0_OR_NEWER
+            m_AllocListView.sortingMode = ColumnSortingMode.Custom;
+#else
+            m_AllocListView.sortingEnabled = true;
+#endif
 
             m_AllocListView.columns.Add(new Column { name = k_AllocColNum, title = "#",
                 width = ALLOC_COL_NUM, sortable = false, resizable = false,
@@ -4119,7 +4130,10 @@ namespace GCAllocBreakdown.Editor
             SortAllocsInPlace();
             m_AllocListView.itemsSource = m_SelectedAllocations;
             m_AllocListView.Rebuild();
-            m_AllocListView.selectedIndex = m_SelectedAllocations.Count > 0 ? 0 : -1;
+            if (m_SelectedAllocations.Count > 0)
+                m_AllocListView.SetSelectionWithoutNotify(new[] { 0 });
+            else
+                m_AllocListView.ClearSelection();
         }
 
         void BuildCallStackDisplay(CallsiteGroup group)

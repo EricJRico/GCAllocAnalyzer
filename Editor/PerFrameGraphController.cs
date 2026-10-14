@@ -12,6 +12,18 @@ using GCAllocBreakdown.BarChart.Input.Handlers;
 
 namespace GCAllocBreakdown.Editor
 {
+    internal readonly struct GraphAllocationSelection
+    {
+        public readonly int FrameIndex;
+        public readonly int SegmentMethodIndex;
+
+        public GraphAllocationSelection(int frameIndex, int segmentMethodIndex)
+        {
+            FrameIndex = frameIndex;
+            SegmentMethodIndex = segmentMethodIndex;
+        }
+    }
+
     // ═══════════════════════════════════════════════════
     //  PER-FRAME GRAPH CONTROLLER
     //  Manages the per-frame bar graph using BarGraphElement
@@ -40,7 +52,7 @@ namespace GCAllocBreakdown.Editor
         //  CALLBACKS
         // ═══════════════════════════════════════════════════
 
-        readonly Action<int, string> m_OnFrameSelected;
+        readonly Action<GraphAllocationSelection> m_OnFrameSelected;
         readonly Func<int> m_GetSelectedMarkerIndex;
 
         /// <summary>Invoked when the user drag-selects a range of bars. Args: startFrame, endFrame.</summary>
@@ -162,7 +174,7 @@ namespace GCAllocBreakdown.Editor
         //  CONSTRUCTOR
         // ═══════════════════════════════════════════════════
 
-        public PerFrameGraphController(Action<int, string> onFrameSelected, Func<int> getSelectedMarkerIndex)
+        public PerFrameGraphController(Action<GraphAllocationSelection> onFrameSelected, Func<int> getSelectedMarkerIndex)
         {
             m_OnFrameSelected = onFrameSelected;
             m_GetSelectedMarkerIndex = getSelectedMarkerIndex;
@@ -1004,7 +1016,7 @@ namespace GCAllocBreakdown.Editor
             m_HighlightedFrame = frameIndex;
             m_BarGraph.ClearTagHighlight();
 
-            string methodName = null;
+            int segmentMethodIndex = -1;
             if (m_HasSegmentData && args.DataIndex < m_BarEntryCount)
             {
                 ref readonly BarEntry bar = ref m_BarEntries[args.DataIndex];
@@ -1018,18 +1030,16 @@ namespace GCAllocBreakdown.Editor
                         if (v > bestVal) { bestVal = v; bestSeg = s; }
                     }
                     m_BarGraph.SelectSegment(args.DataIndex, bestSeg);
-                    int tag = m_BarSegments[bar.SegmentStart + bestSeg].Tag;
-                    if (tag >= 0) methodName = m_MethodPalette.GetMethodName(tag);
+                    segmentMethodIndex = m_BarSegments[bar.SegmentStart + bestSeg].Tag;
                 }
                 else if (bar.SegmentCount == 1)
                 {
                     m_BarGraph.SelectSegment(args.DataIndex, 0);
-                    int tag = m_BarSegments[bar.SegmentStart].Tag;
-                    if (tag >= 0) methodName = m_MethodPalette.GetMethodName(tag);
+                    segmentMethodIndex = m_BarSegments[bar.SegmentStart].Tag;
                 }
             }
 
-            m_OnFrameSelected?.Invoke(frameIndex, methodName);
+            m_OnFrameSelected?.Invoke(new GraphAllocationSelection(frameIndex, segmentMethodIndex));
         }
 
         void OnSegmentClicked(SegmentEventArgs args)
@@ -1044,8 +1054,7 @@ namespace GCAllocBreakdown.Editor
             else
                 m_BarGraph.ClearTagHighlight();
 
-            string methodName = args.Tag >= 0 ? m_MethodPalette.GetMethodName(args.Tag) : null;
-            m_OnFrameSelected?.Invoke(frameIndex, methodName);
+            m_OnFrameSelected?.Invoke(new GraphAllocationSelection(frameIndex, args.Tag));
         }
 
         void OnSelectionChangedInternal(SelectionChangedEventArgs args)
@@ -1118,6 +1127,7 @@ namespace GCAllocBreakdown.Editor
             int pct = totalForFrame > 0 ? (int)(segBytes * 100 / totalForFrame) : 0;
 
             ShowFloatingTooltip(string.Concat(
+                "Frame ", GCAllocUtils.DisplayFrame(frameIndex).ToString(), "\n",
                 methodName.Replace("  —  ", "\n— "),
                 ": ", GCAllocUtils.FormatBytes(segBytes),
                 " (", pct.ToString(), "%)"));
@@ -1216,7 +1226,7 @@ namespace GCAllocBreakdown.Editor
             int frameIndex = m_FrameStore.FullFrameStart + extremeIdx;
             m_HighlightedFrame = frameIndex;
 
-            m_OnFrameSelected?.Invoke(frameIndex, null);
+            m_OnFrameSelected?.Invoke(new GraphAllocationSelection(frameIndex, -1));
         }
 
         // ═══════════════════════════════════════════════════
