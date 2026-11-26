@@ -150,9 +150,13 @@ namespace GCAllocBreakdown.Editor
                 selectionType = SelectionType.None,
                 showBorder = true,
                 showAlternatingRowBackgrounds = AlternatingRowBackground.ContentOnly,
-                sortingMode = ColumnSortingMode.Custom,
                 style = { flexGrow = 1 }
             };
+#if UNITY_6000_0_OR_NEWER
+            m_ListView.sortingMode = ColumnSortingMode.Custom;
+#else
+            m_ListView.sortingEnabled = true;
+#endif
 
             m_ListView.columns.Add(new Column { name = k_ColSite, title = "Allocation Site",
                 stretchable = true, minWidth = 120, sortable = true,

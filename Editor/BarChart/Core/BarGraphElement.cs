@@ -13,14 +13,13 @@ namespace GCAllocBreakdown.BarChart.Core
     /// ── Performance model ────────────────────────────────────────────────────
     ///  • Bar geometry bypasses <c>Painter2D</c> entirely.  Quads are written
     ///    directly via <c>MeshGenerationContext.Allocate()</c> in chunks of up to
-    ///    16 383 quads (65 532 vertices), with unlimited chunks per repaint.
-    ///    No tessellation overhead, no 65 535-vertex ceiling.
+    ///    16 383 quads (65 532 vertices), avoiding tessellation overhead.
+    ///    Unity 2022 additionally limits aggregate geometry per VisualElement.
     ///  • Segment-level LOD: sub-pixel segments are merged in a single O(n) pass,
     ///    capping output to ~plotHeight rects per bar regardless of segment count.
     ///  • Bar-level LOD: when bar slot width &lt; 1 screen pixel the renderer
     ///    switches to pixel-column mode — cost bounded by panel width, not bar count.
-    ///  • Chrome (grid, axes, highlights, drag rect) still uses <c>Painter2D</c>
-    ///    since vertex counts are trivially bounded.
+    ///  • Chrome (grid, axes, highlights, drag rect) uses <c>Painter2D</c>.
     ///  • Backing arrays grow (double) but never shrink → zero GC in steady state.
     ///  • Label pool: fixed-size <see cref="Label"/> pool repositioned each repaint.
     ///  • Sort index is rebuilt lazily only when <see cref="ChartViewState.SortDirty"/> is set.
@@ -31,12 +30,18 @@ namespace GCAllocBreakdown.BarChart.Core
     ///   graph.SetData(new float[] { 12, 45, 7, 88, 33 });
     ///   rootElement.Add(graph);
     /// </summary>
-    // [UxmlElement] is the Unity 6 replacement for the UxmlFactory/UxmlTraits pattern.
-    // The old nested-class approach still compiles but emits CS0618 obsolete warnings;
-    // using the attribute silences them and is forward-compatible.
+    // Unity 2023.2+ uses [UxmlElement] to expose custom controls to UXML.
+    // Unity 2022 uses the legacy UxmlFactory/UxmlTraits registration pattern.
+#if UNITY_2023_2_OR_NEWER
     [UxmlElement]
+#endif
     public sealed partial class BarGraphElement : VisualElement
     {
+#if !UNITY_2023_2_OR_NEWER
+        public new class UxmlFactory : UxmlFactory<BarGraphElement, UxmlTraits> { }
+        public new class UxmlTraits : VisualElement.UxmlTraits { }
+#endif
+
         // ─────────────────────────────────────────────────────────────────────
         //  USS custom style properties  (Painter2D chrome → read at style-resolve time)
         // ─────────────────────────────────────────────────────────────────────
@@ -199,6 +204,7 @@ namespace GCAllocBreakdown.BarChart.Core
         private readonly VisualElement _labelRoot;
         private readonly List<Label>   _yLabels = new List<Label>();
         private readonly List<Label>   _xLabels = new List<Label>();
+        private IBarGraphRenderBackend _renderBackend;
 
         // Cached plot-area coords written by OnGenerateVisualContent so that
         // PositionLabels can be called from the scheduled callback (outside the
@@ -261,7 +267,8 @@ namespace GCAllocBreakdown.BarChart.Core
             _labelRoot.style.bottom   = 0;
             Add(_labelRoot);
 
-            generateVisualContent += OnGenerateVisualContent;
+            _renderBackend = BarGraphRenderBackendFactory.Create(this);
+            _renderBackend.Attach();
 
             RegisterCallback<GeometryChangedEvent>(_ => { EnsureLabelPool(); MarkDirtyRepaint(); });
             RegisterCallback<AttachToPanelEvent>(_ =>
@@ -271,6 +278,17 @@ namespace GCAllocBreakdown.BarChart.Core
             // Keyboard selection extracted to BarGraphKeyboardSelectionHandler
             _model.DataChanged    += OnDataChanged;
             _model.OverlayChanged += OnOverlayChanged;
+        }
+
+        /// <summary>
+        /// Invalidates both the root element and the selected rendering backend.
+        /// Hiding the non-virtual UI Toolkit method preserves existing callers typed
+        /// as BarGraphElement while allowing Unity 2022 child pages to be refreshed.
+        /// </summary>
+        public new void MarkDirtyRepaint()
+        {
+            base.MarkDirtyRepaint();
+            _renderBackend?.Invalidate();
         }
 
         /// <summary>
@@ -1076,142 +1094,176 @@ namespace GCAllocBreakdown.BarChart.Core
 
         private void OnGenerateVisualContent(MeshGenerationContext mgc)
         {
-            Rect cr = contentRect;
-            if (cr.width < 2f || cr.height < 2f) return;
+            if (!TryGetContentRect(out Rect content)) return;
+            DrawBackground(mgc, content);
+            if (!TryGetRenderLayout(out RenderLayout layout)) return;
 
-            // Lazy sort rebuild
+            DrawUnderlay(mgc, in layout);
+            BuildBarGeometry(in layout);
+            if (_quadCount > 0)
+                FlushQuads(mgc);
+            DrawAfterBars(mgc, in layout);
+            DrawForeground(mgc, in layout);
+        }
+
+        private bool TryGetContentRect(out Rect content)
+        {
+            content = contentRect;
+            return content.width >= 2f && content.height >= 2f;
+        }
+
+        private bool TryGetRenderLayout(out RenderLayout layout)
+        {
+            layout = default;
+            if (!TryGetContentRect(out Rect cr)) return false;
+
             EnsureSortMap();
 
-            Painter2D p = mgc.painter2D;
+            float pL = _vis.PaddingLeft;
+            float pT = _vis.PaddingTop;
+            float plotX = pL;
+            float plotY = pT;
+            float plotW = cr.width - pL - _vis.PaddingRight;
+            float plotH = cr.height - pT - _vis.PaddingBottom;
+            if (plotW < 2f || plotH < 2f) return false;
 
-            // 1 – Background
-            FillRect(p, _vis.BackgroundColor, 0, 0, cr.width, cr.height);
-
-            // 2 – Plot-area bounds
-            float pL    = _vis.PaddingLeft;
-            float pT    = _vis.PaddingTop;
-            float plotX  = pL;
-            float plotY  = pT;
-            float plotW  = cr.width  - pL - _vis.PaddingRight;
-            float plotH  = cr.height - pT - _vis.PaddingBottom;
-            float plotX2 = plotX + plotW;
-            float plotY2 = plotY + plotH;   // bottom edge (Y increases downward)
-
-            if (plotW < 2f || plotH < 2f) return;
-
-            // 3 – Horizontal grid lines (below bars)
-            if (_settings.ShowGrid && _settings.GridLineCount > 0)
-                DrawGrid(p, plotX, plotX2, plotY, plotY2, plotH);
-
-            // Compute view-slice once for context + bar rendering
-            float ctxStride = 0f, ctxBarW = 0f;
-            int   ctxStart = -1, ctxEnd = -1;
+            float stride = 0f, barW = 0f;
+            int start = -1, end = -1;
             if (_model.BarCount > 0)
-                CalcViewSlice(plotW, out ctxStride, out ctxBarW, out ctxStart, out ctxEnd);
+                CalcViewSlice(plotW, out stride, out barW, out start, out end);
 
-            // Build draw context for custom callbacks (stack-allocated, constructed once)
-            var plotRect = new Rect(plotX, plotY, plotW, plotH);
-            var drawCtx = new BarGraphDrawContext(
-                p, mgc, plotRect,
+            layout = new RenderLayout
+            {
+                ContentRect = cr,
+                PaddingLeft = pL,
+                PaddingTop = pT,
+                PlotX = plotX,
+                PlotY = plotY,
+                PlotWidth = plotW,
+                PlotHeight = plotH,
+                PlotX2 = plotX + plotW,
+                PlotY2 = plotY + plotH,
+                Stride = stride,
+                BarWidth = barW,
+                StartDisplayIndex = start,
+                EndDisplayIndex = end,
+            };
+            return true;
+        }
+
+        private void DrawBackground(MeshGenerationContext mgc, Rect content)
+        {
+            FillRect(mgc.painter2D, _vis.BackgroundColor, 0, 0,
+                     content.width, content.height);
+        }
+
+        private BarGraphDrawContext CreateDrawContext(
+            MeshGenerationContext mgc, in RenderLayout layout)
+        {
+            return new BarGraphDrawContext(
+                mgc.painter2D, mgc,
+                new Rect(layout.PlotX, layout.PlotY, layout.PlotWidth, layout.PlotHeight),
                 _viewState.ZoomX, _viewState.ZoomY,
                 _viewState.PanX, _viewState.PanY,
-                _effectiveMaxY, ctxStride, ctxBarW,
-                ctxStart, ctxEnd, _model.BarCount);
+                _effectiveMaxY, layout.Stride, layout.BarWidth,
+                layout.StartDisplayIndex, layout.EndDisplayIndex, _model.BarCount);
+        }
 
-            // ── Custom draw hook: before bars ──
+        private void DrawUnderlay(MeshGenerationContext mgc, in RenderLayout layout)
+        {
+            Painter2D p = mgc.painter2D;
+            if (_settings.ShowGrid && _settings.GridLineCount > 0)
+                DrawGrid(p, layout.PlotX, layout.PlotX2, layout.PlotY,
+                         layout.PlotY2, layout.PlotHeight);
+
+            BarGraphDrawContext drawCtx = CreateDrawContext(mgc, in layout);
             _onDrawBeforeBars?.Invoke(in drawCtx);
+        }
 
-            // 4 – Primary bars (stacked, segment-LOD, direct mesh)
-            _quadCount = 0;   // Reset quad buffer for this repaint
+        private void BuildBarGeometry(in RenderLayout layout)
+        {
+            _quadCount = 0;
 
             if (_model.BarCount > 0)
             {
-                int viewCount = ctxEnd - ctxStart;
+                int viewCount = layout.EndDisplayIndex - layout.StartDisplayIndex;
 
-                // Pre-size quad buffer to avoid repeated Array.Resize during
-                // the draw pass.  Direct path: segment merge caps output at
-                // ~plotH quads per bar.  LOD path: bounded by pixel count.
-                // Overlay may add a similar amount — multiply by 2 if present.
                 if (viewCount > 0)
                 {
-                    int estimatedQuads = ctxStride >= 1f
-                        ? viewCount * Mathf.CeilToInt(plotH)
-                        : Mathf.CeilToInt(plotW);
+                    int estimatedQuads = layout.Stride >= 1f
+                        ? viewCount * Mathf.CeilToInt(layout.PlotHeight)
+                        : Mathf.CeilToInt(layout.PlotWidth);
                     if (_model.HasOverlay) estimatedQuads *= 2;
                     if (_viewState.HighlightedTag >= 0) estimatedQuads += estimatedQuads / 4;
                     if (_quadBuf.Length < estimatedQuads)
                         _quadBuf = new QuadData[Mathf.Max(_quadBuf.Length * 2, estimatedQuads)];
-                }
 
-                if (viewCount > 0)
-                {
-                    if (ctxStride >= 1f)
-                        DrawDirectBars(ctxStart, ctxEnd, plotX, plotY2, ctxStride, ctxBarW,
-                                       plotH, _model, false, 1f);
+                    if (layout.Stride >= 1f)
+                        DrawDirectBars(layout.StartDisplayIndex, layout.EndDisplayIndex,
+                                       layout.PlotX, layout.PlotY2, layout.Stride,
+                                       layout.BarWidth, layout.PlotHeight,
+                                       _model, false, 1f);
                     else
-                        DrawLodBars(ctxStart, ctxEnd, plotX, plotY2, plotW, plotH,
-                                    _model, false, 1f);
+                        DrawLodBars(layout.StartDisplayIndex, layout.EndDisplayIndex,
+                                    layout.PlotX, layout.PlotY2, layout.PlotWidth,
+                                    layout.PlotHeight, _model, false, 1f);
                 }
             }
 
-            // 5 – Overlay bars (same position mapping, tinted alpha)
-            // When a tag highlight is active and bars are in direct mode (segments visible),
-            // skip the overlay — the segment-level tint provides the same information.
             if (_model.HasOverlay && _model.BarCount > 0)
             {
-                int viewCount = ctxEnd - ctxStart;
-                bool suppressOverlay = _viewState.HighlightedTag >= 0 && ctxStride >= 1f;
+                int viewCount = layout.EndDisplayIndex - layout.StartDisplayIndex;
+                bool suppressOverlay = _viewState.HighlightedTag >= 0 && layout.Stride >= 1f;
 
                 if (viewCount > 0 && !suppressOverlay)
                 {
-                    if (ctxStride >= 1f)
-                        DrawDirectBars(ctxStart, ctxEnd, plotX, plotY2, ctxStride, ctxBarW,
-                                       plotH, _model, true, _vis.OverlayOpacity);
+                    if (layout.Stride >= 1f)
+                        DrawDirectBars(layout.StartDisplayIndex, layout.EndDisplayIndex,
+                                       layout.PlotX, layout.PlotY2, layout.Stride,
+                                       layout.BarWidth, layout.PlotHeight,
+                                       _model, true, _vis.OverlayOpacity);
                     else
-                        DrawLodBars(ctxStart, ctxEnd, plotX, plotY2, plotW, plotH,
-                                    _model, true, _vis.OverlayOpacity);
+                        DrawLodBars(layout.StartDisplayIndex, layout.EndDisplayIndex,
+                                    layout.PlotX, layout.PlotY2, layout.PlotWidth,
+                                    layout.PlotHeight, _model, true, _vis.OverlayOpacity);
                 }
             }
+        }
 
-            // Flush all accumulated bar quads to the GPU via direct mesh allocation.
-            // This bypasses Painter2D entirely — no tessellation, no vertex ceiling.
-            if (_quadCount > 0)
-                FlushQuads(mgc);
-
-            // ── Custom draw hook: after bars ──
+        private void DrawAfterBars(MeshGenerationContext mgc, in RenderLayout layout)
+        {
+            BarGraphDrawContext drawCtx = CreateDrawContext(mgc, in layout);
             _onDrawAfterBars?.Invoke(in drawCtx);
+        }
 
-            // 6 – Selection & hover highlights
-            DrawHighlights(p, plotX, plotY2, plotH);
+        private void DrawForeground(MeshGenerationContext mgc, in RenderLayout layout)
+        {
+            Painter2D p = mgc.painter2D;
 
-            // 7 – Drag-select rectangle
+            DrawHighlights(p, layout.PlotX, layout.PlotY2, layout.PlotHeight);
+
             if (_viewState.IsDragSelecting && _viewState.DragRect.width > 1f)
                 DrawDragRect(p, _viewState.DragRect);
 
-            // 7b – Padding overdraw: re-fill the four padding strips with the
-            //      background colour.  The bar clamp prevents bars from drawing
-            //      above plotY (= PaddingTop), but the top Y-label is centred ON
-            //      plotY so its lower half sits inside the plot area.  Overpainting
-            //      the strips creates a clean frame that masks any bar tip that
-            //      touches a boundary and keeps label backgrounds opaque.
-            FillRect(p, _vis.BackgroundColor, 0,      0,      cr.width,           pT);
-            FillRect(p, _vis.BackgroundColor, 0,      plotY2, cr.width,           cr.height - plotY2);
-            FillRect(p, _vis.BackgroundColor, 0,      pT,     pL,                 plotH);
-            FillRect(p, _vis.BackgroundColor, plotX2, pT,     cr.width - plotX2,  plotH);
+            FillRect(p, _vis.BackgroundColor, 0, 0,
+                     layout.ContentRect.width, layout.PaddingTop);
+            FillRect(p, _vis.BackgroundColor, 0, layout.PlotY2,
+                     layout.ContentRect.width, layout.ContentRect.height - layout.PlotY2);
+            FillRect(p, _vis.BackgroundColor, 0, layout.PaddingTop,
+                     layout.PaddingLeft, layout.PlotHeight);
+            FillRect(p, _vis.BackgroundColor, layout.PlotX2, layout.PaddingTop,
+                     layout.ContentRect.width - layout.PlotX2, layout.PlotHeight);
 
-            // 8 – Axes (on top of bars and overdraw)
             if (_settings.ShowAxes)
-                DrawAxes(p, plotX, plotX2, plotY, plotY2);
+                DrawAxes(p, layout.PlotX, layout.PlotX2, layout.PlotY, layout.PlotY2);
 
-            // ── Custom draw hook: after all chrome ──
+            BarGraphDrawContext drawCtx = CreateDrawContext(mgc, in layout);
             _onDrawAfterChrome?.Invoke(in drawCtx);
 
-            // 9 – Cache label layout params for the deferred FlushLabelPositions
-            //     scheduler (must NOT modify VisualElement styles here).
-            _lblPlotX    = plotX;
-            _lblPlotW    = plotW;
-            _lblPlotH    = plotH;
-            _lblPlotY2   = plotY2;
+            _lblPlotX    = layout.PlotX;
+            _lblPlotW    = layout.PlotWidth;
+            _lblPlotH    = layout.PlotHeight;
+            _lblPlotY2   = layout.PlotY2;
             _labelsDirty = true;
         }
 
@@ -2247,67 +2299,61 @@ namespace GCAllocBreakdown.BarChart.Core
         /// <see cref="MeshGenerationContext.Allocate"/> calls.
         /// Each quad = 4 vertices + 6 indices.  Max 16 383 quads per chunk
         /// (65 532 vertices, under the 65 535 UInt16 index limit).
-        /// Multiple chunks per element are supported — no ceiling on total quads.
+        /// Unity 2022 also enforces an aggregate limit for each VisualElement.
         /// </summary>
         private void FlushQuads(MeshGenerationContext mgc)
         {
             const int MAX_QUADS_PER_CHUNK = 16383;   // 65 532 / 4
-            const int VERTS_PER_QUAD  = 4;
-            const int INDICES_PER_QUAD = 6;
 
             int offset = 0;
             while (offset < _quadCount)
             {
                 int chunkQuads = Math.Min(MAX_QUADS_PER_CHUNK, _quadCount - offset);
-                int vertCount  = chunkQuads * VERTS_PER_QUAD;
-                int idxCount   = chunkQuads * INDICES_PER_QUAD;
-
-                // Pass Texture2D.whiteTexture so that texture × tint = tint.
-                MeshWriteData mwd = mgc.Allocate(vertCount, idxCount, Texture2D.whiteTexture);
-                Vector2 uv = new Vector2(0.5f, 0.5f);
-
-                for (int i = 0; i < chunkQuads; i++)
-                {
-                    ref QuadData q = ref _quadBuf[offset + i];
-                    ushort vi = (ushort)(i * 4);
-
-                    // Four corners: TL, TR, BR, BL
-                    mwd.SetNextVertex(new Vertex
-                    {
-                        position = new Vector3(q.X,       q.Y,       Vertex.nearZ),
-                        tint     = q.Color,
-                        uv       = uv
-                    });
-                    mwd.SetNextVertex(new Vertex
-                    {
-                        position = new Vector3(q.X + q.W, q.Y,       Vertex.nearZ),
-                        tint     = q.Color,
-                        uv       = uv
-                    });
-                    mwd.SetNextVertex(new Vertex
-                    {
-                        position = new Vector3(q.X + q.W, q.Y + q.H, Vertex.nearZ),
-                        tint     = q.Color,
-                        uv       = uv
-                    });
-                    mwd.SetNextVertex(new Vertex
-                    {
-                        position = new Vector3(q.X,       q.Y + q.H, Vertex.nearZ),
-                        tint     = q.Color,
-                        uv       = uv
-                    });
-
-                    // Two triangles: TL-TR-BR, TL-BR-BL
-                    mwd.SetNextIndex(vi);
-                    mwd.SetNextIndex((ushort)(vi + 1));
-                    mwd.SetNextIndex((ushort)(vi + 2));
-                    mwd.SetNextIndex(vi);
-                    mwd.SetNextIndex((ushort)(vi + 2));
-                    mwd.SetNextIndex((ushort)(vi + 3));
-                }
+                FlushQuadRange(mgc, offset, chunkQuads);
                 offset += chunkQuads;
             }
             _quadCount = 0;
+        }
+
+        private void FlushQuadRange(MeshGenerationContext mgc, int offset, int quadCount)
+        {
+            const int VERTS_PER_QUAD = 4;
+            const int INDICES_PER_QUAD = 6;
+            int vertCount = quadCount * VERTS_PER_QUAD;
+            int idxCount = quadCount * INDICES_PER_QUAD;
+
+            MeshWriteData mwd = mgc.Allocate(vertCount, idxCount, Texture2D.whiteTexture);
+            Vector2 uv = new Vector2(0.5f, 0.5f);
+
+            for (int i = 0; i < quadCount; i++)
+            {
+                ref QuadData q = ref _quadBuf[offset + i];
+                ushort vi = (ushort)(i * VERTS_PER_QUAD);
+
+                mwd.SetNextVertex(new Vertex
+                {
+                    position = new Vector3(q.X, q.Y, Vertex.nearZ), tint = q.Color, uv = uv
+                });
+                mwd.SetNextVertex(new Vertex
+                {
+                    position = new Vector3(q.X + q.W, q.Y, Vertex.nearZ), tint = q.Color, uv = uv
+                });
+                mwd.SetNextVertex(new Vertex
+                {
+                    position = new Vector3(q.X + q.W, q.Y + q.H, Vertex.nearZ), tint = q.Color, uv = uv
+                });
+                mwd.SetNextVertex(new Vertex
+                {
+                    position = new Vector3(q.X, q.Y + q.H, Vertex.nearZ), tint = q.Color, uv = uv
+                });
+
+                mwd.SetNextIndex(vi);
+                mwd.SetNextIndex((ushort)(vi + 1));
+                mwd.SetNextIndex((ushort)(vi + 2));
+                mwd.SetNextIndex(vi);
+                mwd.SetNextIndex((ushort)(vi + 2));
+                mwd.SetNextIndex((ushort)(vi + 3));
+            }
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -2392,6 +2438,23 @@ namespace GCAllocBreakdown.BarChart.Core
         {
             public float   X, Y, W, H;
             public Color32 Color;
+        }
+
+        private struct RenderLayout
+        {
+            public Rect ContentRect;
+            public float PaddingLeft;
+            public float PaddingTop;
+            public float PlotX;
+            public float PlotY;
+            public float PlotWidth;
+            public float PlotHeight;
+            public float PlotX2;
+            public float PlotY2;
+            public float Stride;
+            public float BarWidth;
+            public int StartDisplayIndex;
+            public int EndDisplayIndex;
         }
     }
 

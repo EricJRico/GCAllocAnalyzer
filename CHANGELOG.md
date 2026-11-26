@@ -5,6 +5,16 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-10-13
+
+### Changed
+- Lowered the minimum supported Unity version from 6000.0 to 2022.3.
+
+### Fixed
+- Added version-appropriate UXML registration for `BarGraphElement`: Unity 2023.2 and newer use `[UxmlElement]`, while Unity 2022 uses the legacy `UxmlFactory`/`UxmlTraits` pattern. This fixes `CS0246` compilation errors on Unity 2022.3.
+- Added version-appropriate `MultiColumnListView` sorting setup: Unity 6 uses `sortingMode`, while Unity 2022 and 2023 use `sortingEnabled`.
+- Added a versioned bar-graph rendering backend. Unity 6 retains the single-element renderer, while Unity 2022/2023 emits the same ordered bar-quad stream through pooled child elements so dense charts do not exceed UI Toolkit's 65,535-vertex-per-element limit.
+
 ## [0.2.3] - 2026-06-18
 
 ### Fixed

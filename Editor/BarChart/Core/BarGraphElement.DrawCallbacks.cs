@@ -7,6 +7,8 @@ namespace GCAllocBreakdown.BarChart.Core
     /// Delegate for custom draw callbacks invoked during the
     /// <see cref="BarGraphElement"/> render pipeline.
     /// The context struct is stack-allocated and must not be stored beyond the callback.
+    /// Each callback must configure the Painter2D state it uses; rendering backends
+    /// may invoke different stages on separate UI Toolkit elements.
     /// </summary>
     public delegate void BarGraphDrawCallback(in BarGraphDrawContext ctx);
 
